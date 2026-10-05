@@ -18,7 +18,10 @@ namespace SFE {
 		TRIPLANAR_ALBEDO,
 		TRIPLANAR_NORMALS,
 		TRIPLANAR2_ALBEDO,
-		TRIPLANAR2_NORMALS
+		TRIPLANAR2_NORMALS,
+		// The glTF occlusionTexture: its red channel darkens only the ambient and indirect light, never the sun or the lamps.
+		// Kept last: the material binding loops run DIFFUSE..OCCLUSION.
+		OCCLUSION
 	};
 
 	struct MaterialTexture {

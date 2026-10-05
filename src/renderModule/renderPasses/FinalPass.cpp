@@ -34,10 +34,8 @@ SFE::Render::PipelineHandle FinalPass::makeFullscreen(SFE::Render::RenderHardwar
 	return rhi->createGraphicsPipeline(pipelineDesc);
 }
 
-void FinalPass::init(SystemsModule::RenderData&) {
+void FinalPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
@@ -108,45 +106,7 @@ void FinalPass::init(SystemsModule::RenderData&) {
 		}
 	}
 
-	TextureDesc bloomDesc;
-	bloomDesc.width = std::max(1, w / 4);
-	bloomDesc.height = std::max(1, h / 4);
-	bloomDesc.format = TextureFormat::RGBA16F;
-	bloomDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mBloomTex = rhi->createTexture(bloomDesc);
-	FramebufferDesc bloomFb;
-	bloomFb.width = bloomDesc.width;
-	bloomFb.height = bloomDesc.height;
-	bloomFb.renderPass = mBloomPass;
-	bloomFb.colorAttachments = { { mBloomTex } };
-	mBloomFbo = rhi->createFramebuffer(bloomFb);
-
-	// Half floats: the tonemapped colour is in 0..1, and 8 bits would round the neighbours the sharpening compares.
-	TextureDesc toneDesc;
-	toneDesc.width = w;
-	toneDesc.height = h;
-	toneDesc.format = TextureFormat::RGBA16F;
-	toneDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mToneTex = rhi->createTexture(toneDesc);
-	FramebufferDesc toneFb;
-	toneFb.width = w;
-	toneFb.height = h;
-	toneFb.renderPass = mBloomPass;
-	toneFb.colorAttachments = { { mToneTex } };
-	mToneFbo = rhi->createFramebuffer(toneFb);
-
-	TextureDesc displayDesc;
-	displayDesc.width = w;
-	displayDesc.height = h;
-	displayDesc.format = TextureFormat::RGBA8;
-	displayDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mDisplayTex = rhi->createTexture(displayDesc);
-	FramebufferDesc displayFb;
-	displayFb.width = w;
-	displayFb.height = h;
-	displayFb.renderPass = mDisplayPass;
-	displayFb.colorAttachments = { { mDisplayTex } };
-	mDisplayFbo = rhi->createFramebuffer(displayFb);
+	resize(renderDataHandle);
 
 	TextRenderer::instance()->bindRenderPass(mDisplayPass);
 	mOverlayFont = FontsRegistry::instance()->getFont("fonts/DroidSans.ttf", 22);
@@ -169,6 +129,15 @@ void FinalPass::init(SystemsModule::RenderData&) {
 	mOverlayFillPipeline = rhi->createGraphicsPipeline(shapeDesc);
 	shapeDesc.topology = PrimitiveTopology::Lines;
 	mOverlayLinePipeline = rhi->createGraphicsPipeline(shapeDesc);
+}
+
+void FinalPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mBloomTex, mBloomFbo, mBloomPass, TextureFormat::RGBA16F, 4);
+	// Half floats: the tonemapped colour is in 0..1, and 8 bits would round the neighbours the sharpening compares.
+	Utils::screenTarget(mToneTex, mToneFbo, mBloomPass);
+	Utils::screenTarget(mDisplayTex, mDisplayFbo, mDisplayPass, TextureFormat::RGBA8);
+	// What the screen shows until the next frame is drawn.
+	Engine::instance()->rhi()->setPresentBlitSource(mDisplayTex, mSampler);
 }
 
 
@@ -508,7 +477,9 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		rhi->cmdBindPipeline(cmd, mPostPipeline);
 		rhi->cmdBindDescriptorSets(cmd, mPostPipeline, 0, &mPostSet, 1, &post.offset, 1);
 		Utils::renderQuad(cmd);
-		if (mOverlayFont && !Engine::instance()->capturingFrame()) {
+		// Unless the player turned the frame's timings off (Window::display).
+		const auto* display = Engine::instance()->getWindow()->display();
+		if (mOverlayFont && !Engine::instance()->capturingFrame() && (!display || display->frameInfo)) {
 			drawOverlay(cmd, screen.renderW, screen.renderH);
 		}
 		rhi->cmdEndRenderPass(cmd);

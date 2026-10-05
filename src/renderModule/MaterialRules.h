@@ -97,6 +97,7 @@ namespace SFE::Render::MaterialRules {
 			case SFE::ROUGHNESS: sel += 8.f; break;
 			case SFE::METALLIC: sel += 16.f; break;
 			case SFE::SUBSURFACE: sel += 32.f; break;
+			case SFE::OCCLUSION: sel += 64.f; break;
 			default: break;
 			}
 		}

@@ -217,13 +217,8 @@ namespace SFE::Render {
 		}
 	}
 
-	IblMaps bakeIbl(RenderHardwareInterface* rhi, float sunIntensity) {
-		IblMaps maps{};
-		if (!rhi) {
-			return maps;
-		}
-		const auto sky = Atmosphere::sceneSky();
-
+	IblTexels computeIbl(const std::optional<ComponentsModule::SkyComponent>& sky, const float sunIntensity) {
+		IblTexels texels;
 		std::vector<float> env(6 * kEnvSize * kEnvSize * 4);
 		for (int face = 0; face < 6; ++face) {
 			for (int y = 0; y < kEnvSize; ++y) {
@@ -236,15 +231,8 @@ namespace SFE::Render {
 			}
 		}
 
-		TextureDesc irrDesc;
-		irrDesc.width = kIrrSize;
-		irrDesc.height = kIrrSize;
-		irrDesc.dimension = TextureDimension::Cube;
-		irrDesc.format = TextureFormat::RGBA32F;
-		irrDesc.mipLevels = 1;
-		maps.irradiance = rhi->createTexture(irrDesc, nullptr);
-
-		std::vector<float> irr(6 * kIrrSize * kIrrSize * 4);
+		auto& irr = texels.irradiance;
+		irr.resize(6 * kIrrSize * kIrrSize * 4);
 		for (int face = 0; face < 6; ++face) {
 			for (int y = 0; y < kIrrSize; ++y) {
 				for (int x = 0; x < kIrrSize; ++x) {
@@ -282,15 +270,6 @@ namespace SFE::Render {
 				}
 			}
 		}
-		uploadCube(rhi, maps.irradiance, kIrrSize, 0, irr);
-
-		TextureDesc preDesc;
-		preDesc.width = kPreSize;
-		preDesc.height = kPreSize;
-		preDesc.dimension = TextureDimension::Cube;
-		preDesc.format = TextureFormat::RGBA32F;
-		preDesc.mipLevels = kPreMips;
-		maps.prefilter = rhi->createTexture(preDesc, nullptr);
 
 		for (int mip = 0; mip < kPreMips; ++mip) {
 			int size = kPreSize >> mip;
@@ -298,7 +277,7 @@ namespace SFE::Render {
 				size = 1;
 			}
 			const float roughness = static_cast<float>(mip) / static_cast<float>(kPreMips - 1);
-			std::vector<float> pre(6 * size * size * 4);
+			auto& pre = texels.prefilter.emplace_back(static_cast<size_t>(6 * size * size * 4));
 			for (int face = 0; face < 6; ++face) {
 				for (int y = 0; y < size; ++y) {
 					for (int x = 0; x < size; ++x) {
@@ -329,10 +308,10 @@ namespace SFE::Render {
 					}
 				}
 			}
-			uploadCube(rhi, maps.prefilter, size, mip, pre);
 		}
 
-		std::vector<float> lut(kLutSize * kLutSize * 4);
+		auto& lut = texels.brdfLut;
+		lut.resize(kLutSize * kLutSize * 4);
 		for (int y = 0; y < kLutSize; ++y) {
 			for (int x = 0; x < kLutSize; ++x) {
 				const float nDotV = (static_cast<float>(x) + 0.5f) / static_cast<float>(kLutSize);
@@ -371,25 +350,59 @@ namespace SFE::Render {
 			}
 		}
 
-		TextureDesc lutDesc;
-		lutDesc.width = kLutSize;
-		lutDesc.height = kLutSize;
-		lutDesc.format = TextureFormat::RGBA32F;
-		maps.brdfLut = rhi->createTexture(lutDesc, lut.data());
+		return texels;
+	}
 
-		SamplerDesc cubeSamp;
-		cubeSamp.minFilter = FilterMode::Linear;
-		cubeSamp.magFilter = FilterMode::Linear;
-		cubeSamp.addressU = AddressMode::ClampToEdge;
-		cubeSamp.addressV = AddressMode::ClampToEdge;
-		cubeSamp.addressW = AddressMode::ClampToEdge;
-		maps.irradianceSampler = rhi->createSampler(cubeSamp);
+	void uploadIbl(RenderHardwareInterface* rhi, const IblTexels& texels, IblMaps& maps) {
+		// The maps made the first time, the BRDF table in them then, as it is the same whatever the sky.
+		if (!maps.irradiance) {
+			TextureDesc irrDesc;
+			irrDesc.width = kIrrSize;
+			irrDesc.height = kIrrSize;
+			irrDesc.dimension = TextureDimension::Cube;
+			irrDesc.format = TextureFormat::RGBA32F;
+			irrDesc.mipLevels = 1;
+			maps.irradiance = rhi->createTexture(irrDesc, nullptr);
 
-		SamplerDesc mipSamp = cubeSamp;
-		mipSamp.minFilter = FilterMode::LinearMipmapLinear;
-		maps.prefilterSampler = rhi->createSampler(mipSamp);
+			TextureDesc preDesc;
+			preDesc.width = kPreSize;
+			preDesc.height = kPreSize;
+			preDesc.dimension = TextureDimension::Cube;
+			preDesc.format = TextureFormat::RGBA32F;
+			preDesc.mipLevels = kPreMips;
+			maps.prefilter = rhi->createTexture(preDesc, nullptr);
 
-		maps.lutSampler = rhi->createSampler(cubeSamp);
+			TextureDesc lutDesc;
+			lutDesc.width = kLutSize;
+			lutDesc.height = kLutSize;
+			lutDesc.format = TextureFormat::RGBA32F;
+			maps.brdfLut = rhi->createTexture(lutDesc, texels.brdfLut.data());
+
+			SamplerDesc cubeSamp;
+			cubeSamp.minFilter = FilterMode::Linear;
+			cubeSamp.magFilter = FilterMode::Linear;
+			cubeSamp.addressU = AddressMode::ClampToEdge;
+			cubeSamp.addressV = AddressMode::ClampToEdge;
+			cubeSamp.addressW = AddressMode::ClampToEdge;
+			maps.irradianceSampler = rhi->createSampler(cubeSamp);
+
+			SamplerDesc mipSamp = cubeSamp;
+			mipSamp.minFilter = FilterMode::LinearMipmapLinear;
+			maps.prefilterSampler = rhi->createSampler(mipSamp);
+
+			maps.lutSampler = rhi->createSampler(cubeSamp);
+		}
+		uploadCube(rhi, maps.irradiance, kIrrSize, 0, texels.irradiance);
+		for (int mip = 0; mip < kPreMips; ++mip) {
+			uploadCube(rhi, maps.prefilter, (std::max)(kPreSize >> mip, 1), mip, texels.prefilter[mip]);
+		}
+	}
+
+	IblMaps bakeIbl(RenderHardwareInterface* rhi, const float sunIntensity) {
+		IblMaps maps{};
+		if (rhi) {
+			uploadIbl(rhi, computeIbl(Atmosphere::sceneSky(), sunIntensity), maps);
+		}
 		return maps;
 	}
 }

@@ -22,19 +22,31 @@ namespace SFE::ComponentsModule {
 		// Haze over any distance, per metre. 0 for none.
 		float haze = 0.f;
 
-		// The sun's path through a day: up in the east at 6, highest in the south at noon, down in the west at 18,
-		// and under the horizon through the night.
-		static constexpr float kNoonElevation = 58.f;
+		// The sun's path through a midsummer day kLatitude degrees north, the sun kDeclination north of the equator, on
+		// a clock that has it highest at kNoon: up in the north-east at 4, highest (59 degrees) in the south at half
+		// past 12, down in the north-west at 21, and not far under the horizon through the short night. Azimuth from the
+		// north by the east.
+		static constexpr float kLatitude = 54.6f;
+		static constexpr float kDeclination = 23.4f;
+		static constexpr float kNoon = 12.5f;
 		void setTimeOfDay(const float hours) {
-			const float angle = (hours - 6.f) / 12.f * 3.14159265f;
-			sunElevation = kNoonElevation * std::sin(angle);
-			sunAzimuth = 90.f + (hours - 6.f) * 15.f;
+			constexpr float rad = 3.14159265f / 180.f;
+			const float hour = (hours - kNoon) * 15.f * rad;
+			const float latitude = kLatitude * rad;
+			const float declination = kDeclination * rad;
+			const float up = std::sin(latitude) * std::sin(declination) + std::cos(latitude) * std::cos(declination) * std::cos(hour);
+			sunElevation = std::asin(std::clamp(up, -1.f, 1.f)) / rad;
+			sunAzimuth = std::atan2(std::sin(hour), std::cos(hour) * std::sin(latitude) - std::tan(declination) * std::cos(latitude)) / rad + 180.f;
 		}
-		// The hour of the day this sun stands at; before or after noon by which side of south it is on.
+		// The hour of the day this sun stands at: its hour angle, from where it is in the sky.
 		float timeOfDay() const {
-			const float up = std::asin(std::clamp(sunElevation / kNoonElevation, -1.f, 1.f)) / 3.14159265f * 12.f;
-			const float afternoon = std::fmod(sunAzimuth + 360.f, 360.f) > 180.f;
-			return std::fmod(afternoon ? 18.f - up : 6.f + up + 24.f, 24.f);
+			constexpr float rad = 3.14159265f / 180.f;
+			const float elevation = sunElevation * rad;
+			const float azimuth = sunAzimuth * rad;
+			const float latitude = kLatitude * rad;
+			const float hour = std::atan2(-std::cos(elevation) * std::sin(azimuth),
+				std::sin(elevation) * std::cos(latitude) - std::cos(elevation) * std::cos(azimuth) * std::sin(latitude));
+			return std::fmod(kNoon + hour / rad / 15.f + 24.f, 24.f);
 		}
 
 		// The rotation the sun's transform takes: its forward is the direction the light travels.

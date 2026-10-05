@@ -31,10 +31,8 @@ namespace {
 	}
 }
 
-void VolumetricPass::init(SystemsModule::RenderData&) {
+void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 
 	SFE::Render::SamplerDesc lin;
 	lin.minFilter = SFE::Render::FilterMode::Linear;
@@ -51,32 +49,7 @@ void VolumetricPass::init(SystemsModule::RenderData&) {
 	rpDesc.colorAttachments[0].storeOp = SFE::Render::AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = SFE::Render::TextureFormat::RGBA16F;
 	mRenderPass = rhi->createRenderPass(rpDesc);
-
-	SFE::Render::TextureDesc halfDesc;
-	halfDesc.width = static_cast<uint32_t>(std::max(1, w / 2));
-	halfDesc.height = static_cast<uint32_t>(std::max(1, h / 2));
-	halfDesc.format = SFE::Render::TextureFormat::RGBA16F;
-	halfDesc.usage = SFE::Render::TextureUsage::ColorAttachment | SFE::Render::TextureUsage::Sampled;
-	mHalfTex = rhi->createTexture(halfDesc);
-	SFE::Render::FramebufferDesc halfFb;
-	halfFb.width = halfDesc.width;
-	halfFb.height = halfDesc.height;
-	halfFb.renderPass = mRenderPass;
-	halfFb.colorAttachments = { { mHalfTex } };
-	mHalfFbo = rhi->createFramebuffer(halfFb);
-
-	SFE::Render::TextureDesc colorDesc;
-	colorDesc.width = w;
-	colorDesc.height = h;
-	colorDesc.format = SFE::Render::TextureFormat::RGBA16F;
-	colorDesc.usage = SFE::Render::TextureUsage::ColorAttachment | SFE::Render::TextureUsage::Sampled;
-	mColor = rhi->createTexture(colorDesc);
-	SFE::Render::FramebufferDesc fb;
-	fb.width = w;
-	fb.height = h;
-	fb.renderPass = mRenderPass;
-	fb.colorAttachments = { { mColor } };
-	mFbo = rhi->createFramebuffer(fb);
+	resize(renderDataHandle);
 
 	SFE::Render::DescriptorSetLayoutDesc marchLayout;
 	marchLayout.bindings.emplace_back(0, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
@@ -96,6 +69,11 @@ void VolumetricPass::init(SystemsModule::RenderData&) {
 
 	mMarchPipeline = makeFs(rhi, mRenderPass, mMarchLayout, "shaders/deferred_shading.vs", "shaders/volumetric.fs");
 	mApplyPipeline = makeFs(rhi, mRenderPass, mApplyLayout, "shaders/deferred_shading.vs", "shaders/volumetric_apply.fs");
+}
+
+void VolumetricPass::resize(SystemsModule::RenderData&) {
+	SFE::Render::Utils::screenTarget(mHalfTex, mHalfFbo, mRenderPass, SFE::Render::TextureFormat::RGBA16F, 2);
+	SFE::Render::Utils::screenTarget(mColor, mFbo, mRenderPass);
 }
 
 void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Render::CommandListHandle cmd) {

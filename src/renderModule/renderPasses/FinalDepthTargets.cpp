@@ -10,13 +10,21 @@ namespace SFE::Render::RenderPasses {
 		if (!color || !depth) {
 			return {};
 		}
+		const auto& screen = Engine::instance()->getWindow()->getScreenData();
+		if (screen.renderW != mWidth || screen.renderH != mHeight) {
+			for (const auto& entry : mEntries) {
+				Engine::instance()->rhi()->destroyFramebuffer(entry.fbo);
+			}
+			mEntries.clear();
+			mWidth = screen.renderW;
+			mHeight = screen.renderH;
+		}
 		for (const auto& entry : mEntries) {
 			if (entry.color.id == color.id && entry.depth.id == depth.id) {
 				return entry.fbo;
 			}
 		}
 
-		const auto& screen = Engine::instance()->getWindow()->getScreenData();
 		FramebufferDesc desc;
 		desc.width = screen.renderW;
 		desc.height = screen.renderH;

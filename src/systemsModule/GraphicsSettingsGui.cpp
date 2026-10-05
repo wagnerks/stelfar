@@ -5,6 +5,7 @@
 #include "core/Engine.h"
 #include "renderModule/Atmosphere.h"
 #include "systemsModule/systems/AudioSystem.h"
+#include "windowsModule/Window.h"
 
 #include <json/reader.h>
 #include <json/value.h>
@@ -41,9 +42,44 @@ namespace SFE::SystemsModule {
 		}
 	}
 
+	// The game's own window (Window::display): put on the screen at the next frame, and kept in display.json.
+	void displaySettings(Render::Window& window) {
+		auto settings = *window.display();
+		bool changed = false;
+		int mode = static_cast<int>(settings.mode);
+		if (ImGui::Combo("mode", &mode, Render::kDisplayModeNames, IM_ARRAYSIZE(Render::kDisplayModeNames))) {
+			settings.mode = static_cast<Render::DisplayMode>(mode);
+			changed = true;
+		}
+		// Borderless has the monitor's own size only.
+		ImGui::BeginDisabled(settings.mode == Render::DisplayMode::Borderless);
+		const auto size = std::to_string(settings.width) + " x " + std::to_string(settings.height);
+		if (ImGui::BeginCombo("resolution", size.c_str())) {
+			for (const auto& [w, h] : window.displaySizes(settings.mode)) {
+				if (ImGui::Selectable((std::to_string(w) + " x " + std::to_string(h)).c_str(), w == settings.width && h == settings.height)) {
+					settings.width = w;
+					settings.height = h;
+					changed = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::EndDisabled();
+		changed |= ImGui::Checkbox("frame info", &settings.frameInfo);
+		ImGui::SetItemTooltip("The frame's timings and memory in the corner of the screen.");
+		if (changed) {
+			window.setDisplay(settings);
+			Render::saveDisplaySettings(*window.display());
+		}
+	}
 
 	bool drawGraphicsSettings(GraphicsSettings& gfx) {
 		bool changed = false;
+
+		if (auto* window = Engine::instance()->getWindow(); window && window->display()
+			&& ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+			displaySettings(*window);
+		}
 
 		if (ImGui::Button("Reset defaults")) {
 			gfx = GraphicsSettings{};

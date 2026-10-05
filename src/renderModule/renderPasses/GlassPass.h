@@ -11,6 +11,7 @@ namespace SFE::Render::RenderPasses {
 	public:
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
+		void resize(SystemsModule::RenderData& renderDataHandle) override;
 
 	private:
 		struct Params {

@@ -1,5 +1,12 @@
 #include "Window.h"
 
+#include <algorithm>
+#include <filesystem>
+#include <functional>
+
+#include <json/value.h>
+
+#include "core/FileSystem.h"
 #include "logsModule/logger.h"
 
 #ifdef _WIN32
@@ -251,6 +258,147 @@ namespace SFE::Render {
 		else if (mWindow) {
 			glfwSetWindowShouldClose(mWindow, close);
 		}
+	}
+
+	namespace {
+		std::string displayFile() {
+			return (std::filesystem::current_path() / "display.json").string();
+		}
+	}
+
+	DisplaySettings displayFromJson(const Json::Value& json, DisplaySettings settings) {
+		if (!json.isObject()) {
+			return settings;
+		}
+		const auto mode = json["mode"].isString() ? json["mode"].asString() : std::string();
+		for (size_t i = 0; i < std::size(kDisplayModeNames); ++i) {
+			if (mode == kDisplayModeNames[i]) {
+				settings.mode = static_cast<DisplayMode>(i);
+			}
+		}
+		if (json["width"].isInt() && json["height"].isInt()) {
+			settings.width = json["width"].asInt();
+			settings.height = json["height"].asInt();
+		}
+		if (json["frameInfo"].isBool()) {
+			settings.frameInfo = json["frameInfo"].asBool();
+		}
+		return settings;
+	}
+
+	DisplaySettings loadDisplaySettings() {
+		Json::Value json;
+		std::error_code error;
+		if (std::filesystem::exists(displayFile(), error)) {
+			FileSystem::readJson(displayFile(), json);
+		}
+		return displayFromJson(json, {});
+	}
+
+	void saveDisplaySettings(const DisplaySettings& settings) {
+		Json::Value json;
+		json["mode"] = kDisplayModeNames[static_cast<size_t>(settings.mode)];
+		json["width"] = settings.width;
+		json["height"] = settings.height;
+		json["frameInfo"] = settings.frameInfo;
+		FileSystem::writeJson(displayFile(), json);
+	}
+
+	GLFWmonitor* Window::displayMonitor() const {
+		if (auto* monitor = glfwGetWindowMonitor(mWindow)) {
+			return monitor;
+		}
+		int x = 0, y = 0, w = 0, h = 0;
+		glfwGetWindowPos(mWindow, &x, &y);
+		glfwGetWindowSize(mWindow, &w, &h);
+		int count = 0;
+		auto** monitors = glfwGetMonitors(&count);
+		for (int i = 0; i < count; ++i) {
+			int monitorX = 0, monitorY = 0;
+			glfwGetMonitorPos(monitors[i], &monitorX, &monitorY);
+			const auto* mode = glfwGetVideoMode(monitors[i]);
+			if (mode && x + w / 2 >= monitorX && x + w / 2 < monitorX + mode->width && y + h / 2 >= monitorY
+				&& y + h / 2 < monitorY + mode->height) {
+				return monitors[i];
+			}
+		}
+		return glfwGetPrimaryMonitor();
+	}
+
+	std::vector<std::pair<int, int>> Window::displaySizes(const DisplayMode mode) const {
+		std::vector<std::pair<int, int>> sizes;
+		auto* monitor = mWindow ? displayMonitor() : nullptr;
+		const auto* own = monitor ? glfwGetVideoMode(monitor) : nullptr;
+		if (!own) {
+			return sizes;
+		}
+		if (mode == DisplayMode::Borderless) {
+			return { { own->width, own->height } };
+		}
+		int count = 0;
+		const auto* modes = glfwGetVideoModes(monitor, &count);
+		for (int i = 0; i < count; ++i) {
+			sizes.emplace_back(modes[i].width, modes[i].height);
+		}
+		if (mode == DisplayMode::Windowed) {
+			sizes.insert(sizes.end(), { { 2560, 1440 }, { 1920, 1080 }, { 1600, 900 }, { 1280, 720 } });
+			// Lower than the monitor, so its title bar is on the screen too.
+			std::erase_if(sizes, [own](const auto& size) { return size.first > own->width || size.second >= own->height; });
+		}
+		std::ranges::sort(sizes, std::greater{});
+		sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+		return sizes;
+	}
+
+	void Window::setDisplay(DisplaySettings settings) {
+		const auto sizes = displaySizes(settings.mode);
+		if (!sizes.empty() && std::ranges::find(sizes, std::pair{ settings.width, settings.height }) == sizes.end()) {
+			settings.width = sizes.front().first;
+			settings.height = sizes.front().second;
+		}
+		mDisplayDirty |= !mDisplayOwned || settings.mode != mDisplay.mode || settings.width != mDisplay.width
+			|| settings.height != mDisplay.height;
+		mDisplay = settings;
+		mDisplayOwned = true;
+	}
+
+	bool Window::applyDisplay() {
+		if (!mDisplayDirty || !mWindow) {
+			return false;
+		}
+		mDisplayDirty = false;
+		auto* monitor = displayMonitor();
+		const auto* own = glfwGetVideoMode(monitor);
+		if (!own) {
+			return false;
+		}
+		const int w = mDisplay.width;
+		const int h = mDisplay.height;
+		// The size is the player's to set here, not the frame's to drag.
+		glfwSetWindowAttrib(mWindow, GLFW_RESIZABLE, GLFW_FALSE);
+		if (mDisplay.mode == DisplayMode::Fullscreen) {
+			glfwSetWindowMonitor(mWindow, monitor, 0, 0, w, h, own->refreshRate);
+		}
+		else if (mDisplay.mode == DisplayMode::Borderless) {
+			int x = 0, y = 0;
+			glfwGetMonitorPos(monitor, &x, &y);
+			glfwSetWindowAttrib(mWindow, GLFW_DECORATED, GLFW_FALSE);
+			glfwSetWindowMonitor(mWindow, nullptr, x, y, w, h, GLFW_DONT_CARE);
+		}
+		else {
+			// In the middle of the monitor's free area, its title bar on it.
+			int x = 0, y = 0, areaW = 0, areaH = 0, top = 0;
+			glfwGetMonitorWorkarea(monitor, &x, &y, &areaW, &areaH);
+			glfwSetWindowAttrib(mWindow, GLFW_DECORATED, GLFW_TRUE);
+			glfwSetWindowMonitor(mWindow, nullptr, x, y, w, h, GLFW_DONT_CARE);
+			glfwGetWindowFrameSize(mWindow, nullptr, &top, nullptr, nullptr);
+			glfwSetWindowPos(mWindow, x + (std::max)(0, (areaW - w) / 2), y + top + (std::max)(0, (areaH - top - h) / 2));
+		}
+		if (w == data.renderW && h == data.renderH) {
+			return false;
+		}
+		data.setSize(w, h);
+		return true;
 	}
 
 #ifdef _WIN32

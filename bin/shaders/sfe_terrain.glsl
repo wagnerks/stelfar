@@ -15,7 +15,7 @@ struct SfeTerrainLayers {
     float earth;      // moss among the grass, and in patches on the forest floor
     float forest;     // how deep in the forest, 0..1, from the forest map
     float litter;     // fallen needles and twigs under the trees
-    float roadDistance; // metres from the road's centreline, signed by its side
+    float roadDistance; // metres from the road's centreline, signed by its side; clearings are not in it
     float road;       // the road's surface
 };
 
@@ -29,10 +29,24 @@ const float kSfeTerrainNoiseTexelMetres = 4.0;
 const float kSfeRoadTextureRange = 16.0;
 
 // The terrain's slow noise at `p`, baked by terrainNoiseTexture: r broad variation, g sandy coves, b tile variation,
-// a the signed distance to the road.
+// a the signed distance to the road. Away from the road its two sides meet again, past its ends and where the road is
+// no longer looked for, and there the sign turns over between two texels far from it; blended as it is, that would
+// draw a thin road between them. Two texels of a true distance are never further apart in it than in place, so where
+// they are, the distance is blended without its sign.
 vec4 sfeTerrainNoise(sampler2D noiseMap, vec2 p) {
     float side = float(textureSize(noiseMap, 0).x);
-    return textureLod(noiseMap, p / (side * kSfeTerrainNoiseTexelMetres) + 0.5, 0.0);
+    vec2 uv = p / (side * kSfeTerrainNoiseTexelMetres) + 0.5;
+    vec4 noise = textureLod(noiseMap, uv, 0.0);
+    // The four texels the filter blends: (0, 1), (1, 1), (1, 0), (0, 0).
+    vec4 road = (textureGather(noiseMap, uv, 3) - 0.5) * kSfeRoadTextureRange;
+    float lowest = min(min(road.x, road.y), min(road.z, road.w));
+    float highest = max(max(road.x, road.y), max(road.z, road.w));
+    if (lowest < 0.0 && highest > 0.0 && highest - lowest > 1.5 * kSfeTerrainNoiseTexelMetres) {
+        vec2 f = fract(uv * side - 0.5);
+        road = abs(road);
+        noise.a = mix(mix(road.w, road.z, f.x), mix(road.x, road.y, f.x), f.y) / kSfeRoadTextureRange + 0.5;
+    }
+    return noise;
 }
 
 // Where along the road `p` is, from terrainRoadFrameTexture: x metres across it, y metres along it. `jacobian` gets
@@ -50,6 +64,38 @@ vec2 sfeRoadFrame(sampler2D frameMap, vec2 p, out mat2 jacobian) {
     vec2 d = texelFetch(frameMap, clamp(i + ivec2(1, 1), ivec2(0), last), 0).rg;
     jacobian = mat2(mix(b - a, d - c, f.y), mix(c - a, d - b, f.x)) / kSfeTerrainNoiseTexelMetres;
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Metres from a footpath past which it no longer matters; Terrain.h has the same.
+const float kSfePathFar = 8.0;
+
+// From terrainPathTexture: x metres past the edge of the nearest footpath or patch (below zero on one, ragged), y past
+// the nearest clearing's, z how worn the ground is (terrainPathWear), w metres into a path's bare strip (its core);
+// kSfePathFar, kSfePathFar, 0, -kSfePathFar outside the box it covers. Its first row says where that is.
+vec4 sfeTerrainPath(sampler2D pathMap, vec2 p) {
+    vec2 origin = texelFetch(pathMap, ivec2(0, 0), 0).rg;
+    float metres = texelFetch(pathMap, ivec2(1, 0), 0).r;
+    ivec2 side = textureSize(pathMap, 0) - ivec2(0, 1);
+    vec2 texel = (p - origin) / max(metres, 1e-4);
+    if (metres <= 0.0 || any(lessThan(texel, vec2(0.0))) || any(greaterThanEqual(texel, vec2(side - 1)))) {
+        return vec4(kSfePathFar, kSfePathFar, 0.0, -kSfePathFar);
+    }
+    ivec2 i = ivec2(texel);
+    vec2 f = texel - vec2(i);
+    vec4 a = texelFetch(pathMap, i + ivec2(0, 1), 0);
+    vec4 b = texelFetch(pathMap, i + ivec2(1, 1), 0);
+    vec4 c = texelFetch(pathMap, i + ivec2(0, 2), 0);
+    vec4 d = texelFetch(pathMap, i + ivec2(1, 2), 0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// How far into bare earth ground worn `wear` with a path's strip `core` is at `p`: above zero bare, below it grass, the
+// two mixing a tenth or so either side. Spots that spread and join as the wear rises, all of it bare at 1, and the
+// strip; their edges broken by a finer noise. Terrain.cpp's terrainBareEarth is the same, and the grass clumps grow by
+// that.
+float sfeTerrainBare(float wear, float core, vec2 p) {
+    float reach = 0.47 * wear + 0.2 * smoothstep(0.2, 0.5, wear) + 0.3 * smoothstep(0.8, 1.0, wear);
+    return max(reach - sfeFbm(p * 0.5 + 23.0, 3), 1.5 * core) - 0.1 * (sfeFbm(p * 3.0 + 7.0, 2) - 0.5);
 }
 
 // How deep in the forest `p` (the terrain's own x/z) is, from VegetationPlacementsComponent::forestMap: centred on

@@ -119,6 +119,7 @@ namespace SFE::Render
 	struct CmdBlit { FramebufferHandle src; FramebufferHandle dst; BlitMask mask = BlitMask::Color; BlitFilter filter = BlitFilter::Nearest; };
 	struct CmdSetScissor { int32_t x = 0, y = 0; uint32_t width = 0, height = 0; };
 	struct CmdPipelineBarrier { PipelineBarrier barrier; };
+	struct CmdGpuMark { uint32_t mark = 0; };
 
 	using GLCommand = std::variant<
 		CmdBeginRenderPass,
@@ -136,7 +137,8 @@ namespace SFE::Render
 		CmdDispatch,
 		CmdBlit,
 		CmdSetScissor,
-		CmdPipelineBarrier
+		CmdPipelineBarrier,
+		CmdGpuMark
 	>;
 
 	struct GLCommandList
@@ -279,14 +281,26 @@ namespace SFE::Render
 
 		bool m_inited = false;
 		std::string m_deviceName;
-		// A ring, not a pair: the driver runs a frame or two behind, so the query ended last submit is never
-		// finished yet and polling it always came back unavailable, which left the GPU time reading zero.
-		static constexpr int kGpuTimeQueries = 4;
+		// A ring, not a pair: the driver runs frames behind -- as many as it queues while the GPU is the slower -- so a
+		// query ended a few submits ago is not finished yet, and polling it came back unavailable, which left the GPU
+		// time reading zero, or stale at whatever it last read.
+		static constexpr int kGpuTimeQueries = 8;
 		GLuint mGpuTimeQueries[kGpuTimeQueries]{};
 		int mGpuQueryWrite = 0;
 		int mGpuQueriesIssued = 0;
 		double mLastGpuMs = 0.0;
+		// cmdGpuMark's timestamps the same way: kMaxGpuMarks a submit that marks, kGpuTimeQueries such submits round,
+		// read as the oldest comes to be written again; and the times between the marks last read.
+		GLuint mGpuMarkQueries[kGpuTimeQueries][kMaxGpuMarks]{};
+		uint32_t mGpuMarkCount[kGpuTimeQueries]{};
+		int mGpuMarkWrite = 0;
+		double mGpuMarkMs[kMaxGpuMarks]{};
 		TextureHandle m_presentBlitTexture{};
+		// A hidden window's frames, which nothing swaps: the fences (GLsync) of the last few presented, the oldest
+		// waited for.
+		static constexpr int kHiddenFrames = 2;
+		void* mHiddenFrames[kHiddenFrames]{};
+		int mHiddenFrame = 0;
 		// A hidden window whose context shares objects with the main one, for runOnWorkerThread.
 		GLFWwindow* m_workerContext = nullptr;
 		std::mutex m_workerContextMutex;
@@ -337,6 +351,8 @@ namespace SFE::Render
 		void runOnWorkerThread(const std::function<void()>& work) override;
 		void setPresentBlitSource(TextureHandle texture, SamplerHandle sampler) override;
 		double lastGpuMs() const override { return mLastGpuMs; }
+		void cmdGpuMark(CommandListHandle cmd, uint32_t mark) override;
+		double gpuMarkMs(uint32_t mark) const override { return mark < kMaxGpuMarks ? mGpuMarkMs[mark] : 0.0; }
 		const char* deviceName() const override { return m_deviceName.c_str(); }
 		bool readbackTexture(TextureHandle tex, std::vector<uint8_t>& rgba, int& width, int& height, uint32_t layer = 0) override;
 		TextureHandle presentSourceTexture() const override { return m_presentBlitTexture; }

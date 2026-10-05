@@ -21,6 +21,10 @@ namespace SFE::Render {
 		// Before the frame's first command list, for every pass that runs this frame: the place to write buffers
 		// that live on the device, which Vulkan uploads with the frame's first submit.
 		virtual void prepare(SystemsModule::RenderData& renderDataHandle) {}
+		// The size the picture is drawn at (ViewportData::renderW, renderH) has changed, between frames with the device
+		// idle (RenderSystem::resize): a pass with targets of that size makes them again at the new one and lets the
+		// old ones go. A pass's init makes them the first time through it too.
+		virtual void resize(SystemsModule::RenderData& renderDataHandle) {}
 	};
 
 	/// @brief One cascade being filled, as a pass that draws its own casters sees it.

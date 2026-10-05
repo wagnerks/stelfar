@@ -37,7 +37,7 @@ namespace {
 
 	// Caster opacity and cutoff come from the material table.
 	struct PointShadowPush {
-		int lightCount = 0;
+		int light = 0;
 		float pad[3]{};
 	};
 }
@@ -47,7 +47,7 @@ namespace SFE::Render::RenderPasses {
 PointLightPass::PointLightPass() {
 }
 
-void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, std::vector<Math::Mat4>& matrices, std::vector<Math::Vec4>& spheres, std::vector<ecss::SectorId>& entities) {
+void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, float time, std::vector<Math::Mat4>& matrices, std::vector<Math::Vec4>& spheres, std::vector<ecss::SectorId>& entities) {
 	matrices.clear();
 	spheres.clear();
 	entities.clear();
@@ -66,7 +66,10 @@ void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, con
 		if (!lightSource || !transform || lightSource->getType() != ComponentsModule::eLightType::POINT) {
 			continue;
 		}
-		const auto pos = transform->getPos(true);
+		auto pos = transform->getPos(true);
+		if (lightSource->mFlicker > 0.f) {
+			pos = pos + lightSource->flickerShift(time);
+		}
 		if (!FrustumModule::SquareAABB::isOnFrustum(camFrustum, pos, lightSource->mRadius)) {
 			continue;
 		}
@@ -84,8 +87,9 @@ void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, con
 	for (const auto& c : candidates) {
 		entities.push_back(c.id);
 		appendFaceMatrices(matrices, c.pos, c.nearP, c.radius);
-		// The six faces reach radius along each axis, so their union fits in a sphere sqrt(3) times wider.
-		spheres.push_back({ c.pos.x, c.pos.y, c.pos.z, c.radius * 1.7321f });
+		// The six faces reach the corners of a cube round the light, but its light ends at its radius
+		// (deferred_shading.fs), and anything between it and what it lights is nearer than that: the rest is not drawn.
+		spheres.push_back({ c.pos.x, c.pos.y, c.pos.z, c.radius });
 	}
 }
 
@@ -196,7 +200,7 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 
 	auto& matrices = data.matrices;
 	auto& spheres = mSpheres;
-	collectLights(renderDataHandle.mCamFrustum, renderDataHandle.mCameraPos, matrices, spheres, data.shadowEntities);
+	collectLights(renderDataHandle.mCamFrustum, renderDataHandle.mCameraPos, renderDataHandle.current.wind.w, matrices, spheres, data.shadowEntities);
 	if (matrices.empty()) {
 		publish(renderDataHandle);
 		return;
@@ -243,17 +247,22 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 		rhi->cmdBindPipeline(cmd, pipeline);
 		rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 		rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
+		// The casters drawn again for each light, its six faces at once (pointLightMap.gs): a geometry shader that may
+		// write the vertices of every light's faces is slow however few it writes, the lights' faces in one draw took
+		// more than twice as long for a single light.
 		PointShadowPush push;
-		push.lightCount = static_cast<int>(data.shadowEntities.size());
-		rhi->cmdPushConstants(cmd, pipeline, ShaderStage::Geometry | ShaderStage::Fragment, &push, sizeof(push));
-		for (const auto& group : scene.groups(GpuScene::List::Shadow)) {
-			// Transparent casters only reach the cascades, through the glass proxy.
-			if (group.transparent || group.batchCount == 0) {
-				continue;
+		for (size_t light = 0; light < data.shadowEntities.size(); ++light) {
+			push.light = static_cast<int>(light);
+			rhi->cmdPushConstants(cmd, pipeline, ShaderStage::Geometry | ShaderStage::Fragment, &push, sizeof(push));
+			for (const auto& group : scene.groups(GpuScene::List::Shadow)) {
+				// Transparent casters only reach the cascades, through the glass proxy.
+				if (group.transparent || group.batchCount == 0) {
+					continue;
+				}
+				const DescriptorSetHandle sets[] = { mSet, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
+				rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, &matricesBlock.offset, 1);
+				scene.draw(cmd, mView, group);
 			}
-			const DescriptorSetHandle sets[] = { mSet, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
-			rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, &matricesBlock.offset, 1);
-			scene.draw(cmd, mView, group);
 		}
 	}
 	rhi->cmdEndRenderPass(cmd);

@@ -27,6 +27,9 @@
 namespace SFE::SystemsModule {
 	namespace {
 		constexpr float kStep = 1.f / 60.f;
+		// The main world's workers: a few characters and what they hold move in it, two are plenty. Each world had half
+		// the machine's threads, and the main world's sat idle beside the loose one's on the same cores.
+		constexpr int kMainThreads = 2;
 
 		namespace BroadPhaseLayers {
 			constexpr JPH::BroadPhaseLayer kStatic{ 0 };
@@ -88,102 +91,16 @@ namespace SFE::SystemsModule {
 		constexpr JPH::uint kMaxBodies = 65536;
 		constexpr JPH::uint kMaxBodyPairs = 65536;
 		constexpr JPH::uint kMaxContacts = 65536;
-	}
+		// How far round a static collider replaced what moves is woken (metres): what lay on it, or now lies in it.
+		constexpr float kWake = 0.5f;
 
-	struct PhysicsSystem::Layers {
-		struct BroadPhase final : JPH::BroadPhaseLayerInterface {
-			JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kCount; }
-			JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-				return layer == kStatic ? BroadPhaseLayers::kStatic : BroadPhaseLayers::kMoving;
-			}
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-			const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
-				return layer == BroadPhaseLayers::kStatic ? "static" : "moving";
-			}
-#endif
-		} broadPhase;
-
-		struct ObjectVsBroadPhase final : JPH::ObjectVsBroadPhaseLayerFilter {
-			bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broadPhaseLayer) const override {
-				// Static against static is never tested, and what is held against nothing.
-				return layer != kHeld && (layer != kStatic || broadPhaseLayer == BroadPhaseLayers::kMoving);
-			}
-		} objectVsBroadPhase;
-
-		struct ObjectPairs final : JPH::ObjectLayerPairFilter {
-			bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-				return a != kHeld && b != kHeld && (a != kStatic || b != kStatic)
-					&& !((a == kCharacter && b == kHair) || (a == kHair && b == kCharacter));
-			}
-		} objectPairs;
-	};
-
-	PhysicsSystem::PhysicsSystem() {
-		initJolt();
-		mLayers = std::make_unique<Layers>();
-		mTempAllocator = std::make_unique<StackThenHeap>(kTempBytes);
-		const int threads = (std::max)(1, static_cast<int>(std::thread::hardware_concurrency()) / 2 - 1);
-		mJobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
-		mWorld = std::make_unique<JPH::PhysicsSystem>();
-		mWorld->Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContacts, mLayers->broadPhase, mLayers->objectVsBroadPhase, mLayers->objectPairs);
-		mWorld->SetGravity({ 0.f, -9.81f, 0.f });
-		addStaticColliders();
-		mWorld->OptimizeBroadPhase();
-	}
-
-	PhysicsSystem::~PhysicsSystem() = default;
-
-	const JPH::ObjectVsBroadPhaseLayerFilter& PhysicsSystem::broadPhaseFilter() const {
-		return mLayers->objectVsBroadPhase;
-	}
-
-	const JPH::ObjectLayerPairFilter& PhysicsSystem::layerPairFilter() const {
-		return mLayers->objectPairs;
-	}
-
-	void PhysicsSystem::update(float dt) {
-		// A long frame (a hitch, a breakpoint) is not replayed in full: the world just runs slow for a moment.
-		mAccumulated = (std::min)(mAccumulated + dt, kStep * 4.f);
-		const double now = Engine::clockSeconds();
-		while (mAccumulated >= kStep) {
-			// What is left over after this step is time the world has not reached yet.
-			mStepTime = now - (mAccumulated - kStep);
-			const double started = Engine::clockSeconds();
-			for (const auto& callback : mStepCallbacks) {
-				callback(kStep);
-			}
-			mWorld->Update(kStep, 1, mTempAllocator.get(), mJobs.get());
-			mAccumulated -= kStep;
-			const float ms = static_cast<float>((Engine::clockSeconds() - started) * 1000.0);
-			mStepMs.store(mStepMs.load(std::memory_order_relaxed) * 0.95f + ms * 0.05f, std::memory_order_relaxed);
-			mBodyCount.store(mWorld->GetNumBodies(), std::memory_order_relaxed);
-			mActiveCount.store(mWorld->GetNumActiveBodies(JPH::EBodyType::RigidBody), std::memory_order_relaxed);
-		}
-	}
-
-	std::optional<float> PhysicsSystem::castRay(const Math::Vec3& from, const Math::Vec3& direction) const {
-		JPH::RRayCast ray{ JPH::RVec3(from.x, from.y, from.z), JPH::Vec3(direction.x, direction.y, direction.z) };
-		JPH::RayCastResult hit;
-		if (mWorld->GetNarrowPhaseQuery().CastRay(ray, hit)) {
-			return hit.mFraction;
-		}
-		return std::nullopt;
-	}
-
-	void PhysicsSystem::addStaticColliders() {
-		auto& registry = ECSHandler::registry();
-		auto& bodies = mWorld->GetBodyInterface();
-		// The terrain, and the props set in the scene with a collider.
-		for (const auto& [id, model, matrix] : registry.view<const ModelComponent, const ComponentsModule::TransformMatComp>()) {
-			if (!model || !matrix || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
-				continue;
-			}
-			const auto& world = matrix->mTransform;
-
-			// The finest level of detail, in world space.
+		// A model's finest level of detail where `world` puts it, as static mesh shapes. Cut into a grid of pieces by
+		// where each triangle is, each its own shape built on its own thread: one shape over a big terrain takes
+		// seconds to build.
+		std::vector<JPH::ShapeRefC> meshShapes(const ModelComponent& model, const Math::Mat4& world) {
 			JPH::VertexList vertices;
 			JPH::IndexedTriangleList triangles;
-			for (const auto* meshObject : model->getModel().meshes) {
+			for (const auto* meshObject : model.getModel().meshes) {
 				if (!meshObject) {
 					continue;
 				}
@@ -198,11 +115,9 @@ namespace SFE::SystemsModule {
 				}
 			}
 			if (triangles.empty()) {
-				continue;
+				return {};
 			}
 
-			// Cut into a grid of pieces by where each triangle is, each its own shape built on its own thread: one
-			// shape over a big terrain takes seconds to build.
 			constexpr int kPieces = 8;
 			float minX = vertices[0].x;
 			float maxX = vertices[0].x;
@@ -256,15 +171,161 @@ namespace SFE::SystemsModule {
 				}
 				shapes[p] = result.Get();
 			});
-			for (const auto& shape : shapes) {
-				if (!shape) {
-					continue;
-				}
+			std::erase_if(shapes, [](const JPH::ShapeRefC& shape) { return !shape; });
+			return shapes;
+		}
+	}
+
+	struct PhysicsSystem::Layers {
+		struct BroadPhase final : JPH::BroadPhaseLayerInterface {
+			JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kCount; }
+			JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
+				return layer == kStatic ? BroadPhaseLayers::kStatic : BroadPhaseLayers::kMoving;
+			}
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+			const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
+				return layer == BroadPhaseLayers::kStatic ? "static" : "moving";
+			}
+#endif
+		} broadPhase;
+
+		struct ObjectVsBroadPhase final : JPH::ObjectVsBroadPhaseLayerFilter {
+			bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broadPhaseLayer) const override {
+				// Static against static is never tested, and what is held against nothing.
+				return layer != kHeld && (layer != kStatic || broadPhaseLayer == BroadPhaseLayers::kMoving);
+			}
+		} objectVsBroadPhase;
+
+		struct ObjectPairs final : JPH::ObjectLayerPairFilter {
+			bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+				return a != kHeld && b != kHeld && (a != kStatic || b != kStatic)
+					&& !((a == kCharacter && b == kHair) || (a == kHair && b == kCharacter));
+			}
+		} objectPairs;
+	};
+
+	PhysicsSystem::PhysicsSystem() : PhysicsSystem(kMainThreads) {}
+
+	PhysicsSystem::PhysicsSystem(const int threads) {
+		initJolt();
+		mLayers = std::make_unique<Layers>();
+		mTempAllocator = std::make_unique<StackThenHeap>(kTempBytes);
+		mJobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
+		mWorld = std::make_unique<JPH::PhysicsSystem>();
+		mWorld->Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContacts, mLayers->broadPhase, mLayers->objectVsBroadPhase, mLayers->objectPairs);
+		mWorld->SetGravity({ 0.f, -9.81f, 0.f });
+		addStaticColliders();
+		mWorld->OptimizeBroadPhase();
+	}
+
+	PhysicsSystem::~PhysicsSystem() = default;
+
+	LoosePhysicsSystem::LoosePhysicsSystem()
+		: PhysicsSystem((std::max)(1, static_cast<int>(std::thread::hardware_concurrency()) / 2 - 1)) {}
+
+	const JPH::ObjectVsBroadPhaseLayerFilter& PhysicsSystem::broadPhaseFilter() const {
+		return mLayers->objectVsBroadPhase;
+	}
+
+	const JPH::ObjectLayerPairFilter& PhysicsSystem::layerPairFilter() const {
+		return mLayers->objectPairs;
+	}
+
+	void PhysicsSystem::update(float dt) {
+		swapStatic();
+		// A long frame (a hitch, a breakpoint) is not replayed in full: the world just runs slow for a moment.
+		mAccumulated = (std::min)(mAccumulated + dt, kStep * 4.f);
+		const double now = Engine::clockSeconds();
+		while (mAccumulated >= kStep) {
+			// What is left over after this step is time the world has not reached yet.
+			mStepTime = now - (mAccumulated - kStep);
+			const double started = Engine::clockSeconds();
+			for (const auto& callback : mStepCallbacks) {
+				callback(kStep);
+			}
+			mWorld->Update(kStep, 1, mTempAllocator.get(), mJobs.get());
+			mAccumulated -= kStep;
+			const float ms = static_cast<float>((Engine::clockSeconds() - started) * 1000.0);
+			mStepMs.store(mStepMs.load(std::memory_order_relaxed) * 0.95f + ms * 0.05f, std::memory_order_relaxed);
+			mBodyCount.store(mWorld->GetNumBodies(), std::memory_order_relaxed);
+			mActiveCount.store(mWorld->GetNumActiveBodies(JPH::EBodyType::RigidBody), std::memory_order_relaxed);
+		}
+	}
+
+	std::optional<float> PhysicsSystem::castRay(const Math::Vec3& from, const Math::Vec3& direction) const {
+		JPH::RRayCast ray{ JPH::RVec3(from.x, from.y, from.z), JPH::Vec3(direction.x, direction.y, direction.z) };
+		JPH::RayCastResult hit;
+		if (mWorld->GetNarrowPhaseQuery().CastRay(ray, hit)) {
+			return hit.mFraction;
+		}
+		return std::nullopt;
+	}
+
+	void PhysicsSystem::addStaticColliders() {
+		auto& registry = ECSHandler::registry();
+		auto& bodies = mWorld->GetBodyInterface();
+		// The terrain, and the props set in the scene with a collider.
+		for (const auto& [id, model, matrix] : registry.view<const ModelComponent, const ComponentsModule::TransformMatComp>()) {
+			if (!model || !matrix || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
+				continue;
+			}
+			for (const auto& shape : meshShapes(*model, matrix->mTransform)) {
 				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
-				bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate);
+				mStatic[id].push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
 			}
 		}
+	}
 
+	std::vector<JPH::ShapeRefC> PhysicsSystem::staticShapes(ecss::EntityId entity, const Math::Mat4& world) {
+		auto& registry = ECSHandler::registry();
+		const auto model = registry.pinComponent<const ModelComponent>(entity);
+		if (!model || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(entity))) {
+			return {};
+		}
+		return meshShapes(*model.get(), world);
+	}
+
+	void PhysicsSystem::replaceStatic(ecss::EntityId entity, std::vector<JPH::ShapeRefC> shapes) {
+		std::lock_guard lock(mReplacedMutex);
+		mReplaced.emplace_back(entity, std::move(shapes));
+	}
+
+	void PhysicsSystem::swapStatic() {
+		std::vector<std::pair<ecss::EntityId, std::vector<JPH::ShapeRefC>>> replaced;
+		{
+			std::lock_guard lock(mReplacedMutex);
+			replaced.swap(mReplaced);
+		}
+		if (replaced.empty()) {
+			return;
+		}
+		auto& bodies = mWorld->GetBodyInterface();
+		// The bodies stand where their shapes are, at the world's origin: their own bounds are where they are.
+		JPH::AABox changed;
+		for (auto& [entity, shapes] : replaced) {
+			auto& made = mStatic[entity];
+			for (const auto id : made) {
+				changed.Encapsulate(bodies.GetShape(id)->GetLocalBounds());
+			}
+			if (!made.empty()) {
+				bodies.RemoveBodies(made.data(), static_cast<int>(made.size()));
+				bodies.DestroyBodies(made.data(), static_cast<int>(made.size()));
+				made.clear();
+			}
+			for (const auto& shape : shapes) {
+				changed.Encapsulate(shape->GetLocalBounds());
+				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
+				made.push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
+			}
+			if (made.empty()) {
+				mStatic.erase(entity);
+			}
+		}
+		// What lay on a prop taken away falls, and what a prop is put down on is pushed out of it.
+		if (changed.IsValid()) {
+			changed.ExpandBy(JPH::Vec3::sReplicate(kWake));
+			bodies.ActivateBodiesInAABox(changed, JPH::BroadPhaseLayerFilter{}, JPH::ObjectLayerFilter{});
+		}
 	}
 
 	void PhysicsSystem::addStaticCapsuleBodies() {

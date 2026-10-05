@@ -38,9 +38,6 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	}
 	mInited = true;
 
-	const auto w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const auto h = Engine::instance()->getWindow()->getScreenData().renderH;
-
 	auto rhi = Engine::instance()->rhi();
 	mGpuFrames = (std::max)(1u, rhi->framesInFlight());
 	mFrames.resize(mGpuFrames);
@@ -53,40 +50,6 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	gbufferSamplerDesc.minFilter = FilterMode::Nearest;
 	gbufferSamplerDesc.magFilter = FilterMode::Nearest;
 	mSampler = rhi->createSampler(gbufferSamplerDesc);
-
-	TextureDesc materialBufDesc;
-	materialBufDesc.width = w;
-	materialBufDesc.height = h;
-	materialBufDesc.format = TextureFormat::RGBA8;
-	materialBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-
-	TextureDesc normalBufDesc;
-	normalBufDesc.width = w;
-	normalBufDesc.height = h;
-	normalBufDesc.format = TextureFormat::RGBA16F;
-	normalBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-
-	TextureDesc albedoBufDesc;
-	albedoBufDesc.width = w;
-	albedoBufDesc.height = h;
-	albedoBufDesc.format = TextureFormat::RGBA16F;
-	albedoBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-
-	// Where each pixel was last frame, in UV. TAA reprojects its history by this instead of by the camera alone,
-	// which is what let a skinned character smear a trail of itself.
-	TextureDesc velocityBufDesc;
-	velocityBufDesc.width = w;
-	velocityBufDesc.height = h;
-	velocityBufDesc.format = TextureFormat::RGBA16F;
-	velocityBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-
-	TextureDesc depthTex{};
-	depthTex.width = w;
-	depthTex.height = h;
-	depthTex.depth = 1;
-	depthTex.dimension = TextureDimension::Tex2D;
-	depthTex.format = TextureFormat::DEPTH_COMPONENT24;
-	depthTex.usage = TextureUsage::DepthStencilAttachment | TextureUsage::Sampled;
 
 	RenderPassDesc geometryPassDesc;
 	geometryPassDesc.colorAttachmentCount = 4;
@@ -103,37 +66,6 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	}
 	geometryPassDesc.depthAttachment.loadOp = AttachmentLoadOp::Load;
 	mGeometryLoadPass = rhi->createRenderPass(geometryPassDesc);
-
-	for (uint32_t i = 0; i < mGpuFrames; ++i) {
-		auto& slot = mFrames[i];
-		slot.materialBuffer = rhi->createTexture(materialBufDesc);
-		slot.normalBuffer = rhi->createTexture(normalBufDesc);
-		slot.albedoBuffer = rhi->createTexture(albedoBufDesc);
-		slot.velocityBuffer = rhi->createTexture(velocityBufDesc);
-		slot.depthsBuffer = rhi->createTexture(depthTex);
-		FramebufferDesc mainFboDesc;
-		mainFboDesc.width = w;
-		mainFboDesc.height = h;
-		mainFboDesc.renderPass = geometryPass;
-		mainFboDesc.colorAttachments = { {slot.materialBuffer}, {slot.normalBuffer}, {slot.albedoBuffer}, {slot.velocityBuffer} };
-		mainFboDesc.depthStencilAttachment = FramebufferAttachmentDesc{.texture = slot.depthsBuffer };
-		slot.gFramebuffer = rhi->createFramebuffer(mainFboDesc);
-	}
-
-	TextureDesc outlinesBufDesc;
-	outlinesBufDesc.width = w;
-	outlinesBufDesc.height = h;
-	outlinesBufDesc.format = TextureFormat::RGBA8;
-	outlinesBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-	outlinesMask = rhi->createTexture(outlinesBufDesc);
-	outlinesBuffer = rhi->createTexture(outlinesBufDesc);
-
-	TextureDesc lightsBufDesc;
-	lightsBufDesc.width = w;
-	lightsBufDesc.height = h;
-	lightsBufDesc.format = TextureFormat::RGBA8;
-	lightsBufDesc.usage = TextureUsage::Sampled | TextureUsage::ColorAttachment;
-	lightsBuffer = rhi->createTexture(lightsBufDesc);
 
 	GraphicsPipelineDesc pipelineDesc;
 
@@ -173,6 +105,7 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	texLayoutDescGBuf.bindings.emplace_back(8, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDescGBuf.bindings.emplace_back(9, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDescGBuf.bindings.emplace_back(10, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	texLayoutDescGBuf.bindings.emplace_back(11, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	gBuffetLayout = rhi->createDescriptorSetLayout(texLayoutDescGBuf);
 	gBuffetLayoutSet = rhi->allocateDescriptorSet(gBuffetLayout);
 	if (frameLayout) {
@@ -193,19 +126,7 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	outlineRPD.colorAttachments[0] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, {0.f, 0.f, 0.f, 0.f}, TextureFormat::RGBA8 };
 	outlineRenderPass = rhi->createRenderPass(outlineRPD);
 
-	FramebufferDesc outlineFboDesc;
-	outlineFboDesc.width = w;
-	outlineFboDesc.height = h;
-	outlineFboDesc.renderPass = outlineBufferRenderPass;
-	outlineFboDesc.colorAttachments = { {outlinesMask} };
-	outlineFramebuffer = rhi->createFramebuffer(outlineFboDesc);
-
-	FramebufferDesc outlineResultDesc;
-	outlineResultDesc.width = w;
-	outlineResultDesc.height = h;
-	outlineResultDesc.renderPass = outlineRenderPass;
-	outlineResultDesc.colorAttachments = { {outlinesBuffer} };
-	outlineResultFbo = rhi->createFramebuffer(outlineResultDesc);
+	resize(renderDataHandle);
 
 	GraphicsPipelineDesc gBufferOutlinePDesc;
 	gBufferOutlinePDesc.layout = layout;
@@ -253,7 +174,51 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	outlinePipeline = rhi->createGraphicsPipeline(outlinePDesc);
 
 	initGrid(frameLayout);
+}
 
+void GeometryPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	auto* rhi = Engine::instance()->rhi();
+	const auto& screen = Engine::instance()->getWindow()->getScreenData();
+	const auto target = [&](TextureHandle& texture, const TextureFormat format, const TextureUsage usage) {
+		if (texture) {
+			rhi->destroyTexture(texture);
+		}
+		TextureDesc desc;
+		desc.width = screen.renderW;
+		desc.height = screen.renderH;
+		desc.format = format;
+		desc.usage = usage;
+		texture = rhi->createTexture(desc);
+	};
+	const auto color = TextureUsage::Sampled | TextureUsage::ColorAttachment;
+	for (auto& slot : mFrames) {
+		if (slot.gFramebuffer) {
+			rhi->destroyFramebuffer(slot.gFramebuffer);
+		}
+		target(slot.materialBuffer, TextureFormat::RGBA8, color);
+		target(slot.normalBuffer, TextureFormat::RGBA16F, color);
+		target(slot.albedoBuffer, TextureFormat::RGBA16F, color);
+		// Where each pixel was last frame, in UV. TAA reprojects its history by this instead of by the camera alone,
+		// which is what let a skinned character smear a trail of itself.
+		target(slot.velocityBuffer, TextureFormat::RGBA16F, color);
+		target(slot.depthsBuffer, TextureFormat::DEPTH_COMPONENT24, TextureUsage::DepthStencilAttachment | TextureUsage::Sampled);
+		FramebufferDesc mainFboDesc;
+		mainFboDesc.width = screen.renderW;
+		mainFboDesc.height = screen.renderH;
+		mainFboDesc.renderPass = geometryPass;
+		mainFboDesc.colorAttachments = { {slot.materialBuffer}, {slot.normalBuffer}, {slot.albedoBuffer}, {slot.velocityBuffer} };
+		mainFboDesc.depthStencilAttachment = FramebufferAttachmentDesc{.texture = slot.depthsBuffer };
+		slot.gFramebuffer = rhi->createFramebuffer(mainFboDesc);
+	}
+	target(lightsBuffer, TextureFormat::RGBA8, color);
+	Utils::screenTarget(outlinesMask, outlineFramebuffer, outlineBufferRenderPass, TextureFormat::RGBA8);
+	Utils::screenTarget(outlinesBuffer, outlineResultFbo, outlineRenderPass, TextureFormat::RGBA8);
+	// The outline sets bind them again the next frame.
+	for (auto& textures : mTexSetsOutlines) {
+		textures.lights = {};
+		textures.normal = {};
+		textures.mask = {};
+	}
 	publish(renderDataHandle);
 }
 

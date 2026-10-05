@@ -791,6 +791,13 @@ namespace SFE::SystemsModule {
 		return true;
 	}
 
+	void RenderSystem::resize() {
+		Engine::instance()->rhi()->waitIdle();
+		for (auto& pass : mRenderPasses) {
+			pass->resize(mRenderData);
+		}
+	}
+
 	bool RenderSystem::shouldRunPass(size_t passIndex) const
 	{
 		if (passIndex >= mPassNames.size()) {

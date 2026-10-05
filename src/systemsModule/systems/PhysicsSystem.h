@@ -4,6 +4,9 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <optional>
 
@@ -11,15 +14,17 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #include "mathModule/Forward.h"
 #include "systemsModule/SystemBase.h"
 
 namespace SFE::SystemsModule {
 	// The Jolt world. Static colliders are built from the scene when the system is created (every entity with a
-	// TerrainComponent, from its mesh); moving things step at a fixed rate from update(), which runs on the physics
-	// tick thread (or stepped from the frame, for a fixed-step run or a capture). Nothing here touches the ECS after
-	// construction.
+	// TerrainComponent, from its mesh), and an entity's built again when the scene is read again (replaceStatic); moving
+	// things step at a fixed rate from update(), which runs on the physics tick thread (or stepped from the frame, for a
+	// fixed-step run or a capture). Nothing here touches the ECS after construction but staticShapes, on its caller's
+	// thread.
 	class PhysicsSystem : public ecss::System {
 	public:
 		// Object layers: what never moves, and what does (characters, rigid bodies); and what touches nothing while it is
@@ -33,7 +38,11 @@ namespace SFE::SystemsModule {
 		static constexpr JPH::ObjectLayer kCharacter = 3;
 		static constexpr JPH::ObjectLayer kHair = 4;
 
+		// The main world: the characters and what they hold, few things moving at once, stepped by kMainThreads workers
+		// besides its own thread.
 		PhysicsSystem();
+		// A world whose steps `threads` workers help with, besides its own thread.
+		explicit PhysicsSystem(int threads);
 		~PhysicsSystem() override;
 		void update(float dt) override;
 
@@ -51,6 +60,14 @@ namespace SFE::SystemsModule {
 		void addStaticCapsuleBodies();
 		// The capsules another world was given, for this one too (LoosePhysicsSystem). Before addStaticCapsuleBodies.
 		void shareStaticCapsules(const PhysicsSystem& with) { mCapsuleSources = with.mCapsuleSources; }
+
+		// An entity's static collider as shapes, where `world` puts it: its model's finest level of detail when that has
+		// a collider or is the terrain, else none (an entity gone, too). Built with these, for the scene read again
+		// (PropertiesSystem::reloadScene); one set serves both worlds.
+		static std::vector<JPH::ShapeRefC> staticShapes(ecss::EntityId entity, const Math::Mat4& world);
+		// The static bodies made from an entity replaced with bodies of `shapes` -- none: just taken out -- and what
+		// lay on either woken. Main thread; they change over at the start of the next update, between steps.
+		void replaceStatic(ecss::EntityId entity, std::vector<JPH::ShapeRefC> shapes);
 
 		// Called on the physics thread before every fixed step with its length: the place for anything that moves
 		// through the world with it, such as a character controller. Register before the system starts ticking.
@@ -78,6 +95,8 @@ namespace SFE::SystemsModule {
 
 	private:
 		void addStaticColliders();
+		// What replaceStatic was given, in place of what stood there. Physics thread, between steps.
+		void swapStatic();
 
 		struct Layers;
 		std::unique_ptr<Layers> mLayers;
@@ -86,6 +105,11 @@ namespace SFE::SystemsModule {
 		std::unique_ptr<JPH::PhysicsSystem> mWorld;
 		std::vector<std::function<void(float)>> mStepCallbacks;
 		std::vector<std::function<void(std::vector<StaticCapsule>&)>> mCapsuleSources;
+		// The static bodies of the terrain and the props, by the entity each was made from: the physics thread's after
+		// construction. What replaceStatic left for it, under the mutex.
+		std::unordered_map<ecss::EntityId, std::vector<JPH::BodyID>> mStatic;
+		std::mutex mReplacedMutex;
+		std::vector<std::pair<ecss::EntityId, std::vector<JPH::ShapeRefC>>> mReplaced;
 		float mAccumulated = 0.f;
 		std::atomic<float> mStepMs{ 0.f };
 		std::atomic<uint32_t> mBodyCount{ 0 };
@@ -98,5 +122,8 @@ namespace SFE::SystemsModule {
 	// its steps take, the main world -- the characters -- steps on undisturbed. The two worlds do not touch: what moves
 	// in both (a character) is a body in each, a kinematic one here that pushes the loose bodies it walks into.
 	class LoosePhysicsSystem final : public PhysicsSystem {
+	public:
+		// Stepped by half the machine's threads, less its own.
+		LoosePhysicsSystem();
 	};
 }

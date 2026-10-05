@@ -34,15 +34,15 @@ namespace SFE::Render::RenderPasses {
 		
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
+		void resize(SystemsModule::RenderData& renderDataHandle) override;
 	private:
+		// ssao.fs's: the radii and the strength from GraphicsSettings each frame.
 		struct SSAOParams
 		{
-			float samples = 12.f;
-			float intensity = 1.0f;
-			float scale = 0.5f;
+			float intensity = 4.5f;
 			float bias = 0.025f;
-			float sample_rad = 0.45f;
-			float max_distance = 2.4f;
+			float nearRadius = 1.f;
+			float farRadius = 3.f;
 			// TAA jitter phase. Rotates the sample disc per frame so the static screen-space
 			// pattern averages out in the TAA resolve instead of standing still as ribbing.
 			float frameIndex = 0.f;

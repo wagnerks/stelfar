@@ -953,6 +953,10 @@ namespace SFE::Render
 			else if constexpr (std::is_same_v<T, CmdPipelineBarrier>) {
 				execPipelineBarrier(recorded.barrier);
 			}
+			else if constexpr (std::is_same_v<T, CmdGpuMark>) {
+				glQueryCounter(mGpuMarkQueries[mGpuMarkWrite][recorded.mark], GL_TIMESTAMP);
+				mGpuMarkCount[mGpuMarkWrite] = (std::max)(mGpuMarkCount[mGpuMarkWrite], recorded.mark + 1);
+			}
 		}, command);
 	}
 
@@ -1005,6 +1009,26 @@ namespace SFE::Render
 				++mGpuQueriesIssued;
 			}
 			mGpuQueryWrite = (mGpuQueryWrite + 1) % kGpuTimeQueries;
+		}
+		// A submit that marked moves the marks' ring on, to the oldest slot: read, if the GPU is done with it, before
+		// it is written again. Never waited on either.
+		if (mGpuMarkCount[mGpuMarkWrite] > 0) {
+			mGpuMarkWrite = (mGpuMarkWrite + 1) % kGpuTimeQueries;
+			auto& count = mGpuMarkCount[mGpuMarkWrite];
+			GLuint available = 0;
+			if (count > 1) {
+				glGetQueryObjectuiv(mGpuMarkQueries[mGpuMarkWrite][count - 1], GL_QUERY_RESULT_AVAILABLE, &available);
+			}
+			GLuint64 previous = 0;
+			for (uint32_t mark = 0; available && mark < count; ++mark) {
+				GLuint64 ns = 0;
+				glGetQueryObjectui64v(mGpuMarkQueries[mGpuMarkWrite][mark], GL_QUERY_RESULT, &ns);
+				if (mark > 0) {
+					mGpuMarkMs[mark - 1] = static_cast<double>(ns - previous) / 1'000'000.0;
+				}
+				previous = ns;
+			}
+			count = 0;
 		}
 	}
 
@@ -1131,7 +1155,18 @@ namespace SFE::Render
 		glFlush();
 		if (hostPresentsToScreen() && surface.visible) {
 			glfwSwapBuffers(surface.window);
+			return;
 		}
+		// Hidden, nothing swaps, and nothing else held the CPU back: it ran on ahead of the GPU by as many frames as the
+		// driver would queue, so a frame's time said little of what it cost and the GPU's timings never came back. The
+		// frame kHiddenFrames back is waited for instead, as a swap would wait.
+		auto& fence = mHiddenFrames[mHiddenFrame];
+		if (fence) {
+			glClientWaitSync(static_cast<GLsync>(fence), GL_SYNC_FLUSH_COMMANDS_BIT, 1'000'000'000);
+			glDeleteSync(static_cast<GLsync>(fence));
+		}
+		fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+		mHiddenFrame = (mHiddenFrame + 1) % kHiddenFrames;
 	}
 
 	void OpenGLRHI::runOnWorkerThread(const std::function<void()>& work)
@@ -1908,6 +1943,7 @@ namespace SFE::Render
 		// inside one face on OpenGL.
 		glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 		glGenQueries(kGpuTimeQueries, mGpuTimeQueries);
+		glGenQueries(kGpuTimeQueries * kMaxGpuMarks, &mGpuMarkQueries[0][0]);
 	}
 
 	void OpenGLRHI::waitIdle()
@@ -1930,6 +1966,16 @@ namespace SFE::Render
 				for (auto& query : mGpuTimeQueries) {
 					query = 0;
 				}
+			}
+			for (auto& fence : mHiddenFrames) {
+				if (fence) {
+					glDeleteSync(static_cast<GLsync>(fence));
+					fence = nullptr;
+				}
+			}
+			if (mGpuMarkQueries[0][0]) {
+				glDeleteQueries(kGpuTimeQueries * kMaxGpuMarks, &mGpuMarkQueries[0][0]);
+				std::fill(&mGpuMarkQueries[0][0], &mGpuMarkQueries[0][0] + kGpuTimeQueries * kMaxGpuMarks, 0u);
 			}
 			// Freed with every other buffer below.
 			m_transientBuffer = {};
@@ -2420,6 +2466,11 @@ namespace SFE::Render
 		}
 		trackTextureMemory(t->desc, false);
 		recycleResource(textures, m_freeTextures, texture.id);
+		// The slot comes back as the next texture made, the picture of another size among them: present puts that one
+		// on its read framebuffer, not the one deleted here and still held by it.
+		if (texture.id == m_presentReadTexId) {
+			m_presentReadTexId = UINT32_MAX;
+		}
 	}
 
 	SamplerHandle OpenGLRHI::createSampler(const SamplerDesc& desc)
@@ -2672,6 +2723,13 @@ namespace SFE::Render
 	{
 		if (GLCommandList* list = recordingList(cmd)) {
 			list->commands.emplace_back(CmdPipelineBarrier{ barrier });
+		}
+	}
+
+	void OpenGLRHI::cmdGpuMark(CommandListHandle cmd, uint32_t mark)
+	{
+		if (GLCommandList* list = recordingList(cmd); list && mark < kMaxGpuMarks && mGpuMarkQueries[0][0]) {
+			list->commands.emplace_back(CmdGpuMark{ mark });
 		}
 	}
 

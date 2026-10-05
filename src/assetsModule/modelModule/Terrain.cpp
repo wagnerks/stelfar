@@ -235,9 +235,9 @@ namespace AssetsModule {
 		// How far from the line a segment is still bucketed: past it the distance does not matter.
 		constexpr float kRoadReach = 10.f;
 
-		RoadLine buildRoad(const SFE::ComponentsModule::TerrainComponent& t) {
+		// A road or a footpath through `control` on a terrain `size` metres a side.
+		RoadLine buildLine(const std::vector<SFE::Math::Vec2>& control, const float size) {
 			RoadLine line;
-			const auto& control = t.road;
 			if (control.size() < 2) {
 				return line;
 			}
@@ -265,10 +265,10 @@ namespace AssetsModule {
 				line.along[i] = line.along[i - 1] + std::hypot(b.x - a.x, b.y - a.y);
 			}
 
-			const float half = t.size * 0.5f;
+			const float half = size * 0.5f;
 			line.originX = -half - kRoadReach;
 			line.originZ = -half - kRoadReach;
-			line.cellsX = line.cellsZ = static_cast<int>(std::ceil((t.size + 2.f * kRoadReach) / RoadLine::kCell));
+			line.cellsX = line.cellsZ = static_cast<int>(std::ceil((size + 2.f * kRoadReach) / RoadLine::kCell));
 			line.cells.resize(static_cast<size_t>(line.cellsX) * line.cellsZ);
 			for (uint32_t i = 0; i + 1 < line.points.size(); ++i) {
 				const auto& a = line.points[i];
@@ -298,6 +298,23 @@ namespace AssetsModule {
 			return text;
 		}
 
+		// The footpaths and bare patches, for the keys of what is built from them. They leave the ground's shape as it
+		// is, so the heights and the mesh's levels do not key on them.
+		std::string pathText(const SFE::ComponentsModule::TerrainComponent& t) {
+			std::string text;
+			for (const auto& path : t.paths) {
+				text += "p" + std::to_string(path.width) + "," + std::to_string(path.wear) + ":";
+				for (const auto& point : path.points) {
+					text += std::to_string(point.x) + "," + std::to_string(point.y) + ";";
+				}
+			}
+			for (const auto& patch : t.patches) {
+				text += "o" + std::to_string(patch.x) + "," + std::to_string(patch.y) + "," + std::to_string(patch.z) + ","
+					+ std::to_string(patch.w) + ";";
+			}
+			return text;
+		}
+
 		const RoadLine& roadOf(const SFE::ComponentsModule::TerrainComponent& t) {
 			static std::mutex mutex;
 			// Never erased, so a reference handed out stays good.
@@ -306,7 +323,7 @@ namespace AssetsModule {
 			std::lock_guard lock(mutex);
 			auto& line = known[key];
 			if (!line) {
-				line = std::make_unique<RoadLine>(buildRoad(t));
+				line = std::make_unique<RoadLine>(buildLine(t.road, t.size));
 			}
 			return *line;
 		}
@@ -332,35 +349,167 @@ namespace AssetsModule {
 			}
 			return height;
 		}
+
+		// What a patch's radius is scaled by at x/z: never quite round, it is worn further out on one side than on another.
+		float patchLopsided(float x, float z) {
+			return 1.f + 0.15f * (shaderFbm(x * 0.25f + 17.f, z * 0.25f + 17.f, 2) * 2.f - 1.f);
+		}
+	}
+
+	float terrainClearingDistance(const SFE::ComponentsModule::TerrainComponent& t, float x, float z) {
+		float distance = kRoadFar;
+		for (const auto& clearing : t.clearings) {
+			const float fromMiddle = std::sqrt((x - clearing.x) * (x - clearing.x) + (z - clearing.y) * (z - clearing.y));
+			distance = (std::min)(distance, fromMiddle - clearing.z);
+		}
+		return distance;
 	}
 
 	float terrainRoadDistance(const SFE::ComponentsModule::TerrainComponent& t, float x, float z) {
-		float distance = roadOf(t).distance(x, z);
-		for (const auto& clearing : t.clearings) {
-			const float fromMiddle = std::sqrt((x - clearing.x) * (x - clearing.x) + (z - clearing.y) * (z - clearing.y));
-			const float trodden = (std::max)(fromMiddle - clearing.z, 0.f) + kClearingDistance;
-			if (trodden < std::fabs(distance)) {
-				distance = trodden;
+		const float distance = roadOf(t).distance(x, z);
+		const float trodden = (std::max)(terrainClearingDistance(t, x, z), 0.f) + kClearingDistance;
+		return trodden < std::fabs(distance) ? trodden : distance;
+	}
+
+	// The footpaths as lines and the patches as they are, and the box round them all past which nothing is looked at.
+	struct TerrainPathSet {
+		std::vector<RoadLine> lines;
+		std::vector<float> halfWidths;
+		std::vector<float> wears;
+		std::vector<SFE::Math::Vec4> patches;
+		float minX = kRoadFar;
+		float minZ = kRoadFar;
+		float maxX = -kRoadFar;
+		float maxZ = -kRoadFar;
+	};
+
+	const TerrainPathSet* terrainPathSet(const SFE::ComponentsModule::TerrainComponent& t) {
+		if (t.paths.empty() && t.patches.empty()) {
+			return nullptr;
+		}
+		static std::mutex mutex;
+		// Never erased, so a pointer handed out stays good.
+		static std::unordered_map<std::string, std::unique_ptr<TerrainPathSet>> known;
+		const auto key = std::to_string(t.size) + "|" + pathText(t);
+		std::lock_guard lock(mutex);
+		auto& set = known[key];
+		if (set) {
+			return set.get();
+		}
+		set = std::make_unique<TerrainPathSet>();
+		const auto reach = [&](const float x, const float z, const float radius) {
+			set->minX = (std::min)(set->minX, x - radius - kPathFar);
+			set->minZ = (std::min)(set->minZ, z - radius - kPathFar);
+			set->maxX = (std::max)(set->maxX, x + radius + kPathFar);
+			set->maxZ = (std::max)(set->maxZ, z + radius + kPathFar);
+		};
+		for (const auto& path : t.paths) {
+			set->lines.push_back(buildLine(path.points, t.size));
+			set->halfWidths.push_back(path.width * 0.5f);
+			set->wears.push_back(path.wear);
+			for (const auto& point : path.points) {
+				reach(point.x, point.y, path.width * 0.5f);
 			}
 		}
-		return distance;
+		set->patches = t.patches;
+		for (const auto& patch : t.patches) {
+			reach(patch.x, patch.y, patch.z);
+		}
+		return set.get();
+	}
+
+	float terrainPathDistance(const TerrainPathSet* paths, float x, float z) {
+		if (!paths || x < paths->minX || x > paths->maxX || z < paths->minZ || z > paths->maxZ) {
+			return kPathFar;
+		}
+		// Run into each other in a curve where they meet, as feet cut the corner.
+		constexpr float kJoin = 0.5f;
+		float distance = kRoadFar;
+		const auto join = [&](const float other) {
+			const float h = (std::max)(kJoin - std::fabs(distance - other), 0.f) / kJoin;
+			distance = (std::min)(distance, other) - h * h * kJoin * 0.25f;
+		};
+		for (size_t i = 0; i < paths->lines.size(); ++i) {
+			join(std::fabs(paths->lines[i].distance(x, z)) - paths->halfWidths[i]);
+		}
+		const float lopsided = patchLopsided(x, z);
+		for (const auto& patch : paths->patches) {
+			join(std::sqrt((x - patch.x) * (x - patch.x) + (z - patch.y) * (z - patch.y)) - patch.z * lopsided);
+		}
+		// Ragged: the grass creeps in here and is worn back there.
+		distance += 0.3f * (shaderFbm(x * 0.45f, z * 0.45f, 3) * 2.f - 1.f);
+		return (std::min)(distance, kPathFar);
+	}
+
+	float terrainPathDistance(const SFE::ComponentsModule::TerrainComponent& t, float x, float z) {
+		return terrainPathDistance(terrainPathSet(t), x, z);
+	}
+
+	float terrainPathWear(const TerrainPathSet* paths, float x, float z, float* core) {
+		if (core) {
+			*core = -kPathFar;
+		}
+		if (!paths || x < paths->minX || x > paths->maxX || z < paths->minZ || z > paths->maxZ) {
+			return 0.f;
+		}
+		// The worn ground's edge wanders in and out by a noise of its own, so it never runs in a clean curve.
+		const float ragged = shaderFbm(x * 0.6f + 5.f, z * 0.6f + 5.f, 3) * 2.f - 1.f;
+		float wear = 0.f;
+		// A path is a line of grass walked short and thin across its width, thinning out half a metre past it, with a
+		// strip trodden to the earth down its middle: unbroken from end to end, a third to two fifths of its width the
+		// more it is worn, wider and narrower along it. The line feet keep to wanders a little from side to side.
+		const float wander = shaderFbm(x * 0.3f + 9.f, z * 0.3f + 9.f, 2) * 2.f - 1.f;
+		const float frayed = 0.06f * (shaderFbm(x * 2.5f + 11.f, z * 2.5f + 11.f, 2) * 2.f - 1.f);
+		for (size_t i = 0; i < paths->lines.size(); ++i) {
+			const float half = paths->halfWidths[i];
+			SFE::Math::Vec2 nearest{ 0.f, 0.f };
+			const float centre = std::fabs(paths->lines[i].distance(x, z, &nearest) + 0.6f * half * wander);
+			const float across = centre + 0.35f * half * ragged;
+			wear = (std::max)(wear, 0.7f * paths->wears[i] * (1.f - smoothstep(0.5f * half, half + 0.5f, across)));
+			// Past a metre and a half off its middle the strip matters to nothing.
+			if (core && centre < 1.5f) {
+				// By a noise at the nearest point of its middle, the same all across it, so it changes only along it.
+				const float along = shaderFbm(nearest.x * 0.7f + 3.f, nearest.y * 0.7f + 3.f, 2);
+				*core = (std::max)(*core, 0.7f * half * paths->wears[i] * (0.2f + 1.6f * along) + frayed - centre);
+			}
+		}
+		// A patch, worn most in its middle and less and less out to a metre and a half past its edge.
+		const float lopsided = patchLopsided(x, z);
+		for (const auto& patch : paths->patches) {
+			const float edge = patch.z * lopsided;
+			const float from = std::sqrt((x - patch.x) * (x - patch.x) + (z - patch.y) * (z - patch.y)) + 0.6f * ragged;
+			wear = (std::max)(wear, patch.w * (1.f - smoothstep(edge - 1.5f, edge + 1.5f, from)));
+		}
+		return wear;
+	}
+
+	float terrainBareEarth(float wear, float core, float x, float z) {
+		// Spots that spread and join as the wear rises, through the noise's own range: none below a third, two fifths of
+		// the ground at a half, two thirds at three quarters, all of it at 1; and a path's strip. Their edges broken by a
+		// finer noise.
+		const float reach = 0.47f * wear + 0.2f * smoothstep(0.2f, 0.5f, wear) + 0.3f * smoothstep(0.8f, 1.f, wear);
+		return (std::max)(reach - shaderFbm(x * 0.5f + 23.f, z * 0.5f + 23.f, 3), 1.5f * core)
+			- 0.1f * (shaderFbm(x * 3.f + 7.f, z * 3.f + 7.f, 2) - 0.5f);
 	}
 
 	namespace {
 		// Bump when heightAt, the mesh built from the heights or its levels of detail change: the cache keys on this too.
 		constexpr uint32_t kCacheVersion = 3;
 
-		// Everything the terrain is built from.
-		uint64_t cacheKey(const SFE::ComponentsModule::TerrainComponent& t) {
-			const std::string text = std::to_string(kCacheVersion) + ":" + std::to_string(t.size) + ":" + std::to_string(t.resolution) + ":"
+		// Everything the terrain's shape is built from.
+		std::string cacheText(const SFE::ComponentsModule::TerrainComponent& t) {
+			return std::to_string(kCacheVersion) + ":" + std::to_string(t.size) + ":" + std::to_string(t.resolution) + ":"
 				+ std::to_string(t.lakeWidth) + ":" + std::to_string(t.lakeLength) + ":" + std::to_string(t.lakeDepth) + ":" + std::to_string(t.hillHeight)
 			+ ":" + std::to_string(t.seed) + ":" + roadText(t);
-			return SFE::BinaryCache::hash(text);
+		}
+
+		uint64_t cacheKey(const SFE::ComponentsModule::TerrainComponent& t) {
+			return SFE::BinaryCache::hash(cacheText(t));
 		}
 	}
 
 	uint64_t terrainCacheKey(const SFE::ComponentsModule::TerrainComponent& t) {
-		return cacheKey(t);
+		return SFE::BinaryCache::hash(cacheText(t) + "|" + pathText(t));
 	}
 
 	const std::vector<float>& terrainHeights(const SFE::ComponentsModule::TerrainComponent& t) {
@@ -409,6 +558,7 @@ namespace AssetsModule {
 		}
 		const int side = (std::max)(2, static_cast<int>(std::ceil(t.size / kTerrainNoiseTexelMetres)));
 		std::vector<uint8_t> texels(static_cast<size_t>(side) * side * 4);
+		const auto& road = roadOf(t);
 		std::vector<int> rows(side);
 		std::iota(rows.begin(), rows.end(), 0);
 		std::for_each(std::execution::par, rows.begin(), rows.end(), [&](const int j) {
@@ -421,7 +571,7 @@ namespace AssetsModule {
 				texels[at] = byte(shaderFbm(x * 0.018f, z * 0.018f, 4));
 				texels[at + 1] = byte(shaderFbm(x * 0.006f + 41.f, z * 0.006f + 41.f, 3));
 				texels[at + 2] = byte(shaderFbm(x * 0.045f + 7.f, z * 0.045f + 7.f, 2));
-				texels[at + 3] = byte(terrainRoadDistance(t, x, z) / kRoadTextureRange + 0.5f);
+				texels[at + 3] = byte(road.distance(x, z) / kRoadTextureRange + 0.5f);
 			}
 		});
 		SFE::Render::TextureDesc desc;
@@ -457,6 +607,65 @@ namespace AssetsModule {
 		desc.width = static_cast<uint32_t>(side);
 		desc.height = desc.width;
 		desc.format = SFE::Render::TextureFormat::RG32F;
+		auto* texture = AssetsManager::instance()->createAsset<Texture>(name);
+		texture->texture = SFE::Engine::instance()->rhi()->createTexture(desc, texels.data());
+		return texture->texture;
+	}
+
+	SFE::Render::TextureHandle terrainPathTexture(const SFE::ComponentsModule::TerrainComponent& t) {
+		const std::string name = "builtin:terrain:paths:" + std::to_string(terrainCacheKey(t));
+		if (auto* texture = AssetsManager::instance()->getAsset<Texture>(name)) {
+			return texture->texture;
+		}
+		// The box round the paths and patches, out to round any clearing that reaches into it, so the clearing's own
+		// distance does not stop short in a seam. With none, nothing but the first row, saying no metres a texel.
+		const auto* paths = terrainPathSet(t);
+		float minX = 0.f;
+		float minZ = 0.f;
+		float metres = 0.f;
+		int width = 2;
+		int height = 1;
+		if (paths) {
+			minX = paths->minX;
+			minZ = paths->minZ;
+			float maxX = paths->maxX;
+			float maxZ = paths->maxZ;
+			for (const auto& clearing : t.clearings) {
+				const float reach = clearing.z + kPathFar;
+				if (clearing.x + reach > minX && clearing.x - reach < maxX && clearing.y + reach > minZ && clearing.y - reach < maxZ) {
+					minX = (std::min)(minX, clearing.x - reach);
+					minZ = (std::min)(minZ, clearing.y - reach);
+					maxX = (std::max)(maxX, clearing.x + reach);
+					maxZ = (std::max)(maxZ, clearing.y + reach);
+				}
+			}
+			// Coarser only where the box would not fit a texture otherwise; a path is lost between texels much past this.
+			metres = (std::max)(kPathTexelMetres, (std::max)(maxX - minX, maxZ - minZ) / 2047.f);
+			width = (std::max)(2, static_cast<int>(std::ceil((maxX - minX) / metres)) + 1);
+			height = static_cast<int>(std::ceil((maxZ - minZ) / metres)) + 2;
+		}
+		std::vector<float> texels(static_cast<size_t>(width) * height * 4, 0.f);
+		texels[0] = minX;
+		texels[1] = minZ;
+		texels[4] = metres;
+		std::vector<int> rows(height - 1);
+		std::iota(rows.begin(), rows.end(), 0);
+		std::for_each(std::execution::par, rows.begin(), rows.end(), [&](const int j) {
+			const float z = minZ + static_cast<float>(j) * metres;
+			for (int i = 0; i < width; ++i) {
+				const float x = minX + static_cast<float>(i) * metres;
+				const size_t at = (static_cast<size_t>(j + 1) * width + i) * 4;
+				texels[at] = std::clamp(terrainPathDistance(paths, x, z), -kPathFar, kPathFar);
+				texels[at + 1] = std::clamp(terrainClearingDistance(t, x, z), -kPathFar, kPathFar);
+				float core = 0.f;
+				texels[at + 2] = terrainPathWear(paths, x, z, &core);
+				texels[at + 3] = core;
+			}
+		});
+		SFE::Render::TextureDesc desc;
+		desc.width = static_cast<uint32_t>(width);
+		desc.height = static_cast<uint32_t>(height);
+		desc.format = SFE::Render::TextureFormat::RGBA32F;
 		auto* texture = AssetsManager::instance()->createAsset<Texture>(name);
 		texture->texture = SFE::Engine::instance()->rhi()->createTexture(desc, texels.data());
 		return texture->texture;
@@ -507,7 +716,7 @@ namespace AssetsModule {
 	Model* getOrCreateTerrain(const SFE::ComponentsModule::TerrainComponent& t) {
 		const std::string path = "builtin:terrain:" + std::to_string(t.size) + ":" + std::to_string(t.resolution) + ":"
 			+ std::to_string(t.lakeWidth) + ":" + std::to_string(t.lakeLength) + ":" + std::to_string(t.lakeDepth) + ":" + std::to_string(t.hillHeight)
-			+ ":" + std::to_string(t.seed) + ":" + std::to_string(cacheKey(t));
+			+ ":" + std::to_string(t.seed) + ":" + std::to_string(terrainCacheKey(t));
 		auto* assets = AssetsManager::instance();
 		if (auto* existing = assets->getAsset<Model>(path)) {
 			return existing;
@@ -615,6 +824,7 @@ namespace AssetsModule {
 		}
 		meshObj.material[SFE::ROUGHNESS] = SFE::MaterialTexture{ terrainNoiseTexture(t), SFE::ROUGHNESS, SFE::ROUGHNESS };
 		meshObj.material[SFE::METALLIC] = SFE::MaterialTexture{ terrainRoadFrameTexture(t), SFE::METALLIC, SFE::METALLIC };
+		meshObj.material[SFE::SUBSURFACE] = SFE::MaterialTexture{ terrainPathTexture(t), SFE::SUBSURFACE, SFE::SUBSURFACE };
 
 		// The root holds nothing; every chunk is a child with the ground's material and its own bounds.
 		SFE::Tree<SFE::MeshObject3D> tree;

@@ -9,10 +9,8 @@
 
 using namespace SFE::Render::RenderPasses;
 
-void SSSPass::init(SystemsModule::RenderData&) {
+void SSSPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 
 	SamplerDesc lin;
 	lin.minFilter = FilterMode::Linear;
@@ -29,19 +27,7 @@ void SSSPass::init(SystemsModule::RenderData&) {
 	rpDesc.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = TextureFormat::RGBA16F;
 	mRenderPass = rhi->createRenderPass(rpDesc);
-
-	TextureDesc colorDesc;
-	colorDesc.width = w;
-	colorDesc.height = h;
-	colorDesc.format = TextureFormat::RGBA16F;
-	colorDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mColor = rhi->createTexture(colorDesc);
-	FramebufferDesc fb;
-	fb.width = w;
-	fb.height = h;
-	fb.renderPass = mRenderPass;
-	fb.colorAttachments = { { mColor } };
-	mFbo = rhi->createFramebuffer(fb);
+	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(0, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
@@ -70,6 +56,10 @@ void SSSPass::init(SystemsModule::RenderData&) {
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
 	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/sss.fs");
 	mPipeline = rhi->createGraphicsPipeline(pipelineDesc);
+}
+
+void SSSPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mColor, mFbo, mRenderPass);
 }
 
 void SSSPass::render(SystemsModule::RenderData& renderDataHandle, CommandListHandle cmd) {

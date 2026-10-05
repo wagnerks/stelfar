@@ -63,24 +63,6 @@ namespace {
 		return false;
 	}
 
-	// A copy of the lit picture at render size, for a pass that draws over what it reads.
-	void makeSceneCopy(SFE::Render::TextureHandle& texture, SFE::Render::FramebufferHandle& framebuffer) {
-		using namespace SFE::Render;
-		auto* rhi = SFE::Engine::instance()->rhi();
-		const auto& screen = SFE::Engine::instance()->getWindow()->getScreenData();
-		TextureDesc copyDesc;
-		copyDesc.width = screen.renderW;
-		copyDesc.height = screen.renderH;
-		copyDesc.format = TextureFormat::RGBA16F;
-		copyDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-		texture = rhi->createTexture(copyDesc);
-		FramebufferDesc copyFb;
-		copyFb.width = screen.renderW;
-		copyFb.height = screen.renderH;
-		copyFb.colorAttachments = { { texture } };
-		framebuffer = rhi->createFramebuffer(copyFb);
-	}
-
 	void makeSamplers(SFE::Render::SamplerHandle& nearest, SFE::Render::SamplerHandle& linear) {
 		using namespace SFE::Render;
 		auto* rhi = SFE::Engine::instance()->rhi();
@@ -96,7 +78,7 @@ namespace {
 	}
 }
 
-void WaterPass::init(SystemsModule::RenderData&) {
+void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 
@@ -109,7 +91,7 @@ void WaterPass::init(SystemsModule::RenderData&) {
 	ripple.maxAnisotropy = 1.f;
 	mRipple = rhi->createSampler(ripple);
 
-	makeSceneCopy(mSceneCopy, mSceneCopyFbo);
+	resize(renderDataHandle);
 
 	mSurfacePass = createFinalDepthRenderPass();
 
@@ -142,6 +124,10 @@ void WaterPass::init(SystemsModule::RenderData&) {
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/water.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water.fs");
 	mSurfacePipeline = rhi->createGraphicsPipeline(desc);
+}
+
+void WaterPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
 }
 
 void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -192,10 +178,10 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	rhi->cmdEndRenderPass(cmd);
 }
 
-void UnderwaterPass::init(SystemsModule::RenderData&) {
+void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
 	makeSamplers(mNearest, mLinear);
-	makeSceneCopy(mSceneCopy, mSceneCopyFbo);
+	resize(renderDataHandle);
 	mPass = createFinalDepthRenderPass();
 
 	DescriptorSetLayoutDesc layoutDesc;
@@ -224,6 +210,10 @@ void UnderwaterPass::init(SystemsModule::RenderData&) {
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water_under.fs");
 	mPipeline = rhi->createGraphicsPipeline(desc);
+}
+
+void UnderwaterPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
 }
 
 void UnderwaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {

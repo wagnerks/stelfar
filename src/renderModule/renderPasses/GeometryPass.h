@@ -55,6 +55,7 @@ namespace SFE::Render::RenderPasses {
 
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
+		void resize(SystemsModule::RenderData& renderDataHandle) override;
 
 		// The opaque scene culled into `view`, drawn with each material's G-buffer pipeline into whatever render pass
 		// is open, as long as it has this pass's attachments. `frameSet` is laid out like the renderer's frame set and

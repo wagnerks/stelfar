@@ -4,12 +4,18 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 
 #include <GLFW/glfw3.h>
 
 #include "windowsModule/ViewportData.h"
 #include "containersModule/Singleton.h"
+
+namespace Json {
+	class Value;
+}
 
 constexpr int GLFW_CONTEXT_VER_MAJ = 4;
 #ifdef __APPLE__
@@ -112,7 +118,26 @@ namespace SFE::Render {
 
 		void apply();
 	};
-	
+
+	// How the game's window takes the screen: framed, frameless over the whole monitor at the monitor's own mode, or
+	// the monitor itself given to it at a mode of that size.
+	enum class DisplayMode : uint8_t { Windowed, Borderless, Fullscreen };
+	inline constexpr const char* kDisplayModeNames[] = { "windowed", "borderless", "fullscreen" };
+
+	// The player's choice, set in the Graphics panel: the mode, the size the picture is drawn at (the monitor's own
+	// when borderless), and whether the frame's timings show in its corner.
+	struct DisplaySettings {
+		DisplayMode mode = DisplayMode::Windowed;
+		int width = 2560;
+		int height = 1440;
+		bool frameInfo = true;
+	};
+	// display.json in the folder the game runs from, next to imgui.ini: what it lacks is DisplaySettings' own.
+	DisplaySettings loadDisplaySettings();
+	void saveDisplaySettings(const DisplaySettings& settings);
+	// `settings` with what the json has of {"mode", "width", "height", "frameInfo"} put over it.
+	DisplaySettings displayFromJson(const Json::Value& json, DisplaySettings settings);
+
 	class Window {
 	public:
 		Window(const Window& other) = delete;
@@ -160,9 +185,26 @@ namespace SFE::Render {
 		std::function<void()> onCloseCallback = {};
 
 		CoreModule::ViewportData& getScreenData() { return data; }
+
+		// The display the player set, for a game's own window: null until one is given. A size its mode does not have
+		// on the monitor becomes the mode's largest; a new mode or size is put on the screen by applyDisplay, at the
+		// start of the next frame (Engine::update).
+		const DisplaySettings* display() const { return mDisplayOwned ? &mDisplay : nullptr; }
+		void setDisplay(DisplaySettings settings);
+		// The sizes the window's monitor has for the mode, largest first: its own modes, and for a framed window the
+		// usual 16:9 sizes as well, the ones that fit on it.
+		std::vector<std::pair<int, int>> displaySizes(DisplayMode mode) const;
+		// The display last set put on the screen, once. True when the picture is to be drawn at another size from now
+		// on (getScreenData's renderW, renderH).
+		bool applyDisplay();
 	private:
+		// The monitor the window is on: the one it fills, or the one under its middle.
+		GLFWmonitor* displayMonitor() const;
 
 		CoreModule::ViewportData data;
+		DisplaySettings mDisplay;
+		bool mDisplayOwned = false;
+		bool mDisplayDirty = false;
 
 		GLFWwindow* mWindow = nullptr;
 		std::string mTitle;

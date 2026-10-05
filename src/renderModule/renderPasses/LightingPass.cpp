@@ -1,5 +1,6 @@
 ﻿#include "LightingPass.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include "assetsModule/TextureHandler.h"
 #include "core/Engine.h"
@@ -41,6 +42,7 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 	texLayoutDesc.bindings.emplace_back(6, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(7, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(8, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	texLayoutDesc.bindings.emplace_back(9, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(12, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(13, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(14, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
@@ -77,32 +79,13 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 
 	renderPass = rhi->createRenderPass(rpDesc);
 
-	FramebufferDesc fbDesc;
-	fbDesc.width = Engine::instance()->getWindow()->getScreenData().renderW;
-	fbDesc.height = Engine::instance()->getWindow()->getScreenData().renderH;
-	fbDesc.renderPass = renderPass;
-
-	TextureDesc litDesc;
-	litDesc.width = Engine::instance()->getWindow()->getScreenData().renderW;
-	litDesc.height = Engine::instance()->getWindow()->getScreenData().renderH;
-	litDesc.format = TextureFormat::RGBA16F;
-	litDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mPresentTex[0] = rhi->createTexture(litDesc);
-	mPresentTex[1] = rhi->createTexture(litDesc);
-
-	for (int i = 0; i < 2; ++i) {
-		FramebufferDesc presentFb = fbDesc;
-		presentFb.colorAttachments = { { mPresentTex[i] } };
-		mPresentFbo[i] = rhi->createFramebuffer(presentFb);
-	}
 	{
 		SamplerDesc presentSamp;
 		presentSamp.minFilter = FilterMode::Linear;
 		presentSamp.magFilter = FilterMode::Linear;
 		mPresentSampler = rhi->createSampler(presentSamp);
 	}
-	renderDataHandle.frame.set(FrameId::Lit, { .texture = mPresentTex[0], .sampler = mPresentSampler });
-	renderDataHandle.frame.set(FrameId::Final, { .texture = mPresentTex[0], .sampler = mPresentSampler, .framebuffer = mPresentFbo[0] });
+	resize(renderDataHandle);
 
 	GraphicsPipelineDesc pipelineDesc{};
 	Render::VertexLayoutDesc& layout = pipelineDesc.layout;
@@ -150,13 +133,13 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 }
 
 void LightingPass::bakeSkyLight(SystemsModule::RenderData& renderDataHandle) {
-	auto* rhi = Engine::instance()->rhi();
-	if (mIbl.irradiance) {
-		mRetiredIbl.push_back({ mIbl, 0 });
-	}
-	mIbl = SFE::Render::bakeIbl(rhi, renderDataHandle.graphics.sunIntensity);
+	mIbl = SFE::Render::bakeIbl(Engine::instance()->rhi(), renderDataHandle.graphics.sunIntensity);
 	mIblKey = skyLightKey(renderDataHandle);
-	mIblBakedAt = Engine::clockSeconds();
+	useSkyLight(renderDataHandle);
+}
+
+void LightingPass::useSkyLight(SystemsModule::RenderData& renderDataHandle) {
+	auto* rhi = Engine::instance()->rhi();
 	if (mIbl.irradiance && mIbl.prefilter && mIbl.brdfLut) {
 		for (auto& slot : mSlots) {
 			rhi->updateDescriptorSets({
@@ -180,31 +163,30 @@ std::array<float, 5> LightingPass::skyLightKey(const SystemsModule::RenderData& 
 }
 
 void LightingPass::updateSkyLight(SystemsModule::RenderData& renderDataHandle) {
-	auto* rhi = Engine::instance()->rhi();
-	// Maps replaced a few frames ago are no longer named by any frame in flight.
-	for (size_t i = 0; i < mRetiredIbl.size();) {
-		if (++mRetiredIbl[i].second <= rhi->framesInFlight() + 1) {
-			++i;
-			continue;
+	// Baked again when the sun or the sky changed: worked out on a worker, as it takes the best part of a second, and
+	// written into the spare maps once it is done and they swapped in, the next started only then. A sun going along its
+	// path never holds a frame up, and the sky's light follows it a bake behind. The maps written are never those a
+	// frame in flight reads: made anew each time (and the old freed), or written over while still read, they held the
+	// driver up for seconds at a time.
+	if (mIblBaking.valid()) {
+		if (mIblBaking.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+			SFE::Render::uploadIbl(Engine::instance()->rhi(), mIblBaking.get(), mIblSpare);
+			std::swap(mIbl, mIblSpare);
+			useSkyLight(renderDataHandle);
 		}
-		const auto& maps = mRetiredIbl[i].first;
-		for (const auto texture : { maps.irradiance, maps.prefilter, maps.brdfLut }) {
-			if (texture) {
-				rhi->destroyTexture(texture);
-			}
-		}
-		for (const auto sampler : { maps.irradianceSampler, maps.prefilterSampler, maps.lutSampler }) {
-			if (sampler) {
-				rhi->destroySampler(sampler);
-			}
-		}
-		mRetiredIbl[i] = mRetiredIbl.back();
-		mRetiredIbl.pop_back();
 	}
-	// Baked again when the sun or the sky changed, at most a few times a second while a slider is dragged.
-	if (skyLightKey(renderDataHandle) != mIblKey && Engine::clockSeconds() - mIblBakedAt > 0.3) {
-		bakeSkyLight(renderDataHandle);
+	else if (const auto key = skyLightKey(renderDataHandle); key != mIblKey) {
+		mIblKey = key;
+		mIblBaking = std::async(std::launch::async, SFE::Render::computeIbl, SFE::Render::Atmosphere::sceneSky(), renderDataHandle.graphics.sunIntensity);
 	}
+}
+
+void LightingPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	for (int i = 0; i < 2; ++i) {
+		Utils::screenTarget(mPresentTex[i], mPresentFbo[i], renderPass);
+	}
+	renderDataHandle.frame.set(FrameId::Lit, { .texture = mPresentTex[0], .sampler = mPresentSampler });
+	renderDataHandle.frame.set(FrameId::Final, { .texture = mPresentTex[0], .sampler = mPresentSampler, .framebuffer = mPresentFbo[0] });
 }
 
 void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -229,7 +211,11 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 
 			auto& light = pointLight[i];
 
+			const float t = renderDataHandle.current.wind.w;
 			light.Position = tc->getPos(true);
+			if (lightComp->mFlicker > 0.f) {
+				light.Position = light.Position + lightComp->flickerShift(t);
+			}
 			light.texelSize = Math::Vec2{ lightComp->getTexelSize().x, lightComp->getTexelSize().y };
 			light.bias = lightComp->getBias();
 			light.samples = (std::clamp)(lightComp->getSamples(), 1, 64);
@@ -237,6 +223,9 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 			light.offset = offsetSum;
 
 			light.Color = lightComp->getLightColor() * lightComp->getIntensity();
+			if (lightComp->mFlicker > 0.f) {
+				light.Color = light.Color * lightComp->flickerGain(t);
+			}
 			light.Linear = lightComp->mLinear;
 			light.Quadratic = lightComp->mQuadratic;
 			if (lightComp->getType() == ComponentsModule::eLightType::POINT) {
@@ -303,6 +292,7 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	drawData.fogEnd = Engine::instance()->getWindow()->getScreenData().far;
 	drawData.fogStart = Engine::instance()->getWindow()->getScreenData().far * renderDataHandle.graphics.fogStart;
 	drawData.ssaoAmount = renderDataHandle.graphics.ssao ? 1.f : 0.f;
+	drawData.ssaoSun = renderDataHandle.graphics.ssaoSun;
 	drawData.viewPosX = renderDataHandle.mCameraPos.x;
 	drawData.viewPosY = renderDataHandle.mCameraPos.y;
 	drawData.viewPosZ = renderDataHandle.mCameraPos.z;
@@ -409,6 +399,7 @@ void LightingPass::updateTextures(SystemsModule::RenderData& renderDataHandle, R
 	addBuffer(11, blocks.lightMatrices.buffer, slotSets.lightMat, sizeof(Math::Mat4) * CsmFrame::kMaxCascades);
 	addImage(1, frame.texture(FrameId::GBufferNormal), frame.sampler(FrameId::GBufferNormal), slotSets.gNormal);
 	addImage(2, frame.texture(FrameId::GBufferAlbedo), frame.sampler(FrameId::GBufferAlbedo), slotSets.gAlbedo);
+	addImage(9, frame.texture(FrameId::GBufferVelocity), frame.sampler(FrameId::GBufferVelocity), slotSets.gVelocity);
 
 	{
 		Render::TextureHandle ssaoTex = frame.texture(FrameId::SsaoBlur);

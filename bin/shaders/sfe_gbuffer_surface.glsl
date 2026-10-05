@@ -18,7 +18,7 @@ layout(location = 12) flat in float vPiece;
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedoSpec;
-layout(location = 3) out vec2 gVelocity;
+layout(location = 3) out vec4 gVelocity;
 
 layout(SFE_SET(1, 1)) uniform sampler2D texture_diffuse1;
 layout(SFE_SET(1, 2)) uniform sampler2D normalMap;
@@ -30,6 +30,7 @@ layout(SFE_SET(1, 7)) uniform sampler2D triplanarAlbedo;
 layout(SFE_SET(1, 8)) uniform sampler2D triplanarNormals;
 layout(SFE_SET(1, 9)) uniform sampler2D triplanarAlbedo2;
 layout(SFE_SET(1, 10)) uniform sampler2D triplanarNormals2;
+layout(SFE_SET(1, 11)) uniform sampler2D texture_occlusion;
 
 #define pc sfeMaterials[vMaterial]
 
@@ -93,6 +94,7 @@ void main() {
     vec2 uvRough = uvOf(8u);
     vec2 uvMetal = uvOf(16u);
     vec2 uvSss = uvOf(32u);
+    vec2 uvAo = uvOf(64u);
 
     // Filtered, not level 0: reading the mask at the top level made the coverage of a distant character
     // depend on which single texel the jitter happened to land on. The level is the hardware's, so the
@@ -242,7 +244,7 @@ void main() {
     // Cut-out surfaces are leaves, needles and grass: they let the sun through.
     float lastChannel = cutout && pc.clearcoat < 0.01 ? kSfeTranslucentFoliage : clamp(coatRough, 0.04, 1.0);
     gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(coat, 0.0, 1.0), lastChannel);
-    gVelocity = sfeVelocity(vClip, vPrevClip);
+    gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 1.0 - texture(texture_occlusion, uvAo).r);
 }
 
 #endif

@@ -7,7 +7,7 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::Render {
-	// The material texture bindings (DIFFUSE..TRIPLANAR2_NORMALS): the engine's default for every slot first,
+	// The material texture bindings (DIFFUSE..OCCLUSION): the engine's default for every slot first,
 	// then the material's own textures over them.
 	std::vector<WriteDescriptor> materialTextureWrites(DescriptorSetHandle set, const ComponentsModule::Materials& materials);
 

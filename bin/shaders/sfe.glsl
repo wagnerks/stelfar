@@ -223,6 +223,12 @@ vec2 sfeVelocity(vec4 clipNow, vec4 clipBefore) {
     return (now - before) * 0.5;
 }
 
+// The velocity target: rg the motion (sfeVelocity, read by taa.fs), b how much a material's occlusion map shuts out the
+// ambient light (0 none: the clear and every surface without one), a unused.
+vec4 sfeGBufferVelocity(vec4 clipNow, vec4 clipBefore, float occlusion) {
+    return vec4(sfeVelocity(clipNow, clipBefore), clamp(occlusion, 0.0, 1.0), 0.0);
+}
+
 // The area tint map (AreaTintFrame) at a world place: how far its foliage (r), water (g) and air (b) have gone towards
 // their tint colours. `area` is the map's min x, min z and 1 / size along each; outside it, or with no map (a zero
 // size), nothing.

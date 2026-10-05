@@ -1,6 +1,7 @@
 #include "Atmosphere.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <execution>
@@ -187,25 +188,16 @@ namespace SFE::Render::Atmosphere {
 		constexpr uint32_t kWidth = 128;
 		constexpr uint32_t kHeight = 32;
 		using Clock = std::chrono::steady_clock;
-		struct Retired {
-			TextureHandle texture;
-			Clock::time_point at;
-		};
 		static SkyTexture sky;
+		// Three written in turn, each by then read by no frame still in flight: made anew each time (and the old freed),
+		// or written over while frames still read it, it held the driver up for seconds at a time.
+		static std::array<TextureHandle, 3> ring;
+		static size_t written = 0;
 		static Math::Vec3 bakedFor{ 0.f, -2.f, 0.f };
 		static Clock::time_point bakedAt;
-		static std::vector<Retired> retired;
 
 		auto* rhi = Engine::instance()->rhi();
 		const auto now = Clock::now();
-		// A texture replaced is freed once no frame still in flight can be sampling it.
-		std::erase_if(retired, [&](const Retired& old) {
-			if (now - old.at < std::chrono::seconds(1)) {
-				return false;
-			}
-			rhi->destroyTexture(old.texture);
-			return true;
-		});
 		if (!sky.sampler) {
 			SamplerDesc desc;
 			desc.addressU = AddressMode::Repeat;
@@ -236,14 +228,18 @@ namespace SFE::Render::Atmosphere {
 				texels[at + 3] = 1.f;
 			}
 		});
-		TextureDesc desc;
-		desc.width = kWidth;
-		desc.height = kHeight;
-		desc.format = TextureFormat::RGBA32F;
-		if (sky.texture) {
-			retired.push_back({ sky.texture, now });
+		written = (written + 1) % ring.size();
+		if (ring[written]) {
+			rhi->updateTexture(ring[written], 0, 0, kWidth, kHeight, TextureFormat::RGBA32F, texels.data());
 		}
-		sky.texture = rhi->createTexture(desc, texels.data());
+		else {
+			TextureDesc desc;
+			desc.width = kWidth;
+			desc.height = kHeight;
+			desc.format = TextureFormat::RGBA32F;
+			ring[written] = rhi->createTexture(desc, texels.data());
+		}
+		sky.texture = ring[written];
 		bakedFor = toSun;
 		bakedAt = now;
 		return sky;

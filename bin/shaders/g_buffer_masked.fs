@@ -13,7 +13,7 @@ layout(location = 12) flat in float vPiece;
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedoSpec;
-layout(location = 3) out vec2 gVelocity;
+layout(location = 3) out vec4 gVelocity;
 
 layout(SFE_SET(1, 1)) uniform sampler2D texture_diffuse1;
 layout(SFE_SET(1, 2)) uniform sampler2D normalMap;
@@ -21,6 +21,7 @@ layout(SFE_SET(1, 3)) uniform sampler2D texture_specular1;
 layout(SFE_SET(1, 4)) uniform sampler2D texture_roughness;
 layout(SFE_SET(1, 5)) uniform sampler2D texture_metallic;
 layout(SFE_SET(1, 6)) uniform sampler2D texture_subsurface;
+layout(SFE_SET(1, 11)) uniform sampler2D texture_occlusion;
 
 #define pc sfeMaterials[vMaterial]
 
@@ -39,6 +40,7 @@ void main() {
     vec2 uvRough = uvOf(8u);
     vec2 uvMetal = uvOf(16u);
     vec2 uvSss = uvOf(32u);
+    vec2 uvAo = uvOf(64u);
 
     float cutoff = pc.alphaCutoff > 0.0 ? pc.alphaCutoff : 0.4;
     // Filtered, not level 0: reading the mask at the top level made the coverage of a distant character
@@ -100,5 +102,5 @@ void main() {
 
     gAlbedoSpec.a = clamp(sfeFilteredRoughness(geomN, roughness, 1.0), 0.04, 1.0);
     gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(pc.clearcoat, 0.0, 1.0), clamp(pc.clearcoatRough, 0.04, 1.0));
-    gVelocity = sfeVelocity(vClip, vPrevClip);
+    gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 1.0 - texture(texture_occlusion, uvAo).r);
 }

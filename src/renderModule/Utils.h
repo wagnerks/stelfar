@@ -74,6 +74,12 @@ namespace SFE::Render {
 
 		static void renderQuad(CommandListHandle cmd);
 
+		// A texture the size the picture is drawn at (ViewportData::renderW, renderH, over `divisor`) and a framebuffer
+		// over it for renderPass (none for a copy's target): what a screen pass draws into. What the handles held
+		// before is let go first, so RenderPass::resize makes them again with the same call.
+		static void screenTarget(TextureHandle& texture, FramebufferHandle& framebuffer, RenderPassHandle renderPass,
+			TextureFormat format = TextureFormat::RGBA16F, int divisor = 1);
+
 		// A std140 `mat4 x[count]` block for this frame: the matrices, then the last one repeated (zeros if none),
 		// so the bound range always covers the whole declared array.
 		static TransientAllocation allocMatrices(const std::vector<Math::Mat4>& matrices, size_t count);

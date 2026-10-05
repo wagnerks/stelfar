@@ -12,19 +12,7 @@
 using namespace SFE::Render::RenderPasses;
 
 void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
-	const int fullW = (std::max)(1, Engine::instance()->getWindow()->getScreenData().renderW);
-	const int fullH = (std::max)(1, Engine::instance()->getWindow()->getScreenData().renderH);
-	mSsaoW = (std::max)(1, fullW / 2);
-	mSsaoH = (std::max)(1, fullH / 2);
 	auto* rhi = Engine::instance()->rhi();
-
-	TextureDesc ssaoColorDesc;
-	ssaoColorDesc.width = mSsaoW;
-	ssaoColorDesc.height = mSsaoH;
-	ssaoColorDesc.format = TextureFormat::R8;
-	ssaoColorDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mData.mSsaoColorBuffer = rhi->createTexture(ssaoColorDesc);
-	mData.mSsaoColorBufferBlur = rhi->createTexture(ssaoColorDesc);
 
 	RenderPassDesc mainRPD;
 	mainRPD.colorAttachmentCount = 1;
@@ -41,20 +29,6 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	blurRPD.colorAttachments[0].clearColor = {1.f, 1.f, 1.f, 1.f};
 	blurRPD.colorAttachments[0].format = TextureFormat::R8;
 	blur = rhi->createRenderPass(blurRPD);
-
-	FramebufferDesc fbDesc;
-	fbDesc.width = mSsaoW;
-	fbDesc.height = mSsaoH;
-	fbDesc.renderPass = main;
-	fbDesc.colorAttachments = {{mData.mSsaoColorBuffer}};
-	mData.mSsaoFbo = rhi->createFramebuffer(fbDesc);
-
-	FramebufferDesc blurFbDesc;
-	blurFbDesc.width = mSsaoW;
-	blurFbDesc.height = mSsaoH;
-	blurFbDesc.renderPass = blur;
-	blurFbDesc.colorAttachments = {{mData.mSsaoColorBufferBlur}};
-	mData.mSsaoBlurFbo = rhi->createFramebuffer(blurFbDesc);
 
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
@@ -110,6 +84,20 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	blurParams.updateFac();
 
 
+	resize(renderDataHandle);
+}
+
+void SSAOPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	Utils::screenTarget(mData.mSsaoColorBuffer, mData.mSsaoFbo, main, TextureFormat::R8, 2);
+	Utils::screenTarget(mData.mSsaoColorBufferBlur, mData.mSsaoBlurFbo, blur, TextureFormat::R8, 2);
+	const auto& screen = Engine::instance()->getWindow()->getScreenData();
+	mSsaoW = (std::max)(1, screen.renderW / 2);
+	mSsaoH = (std::max)(1, screen.renderH / 2);
+	// The blur set reads the first target: written again along with the G-buffer's, new as well.
+	for (auto& slot : mSlots) {
+		slot.position = {};
+		slot.normal = {};
+	}
 	renderDataHandle.frame.set(FrameId::SsaoColor, { .texture = mData.mSsaoColorBuffer, .sampler = mData.sampler });
 	renderDataHandle.frame.set(FrameId::SsaoBlur, { .texture = mData.mSsaoColorBufferBlur, .sampler = mData.sampler });
 }
@@ -138,6 +126,10 @@ void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	}
 	// Without TAA there is nothing to average the rotation, so a moving pattern would only
 	// read as flicker -- hold it still in that case.
+	const auto& graphics = renderDataHandle.graphics;
+	params.intensity = graphics.ssaoIntensity;
+	params.nearRadius = graphics.ssaoRadius;
+	params.farRadius = graphics.ssaoFarRadius;
 	params.frameIndex = renderDataHandle.graphics.taa ? static_cast<float>(renderDataHandle.taaFrame % 8) : 0.f;
 	const auto ssaoParams = rhi->allocTransient(params);
 	const auto ssaoBlurParams = rhi->allocTransient(blurParams);

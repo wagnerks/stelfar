@@ -3,8 +3,10 @@
 
 #include "assetsModule/modelModule/Mesh.h"
 #include "assetsModule/modelModule/Vertex.h"
+#include "core/Engine.h"
 #include "mathModule/Quaternion.h"
 #include "systemsModule/SystemManager.h"
+#include "windowsModule/Window.h"
 #include "assetsModule/TextureHandler.h"
 #include "renderModule/FrameBlackboard.h"
 
@@ -84,6 +86,32 @@ void Utils::renderQuad(CommandListHandle cmd) {
 
 	Engine::instance()->rhi()->cmdBindVertexBuffer(cmd, 0, quadVBO);
 	Engine::instance()->rhi()->cmdDraw(cmd, 6);
+}
+
+void Utils::screenTarget(TextureHandle& texture, FramebufferHandle& framebuffer, const RenderPassHandle renderPass,
+	const TextureFormat format, const int divisor) {
+	auto* rhi = Engine::instance()->rhi();
+	if (framebuffer) {
+		rhi->destroyFramebuffer(framebuffer);
+	}
+	if (texture) {
+		rhi->destroyTexture(texture);
+	}
+	const auto& screen = Engine::instance()->getWindow()->getScreenData();
+	const auto w = static_cast<uint32_t>((std::max)(1, screen.renderW / divisor));
+	const auto h = static_cast<uint32_t>((std::max)(1, screen.renderH / divisor));
+	TextureDesc desc;
+	desc.width = w;
+	desc.height = h;
+	desc.format = format;
+	desc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
+	texture = rhi->createTexture(desc);
+	FramebufferDesc fb;
+	fb.width = w;
+	fb.height = h;
+	fb.renderPass = renderPass;
+	fb.colorAttachments = { { texture } };
+	framebuffer = rhi->createFramebuffer(fb);
 }
 
 void Utils::renderQuad(CommandListHandle cmd, float x1 = -1.f, float y1 = -1.f, float x2 = 1.f, float y2 = 1.f) {

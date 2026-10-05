@@ -2,9 +2,9 @@
 #include "sfe.glsl"
 #include "sfe_material.glsl"
 #include "sfe_terrain.glsl"
-// Ground painted from where it is with tiling materials, in their own colours: grass, bare earth and the road, roots
-// under the trees, the bank and the lake bed, rock where it is steep. The terrain mesh puts world x/z in metres into
-// TexCoords and the height above the water line into TexCoords1.x.
+// Ground painted from where it is with tiling materials, in their own colours: grass, bare earth and the road, footpaths
+// and patches trampled to the soil, roots under the trees, the bank and the lake bed, rock where it is steep. The
+// terrain mesh puts world x/z in metres into TexCoords and the height above the water line into TexCoords1.x.
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec2 TexCoords;
 layout(location = 2) in mat3 TBN;
@@ -16,7 +16,7 @@ layout(location = 8) in vec4 vPrevClip;
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedoSpec;
-layout(location = 3) out vec2 gVelocity;
+layout(location = 3) out vec4 gVelocity;
 
 // Layer per material, see bin/textures/ground: rgb base colour and a height; rg normal, b roughness, a occlusion.
 layout(SFE_SET(1, 1)) uniform sampler2DArray groundAlbedo;
@@ -27,6 +27,8 @@ layout(SFE_SET(1, 3)) uniform sampler2D forestMap;
 layout(SFE_SET(1, 4)) uniform sampler2D terrainNoise;
 // terrainRoadFrameTexture, in the METALLIC slot.
 layout(SFE_SET(1, 5)) uniform sampler2D roadFrame;
+// terrainPathTexture, in the SUBSURFACE slot.
+layout(SFE_SET(1, 6)) uniform sampler2D pathMap;
 // The area tint map (AreaTintFrame), in the frame set: the bank goes to mud where it or the water by it is dirty.
 layout(SFE_SET(0, 22)) uniform sampler2D areaTintMap;
 
@@ -40,19 +42,29 @@ const int kMud = 2;
 const int kSand = 3;
 const int kRocks = 4;
 const int kLitter = 5;
-const int kTrack = 6; // the road and its clearings: wheel marks, laid along the road
+const int kTrack = 6; // the road: wheel marks, laid along it
 const int kPebbles = 7; // the lake's bank while it is clean
-const int kLayers = 8;
+const int kSoil = 8; // trampled earth: the moss's image again, its earth coloured as dry soil; laid over the rest
+const int kGravel = 9; // the stones in it: the pebbles' image, finer, sampled with the soil
+const int kLayers = 10;
+// The image in the arrays each material is.
+const int kImage[kLayers] = int[](0, 1, 2, 3, 4, 5, 6, 7, 1, 7);
 // Metres one tile covers.
-const float kTile[kLayers] = float[](2.5, 3.5, 3.0, 4.0, 3.0, 2.5, 2.0, 2.0);
+const float kTile[kLayers] = float[](2.5, 3.5, 3.0, 4.0, 3.0, 2.5, 2.0, 2.0, 2.2, 1.1);
 // The materials are painted bright; this brings them down to the light the rest of the scene is lit for.
 const float kBrightness = 0.75;
 // Metres the height map's full range stands for, for parallax: stones and clumps look raised, not painted on.
-const float kRelief[kLayers] = float[](0.05, 0.06, 0.07, 0.05, 0.1, 0.05, 0.05, 0.05);
+const float kRelief[kLayers] = float[](0.05, 0.06, 0.07, 0.05, 0.1, 0.05, 0.05, 0.05, 0.05, 0.04);
+// Each material's middle height, so the soil shows through each as much at the same wear, though the litter lies low.
+const float kHeightMid[kLayers] = float[](0.63, 0.51, 0.52, 0.54, 0.51, 0.18, 0.4, 0.45, 0.51, 0.45);
 // The painted maps are gentle; lit by a low sun they read as flat without some help.
 const float kNormalStrength = 0.9;
 // Hummocks, ruts and dips a metre or two across: the ground's own unevenness between the mesh's vertices.
-const float kBumps[kLayers] = float[](0.35, 0.45, 0.3, 0.12, 0.5, 0.4, 0.3, 0.15);
+const float kBumps[kLayers] = float[](0.35, 0.45, 0.3, 0.12, 0.5, 0.4, 0.3, 0.15, 0.35, 0.35);
+// Dry soil, linear, a grey umber, and the moss's earth's mean brightness, which the soil's specks and blotches are
+// measured against.
+const vec3 kSoilColour = vec3(0.17, 0.115, 0.068);
+const float kEarthLuma = 0.2;
 
 // How much of a noise of this frequency survives the pixel footprint: fades detail out before it aliases.
 float detail(float frequency, float footprint) {
@@ -87,13 +99,13 @@ vec2 groundParallax(int layer, vec2 p, vec3 view, float relief, vec2 dx, vec2 dy
     vec2 shift = -across / steps;
     vec2 at = p + across * 0.5;
     float ray = 0.0;
-    float under = 1.0 - textureGrad(groundAlbedo, vec3(at / tile, layer), dx, dy).a;
+    float under = 1.0 - textureGrad(groundAlbedo, vec3(at / tile, kImage[layer]), dx, dy).a;
     float above = under;  // how far the ray was above the relief a step before
     for (int i = 0; i < 12 && ray < under; ++i) {
         above = under - ray;
         at += shift;
         ray += 1.0 / steps;
-        under = 1.0 - textureGrad(groundAlbedo, vec3(at / tile, layer), dx, dy).a;
+        under = 1.0 - textureGrad(groundAlbedo, vec3(at / tile, kImage[layer]), dx, dy).a;
     }
     // Between the last two steps, where the ray went under.
     float below = ray - under;
@@ -117,8 +129,8 @@ GroundSample sampleGround(int layer, vec2 p, vec2 dpdx, vec2 dpdy, float variati
     vec2 dy = dpdy / tile;
     vec2 dx2 = turn * dx * scale2;
     vec2 dy2 = turn * dy * scale2;
-    vec3 at = vec3(uv, layer);
-    vec3 at2 = vec3(uv2, layer);
+    vec3 at = vec3(uv, kImage[layer]);
+    vec3 at2 = vec3(uv2, kImage[layer]);
     // Mostly one of the two is all there is: only the fade between them reads both.
     vec4 a1 = vec4(0.0);
     vec4 n1 = vec4(0.5, 0.5, 1.0, 1.0);
@@ -215,6 +227,8 @@ void main() {
     weight[kMoss] += underwater * (1.0 - stony) * algae;
     weight[kRocks] = steep + underwater * stony;
     weight[kTrack] = 0.0;
+    weight[kSoil] = 0.0;
+    weight[kGravel] = 0.0;
     // The bank by how dirty it and the water by it are: clean, pebbles with sand in its coves; dirty, mud down by the
     // water and bare earth above it.
     vec3 areaTint = sfeAreaTint(areaTintMap, matrices.tintArea, FragPos.xz);
@@ -240,6 +254,22 @@ void main() {
     // A country track: a little green down the strip between the wheels, wheel marks either side of it.
     weight[kMoss] += road * roadStrip;
     weight[kTrack] += road * (1.0 - roadStrip);
+    // Footpaths and patches trampled: the soil shows between the grass the more it is walked on, and in bald spots that
+    // spread and join until, where it is worn most, it is all bare earth. A clearing camped in is walked thin in places.
+    // `soil` is how much of it shows, laid over the rest where that is lowest first: between the blades.
+    vec4 trodden = sfeTerrainPath(pathMap, p);
+    float wear = trodden.z * open;
+    float camp = (1.0 - smoothstep(-3.0, 1.0, trodden.y)) * land;
+    // Towards a bald spot the grass thins out over half a metre or more, broken into tufts and gaps, the soil showing
+    // between its blades a little way out from it.
+    float soil = camp * 0.2 * smoothstep(0.5, 0.75, patches);
+    if (wear > 0.01) {
+        float bare = sfeTerrainBare(wear, trodden.w, p);
+        float bald = smoothstep(-0.2, 0.12, bare);
+        bald = clamp(bald + 1.2 * bald * (1.0 - bald) * (sfeFbm(p * 1.6 + 47.0, 2) - 0.5) * 2.0, 0.0, 1.0);
+        float thin = max(0.25 * smoothstep(0.1, 0.6, wear), 0.5 * smoothstep(-0.6, -0.15, bare));
+        soil = max(soil, bald + (1.0 - bald) * thin);
+    }
 
     // Over each material's own colour: a lighter and a darker tone in blotches, the bank darkening as it gets wet, and
     // the road darker down its ruts.
@@ -254,6 +284,9 @@ void main() {
     tint[kMud] *= mix(vec3(1.0), vec3(0.75, 0.85, 0.65), underwater);
     tint[kMoss] *= mix(vec3(1.0), vec3(0.8, 0.85, 0.45), underwater);
     tint[kTrack] *= mix(1.0, 0.6, rut * 0.8 * road);
+    // The soil darker in damp spots, where something was spilt or the shade keeps it.
+    float damp = soil > 0.01 ? smoothstep(0.6, 0.75, sfeFbm(p * 0.45 + 61.0, 2)) : 0.0;
+    tint[kSoil] *= mix(1.0, 0.7, damp);
 
     GroundSample samples[kLayers];
     float blend[kLayers];
@@ -277,13 +310,17 @@ void main() {
                            0.0, 1.0);
         float dead = foul * foul * (3.0 - 2.0 * foul) * (1.0 - sfePlantColour(samples[kLitter].colour));
         samples[kLitter].colour = mix(samples[kLitter].colour, vec3(sfeLuma(samples[kLitter].colour)), dead * 0.7);
+        // Round a clearing its fallen leaves dull and brown, darker: no bright orange by a camp.
+        float byClearing = 1.0 - smoothstep(3.0, 8.0, trodden.y);
+        vec3 brown = sfeLuma(samples[kLitter].colour) * vec3(1.3, 0.95, 0.6);
+        samples[kLitter].colour = mix(samples[kLitter].colour, brown, 0.6 * byClearing) * mix(1.0, 0.8, byClearing);
     }
-
     vec3 albedo = vec3(0.0);
     vec3 detailNormal = vec3(0.0);
     float roughness = 0.0;
     float occlusion = 0.0;
     float bumpiness = 0.0;
+    float relief = 0.0;
     float total = 0.0;
     for (int i = 0; i < kLayers; ++i) {
         if (weight[i] < 0.01) {
@@ -296,6 +333,7 @@ void main() {
         roughness += s.roughness * w;
         occlusion += s.occlusion * w;
         bumpiness += kBumps[i] * w;
+        relief += (s.height - kHeightMid[i]) * w;
         total += w;
     }
     total = max(total, 1e-4);
@@ -303,7 +341,46 @@ void main() {
     roughness /= total;
     occlusion /= total;
     bumpiness /= total;
+    relief /= total;
     detailNormal = normalize(detailNormal / total);
+    // Trampled grass dulled to olive and straw the more it is walked on, a camped-in meadow a little so; where it is
+    // walked on, laid flat, its blades' relief pressed down and a shade lighter, so a path reads as a line from afar.
+    float trampled = max(wear, camp * 0.25);
+    if (trampled > 0.01) {
+        vec3 straw = sfeLuma(albedo) * vec3(1.05, 0.95, 0.62);
+        float flattened = smoothstep(0.1, 0.35, wear);
+        albedo = mix(albedo, straw, 0.6 * smoothstep(0.0, 0.45, trampled)) * mix(1.0, 1.15, flattened)
+            * mix(1.0, 0.85, smoothstep(0.45, 0.9, wear));
+        detailNormal = normalize(mix(detailNormal, vec3(0.0, 0.0, 1.0), 0.4 * flattened));
+    }
+    // Dry soil over it all where it shows: the moss's earth, its specks, blotches and rootlets, in the colour of dust;
+    // its clover trodden dark, only at the grass's edge, and where it is worn away crumbs in its place, the gravel's
+    // grain; here and there a stone half buried in it, the tops of the gravel's biggest, in the soil's own colours. It
+    // shows through the ground over it where that is lowest, so between the grass's blades first and over them last,
+    // in specks and streaks.
+    if (soil >= 0.01) {
+        GroundSample s = sampleGround(kSoil, p, dpdx, dpdy, variation, viewTangent, parallax, drawn);
+        GroundSample g = sampleGround(kGravel, p, dpdx, dpdy, variation, viewTangent, parallax, drawn);
+        float plant = sfePlantColour(s.colour);
+        float leaf = plant * (1.0 - smoothstep(0.2, 0.45, wear)) * (1.0 - smoothstep(0.3, 0.7, soil));
+        float crumbs = mix(0.7, 1.2, smoothstep(0.08, 0.35, sfeLuma(g.colour)));
+        vec3 earth = kSoilColour * mix(pow(sfeLuma(s.colour) / kEarthLuma, 1.6), crumbs, plant);
+        s.colour = mix(earth, s.colour * vec3(0.45, 0.5, 0.35), leaf);
+        s.normal = normalize(mix(s.normal, mix(vec3(0.0, 0.0, 1.0), g.normal, 0.5), plant - leaf));
+        s.occlusion = mix(s.occlusion, mix(1.0, g.occlusion, 0.5), plant - leaf);
+        float stone = smoothstep(0.0, 0.05, g.height - mix(0.9, 0.74, sfeFbm(p * 0.6 + 31.0, 2))) * (1.0 - leaf);
+        float shade = clamp(sfeLuma(g.colour) / 0.3, 0.0, 1.0);
+        s.colour = mix(s.colour, mix(kSoilColour, vec3(sfeLuma(kSoilColour)), 0.3) * mix(0.6, 1.3, shade), stone);
+        s.normal = normalize(mix(s.normal, g.normal, stone));
+        s.roughness = mix(mix(s.roughness, 0.75, damp), g.roughness, stone);
+        s.occlusion = mix(s.occlusion, g.occlusion, stone);
+        float show = smoothstep(-0.1, 0.1, 0.8 * soil - 0.38 - relief);
+        albedo = mix(albedo, s.colour * tint[kSoil], show);
+        detailNormal = normalize(mix(detailNormal, s.normal, show));
+        roughness = mix(roughness, s.roughness, show);
+        occlusion = mix(occlusion, s.occlusion, show);
+        bumpiness = mix(bumpiness, kBumps[kSoil], show);
+    }
 
     // Slow variation over the whole terrain, so a meadow is not one flat tone.
     albedo *= 0.85 + 0.3 * broad;
@@ -342,5 +419,5 @@ void main() {
     gAlbedoSpec.rgb = albedo;
     gAlbedoSpec.a = clamp(sfeFilteredRoughness(N, roughness, 1.0), 0.04, 1.0);
     gMaterial = sfeGBufferMaterial(0.0, specFactor, kSfeGround, 0.04);
-    gVelocity = sfeVelocity(vClip, vPrevClip);
+    gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 0.0);
 }

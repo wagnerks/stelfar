@@ -130,7 +130,8 @@ namespace SFE::Render {
 		// R32F, the depth buffer copied once the G-buffer is complete; see sfeScenePosition.
 		constexpr const char* SceneDepth = "scene.depth";
 		constexpr const char* GBufferNormal = "gbuffer.normal";
-		// Screen-space motion per pixel, in UV: where this pixel was last frame is TexCoords - velocity.
+		// Screen-space motion per pixel, in UV: where this pixel was last frame is TexCoords - velocity.xy (TAA). b: how much a
+		// material's occlusion map shuts out the ambient light, 1 - AO (LightingPass); see sfeGBufferVelocity.
 		constexpr const char* GBufferVelocity = "gbuffer.velocity";
 		constexpr const char* GBufferAlbedo = "gbuffer.albedo";
 		constexpr const char* GBufferViewPosition = "gbuffer.viewPosition";

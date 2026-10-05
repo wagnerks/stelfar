@@ -460,7 +460,7 @@ namespace SFE::Render {
 			// Shadow casters: glass casts through the glass proxy when there is one; a transparent surface of a shader of
 			// its own, its own shape.
 			const auto& caster = glassShader == ComponentsModule::DefaultGlassFS && mGlassShadowProxy ? mGlassShadowProxy : mesh;
-			if (caster.indexCount != 0) {
+			if (caster.indexCount != 0 && material.castsShadow) {
 				const bool dithered = material.opacity > 0.f && material.opacity < 0.999f;
 				const float cutoff = MaterialRules::cutoutCutoff(material.alphaCutoff, material.alphaFromMaps, material.fragmentShader);
 				const bool cutout = material.alphaFromMaps || cutoff > 0.f || dithered;

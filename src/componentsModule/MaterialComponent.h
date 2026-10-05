@@ -10,7 +10,7 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::ComponentsModule {
-	constexpr int MaxMaterialTexturesCount = 10;
+	constexpr int MaxMaterialTexturesCount = 11;
 	inline constexpr const char* DefaultGBufferVS = "shaders/g_buffer.vs";
 	inline constexpr const char* DefaultGBufferFS = "shaders/g_buffer.fs";
 	inline constexpr const char* DefaultGBufferMaskedFS = "shaders/g_buffer_masked.fs";
@@ -64,6 +64,8 @@ namespace SFE::ComponentsModule {
 		bool hidden = false;
 		// Not drawn, but its shadow is: a head the first person camera is inside.
 		bool shadowOnly = false;
+		// Drawn, but casting no shadow: a flame.
+		bool castsShadow = true;
 		// Soaked below this many metres over the model's origin, straight up: darker, cloth and skin with water in
 		// them. kDry, far below any model, when dry.
 		static constexpr float kDry = -1000.f;

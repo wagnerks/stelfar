@@ -179,6 +179,22 @@ namespace SFE::PropertiesModule::ModelBinding {
 		reloadListeners().push_back(std::move(listener));
 	}
 
+	void setModel(ecss::EntityId entity, AssetsModule::Model& model) {
+		auto& registry = ECSHandler::registry();
+		if (auto component = registry.pinComponent<ModelComponent>(entity)) {
+			component->boneMatrices = model.getDefaultBoneMatrices();
+			component->armature = model.getArmature();
+			component->setModel(model.getLODs());
+		}
+		if (auto bounds = registry.pinComponent<ComponentsModule::AABBComponent>(entity)) {
+			bounds->defaultAabbs.clear();
+		}
+		if (auto* render = ECSHandler::getSystem<SystemsModule::RenderSystem>()) {
+			render->forgetBones(entity);
+		}
+		bind(entity);
+	}
+
 	int reload(const std::string& path) {
 		auto* fresh = AssetsModule::ModelLoader::instance()->reload(path);
 		if (!fresh) {
@@ -203,18 +219,7 @@ namespace SFE::PropertiesModule::ModelBinding {
 			return clip;
 		};
 		for (const auto entity : users) {
-			if (auto model = registry.pinComponent<ModelComponent>(entity)) {
-				model->boneMatrices = fresh->getDefaultBoneMatrices();
-				model->armature = fresh->getArmature();
-				model->setModel(fresh->getLODs());
-			}
-			if (auto bounds = registry.pinComponent<ComponentsModule::AABBComponent>(entity)) {
-				bounds->defaultAabbs.clear();
-			}
-			if (auto* render = ECSHandler::getSystem<SystemsModule::RenderSystem>()) {
-				render->forgetBones(entity);
-			}
-			bind(entity);
+			setModel(entity, *fresh);
 			if (auto animation = registry.pinComponent<ComponentsModule::AnimationComponent>(entity)) {
 				animation->mCurrentAnimation = sameName(animation->mCurrentAnimation);
 				animation->mFromAnimation = sameName(animation->mFromAnimation);

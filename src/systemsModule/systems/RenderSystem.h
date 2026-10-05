@@ -123,6 +123,12 @@ namespace SFE::SystemsModule {
 		float sunIntensity = 3.2f;
 		float iblStrength = 1.f;
 		float shadowAmbient = 0.42f;
+		// The ambient occlusion (ssao.fs): its two rings' radii in metres, how hard it darkens, and the share of it the
+		// sun's light takes as well (painted: a crease is dark in the sun too).
+		float ssaoRadius = 1.f;
+		float ssaoFarRadius = 3.f;
+		float ssaoIntensity = 4.5f;
+		float ssaoSun = 0.7f;
 
 		// The grass clumps: how many to a square metre against the default, and metres out to which they grow.
 		float grassDensity = 1.f;
@@ -266,6 +272,9 @@ namespace SFE::SystemsModule {
 		bool addRenderPass(std::string name, std::unique_ptr<Render::RenderPass> pass, std::string_view after = {});
 		// Removes and destroys the named pass; false when there is none. Main thread, between frames.
 		bool removeRenderPass(std::string_view name);
+		// The picture drawn at a new size (ViewportData::renderW, renderH): once the device is idle, every pass makes its
+		// targets of the screen's size again (RenderPass::resize). Main thread, between frames.
+		void resize();
 		std::vector<std::string> renderPassNames() const { return mPassNames; }
 		// The named pass, or null. Main thread.
 		Render::RenderPass* renderPass(std::string_view name) const;

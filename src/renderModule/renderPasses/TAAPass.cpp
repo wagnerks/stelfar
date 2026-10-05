@@ -9,10 +9,8 @@
 
 using namespace SFE::Render::RenderPasses;
 
-void TAAPass::init(SystemsModule::RenderData&) {
+void TAAPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 
 	SFE::Render::SamplerDesc lin;
 	lin.minFilter = SFE::Render::FilterMode::Linear;
@@ -29,21 +27,7 @@ void TAAPass::init(SystemsModule::RenderData&) {
 	rpDesc.colorAttachments[0].storeOp = SFE::Render::AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = SFE::Render::TextureFormat::RGBA16F;
 	mRenderPass = rhi->createRenderPass(rpDesc);
-
-	SFE::Render::TextureDesc texDesc;
-	texDesc.width = w;
-	texDesc.height = h;
-	texDesc.format = SFE::Render::TextureFormat::RGBA16F;
-	texDesc.usage = SFE::Render::TextureUsage::ColorAttachment | SFE::Render::TextureUsage::Sampled;
-	for (int i = 0; i < 2; ++i) {
-		mHistory[i] = rhi->createTexture(texDesc);
-		SFE::Render::FramebufferDesc fb;
-		fb.width = w;
-		fb.height = h;
-		fb.renderPass = mRenderPass;
-		fb.colorAttachments = { { mHistory[i] } };
-		mFbo[i] = rhi->createFramebuffer(fb);
-	}
+	resize(renderDataHandle);
 
 	SFE::Render::DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(0, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
@@ -71,6 +55,14 @@ void TAAPass::init(SystemsModule::RenderData&) {
 	pipelineDesc.shaders.vertex = rhi->loadShader(SFE::Render::ShaderStage::Vertex, "shaders/deferred_shading.vs");
 	pipelineDesc.shaders.fragment = rhi->loadShader(SFE::Render::ShaderStage::Fragment, "shaders/taa.fs");
 	mPipeline = rhi->createGraphicsPipeline(pipelineDesc);
+}
+
+void TAAPass::resize(SystemsModule::RenderData&) {
+	for (int i = 0; i < 2; ++i) {
+		SFE::Render::Utils::screenTarget(mHistory[i], mFbo[i], mRenderPass);
+	}
+	// What it held was a picture of another size.
+	mHasHistory = false;
 }
 
 void TAAPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Render::CommandListHandle cmd) {

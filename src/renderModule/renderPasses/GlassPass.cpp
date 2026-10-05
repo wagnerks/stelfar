@@ -21,6 +21,7 @@
 #include "mathModule/VectorOperations.h"
 #include "mathModule/MatrixOperators.h"
 #include "multithreading/ThreadPool.h"
+#include "renderModule/Utils.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "systemsModule/systems/ChunksSystem.h"
@@ -30,15 +31,6 @@ using namespace SFE::Render::RenderPasses;
 void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
-
-	TextureDesc copyDesc;
-	copyDesc.width = w;
-	copyDesc.height = h;
-	copyDesc.format = TextureFormat::RGBA16F;
-	copyDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mSceneCopy = rhi->createTexture(copyDesc);
 
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
@@ -49,12 +41,7 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	samplerDesc.addressV = AddressMode::MirrorRepeat;
 	samplerDesc.addressW = AddressMode::MirrorRepeat;
 	mSampler = rhi->createSampler(samplerDesc);
-
-	FramebufferDesc copyFb;
-	copyFb.width = w;
-	copyFb.height = h;
-	copyFb.colorAttachments = { { mSceneCopy } };
-	mSceneCopyFbo = rhi->createFramebuffer(copyFb);
+	resize(renderDataHandle);
 
 	RenderPassDesc rpDesc;
 	rpDesc.colorAttachmentCount = 1;
@@ -105,6 +92,16 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.renderPass = mRenderPass;
 	pipelineDesc.descriptorSetLayouts = { mLayout };
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer.vs");
+}
+
+void GlassPass::resize(SystemsModule::RenderData&) {
+	auto* rhi = Engine::instance()->rhi();
+	for (const auto& target : mGlassTargets) {
+		rhi->destroyFramebuffer(target.fbo);
+	}
+	mGlassTargets.clear();
+	mGlassFbo = {};
+	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
 }
 
 SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& fragmentShader, bool depthOnly) {

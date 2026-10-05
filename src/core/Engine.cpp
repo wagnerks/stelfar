@@ -15,13 +15,18 @@
 #include "logsModule/logger.h"
 #include "runtimeBridge/RuntimeBridge.h"
 #include "core/ECSHandler.h"
+#include "componentsModule/CameraComponent.h"
 #include "componentsModule/DebugDataComponent.h"
 #include "componentsModule/TransformComponent.h"
+#include "systemsModule/systems/CameraSystem.h"
+#include "systemsModule/systems/RenderSystem.h"
+#include "windowsModule/Window.h"
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/ModelLoader.h"
 #include "assetsModule/modelModule/SurfaceBake.h"
 #include "core/FileSystem.h"
 #include "propertiesModule/ModelBinding.h"
+#include "propertiesModule/PropertiesSystem.h"
 #include "multithreading/ThreadPool.h"
 #include "rhi/GraphicsBackend.h"
 #include "rhi/RhiLog.h"
@@ -125,6 +130,20 @@ namespace SFE {
 	// (RuntimeBridge::runQueued).
 	void Engine::addRuntimeCommands() {
 		auto* bridge = RuntimeBridge::RuntimeBridge::instance();
+		bridge->addCommand("display",
+			"The display as the Graphics panel sets it, for this run only (display.json is left as it is): {\"mode\": "
+			"\"windowed\" | \"borderless\" | \"fullscreen\", \"width\", \"height\", \"frameInfo\"}, what is left out kept. "
+			"Put on the screen at the start of the next frame.",
+			[this](const Json::Value& args) {
+				const auto& screen = mWindow->getScreenData();
+				auto settings = mWindow->display() ? *mWindow->display()
+					: Render::DisplaySettings{ .width = screen.renderW, .height = screen.renderH };
+				mWindow->setDisplay(Render::displayFromJson(args, settings));
+				settings = *mWindow->display();
+				return std::string(Render::kDisplayModeNames[static_cast<size_t>(settings.mode)]) + " "
+					+ std::to_string(settings.width) + "x" + std::to_string(settings.height)
+					+ (settings.frameInfo ? ", frame info shown" : ", frame info hidden");
+			});
 		bridge->addCommand("screenshot", "The last frame as a PNG: {\"path\": ...}, under the content root unless absolute.",
 			[](const Json::Value& args) {
 				const auto path = args.isObject() ? args.get("path", "screenshot.png").asString() : std::string("screenshot.png");
@@ -156,6 +175,14 @@ namespace SFE {
 					said += (said.empty() ? "" : "; ") + path + (entities < 0 ? " did not read" : ": " + std::to_string(entities) + " entities");
 				}
 				return paths.empty() ? std::string("no model has changed") : said;
+			});
+		bridge->addCommand("reloadScene",
+			"The scene file read again, and what changed in it taken up: an entity moved, turned or scaled, a model "
+			"swapped, an entity new to the file made and one gone from it taken out, colliders with them. What a system "
+			"built once from the scene (the terrain, the litter, the vegetation...) is left as it was, and named: it waits "
+			"for a restart.",
+			[](const Json::Value&) {
+				return PropertiesModule::PropertiesSystem::reloadScene();
 			});
 		bridge->addCommand("reloadTextures",
 			"Every texture whose file was written since it was read, read again into the same texture. One whose size "
@@ -281,6 +308,20 @@ namespace SFE {
 	void Engine::update() {
 		if (!checkNeedClose()) {
 			return;
+		}
+
+		// The display the player set (Window::setDisplay), put on the screen between frames. A picture of another size has
+		// every pass make its targets again, and the camera takes its new shape.
+		if (mWindow && mWindow->applyDisplay()) {
+			if (auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>()) {
+				renderSystem->resize();
+			}
+			if (auto* cameras = ECSHandler::getSystem<SystemsModule::CameraSystem>()) {
+				if (auto camera = ECSHandler::registry().pinComponent<CameraComponent>(cameras->getCurrentCamera())) {
+					const auto& screen = mWindow->getScreenData();
+					camera->getProjection().setAspect(static_cast<float>(screen.width) / static_cast<float>(screen.height));
+				}
+			}
 		}
 
 		// The GPU first: the frame's time is taken once the frame it replaces has left the GPU, so each frame is one of

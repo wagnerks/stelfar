@@ -728,6 +728,17 @@ void ModelLoader::readMaterialData(SFE::Material& material, aiMaterial* assimpMa
 	bindFirst(SFE::ROUGHNESS, roughnessMaps, roughType);
 	bindFirst(SFE::METALLIC, metallicMaps, metalType);
 
+	// glTF only, so an FBX or OBJ lightmap never darkens a model. Assimp 5 reads the occlusionTexture as a lightmap.
+	if (gltfPbr) {
+		aiTextureType aoType = aiTextureType_LIGHTMAP;
+		auto aoMaps = loadMaterialTextures(assimpMaterial, aoType, directory);
+		if (aoMaps.empty()) {
+			aoType = aiTextureType_AMBIENT_OCCLUSION;
+			aoMaps = loadMaterialTextures(assimpMaterial, aoType, directory);
+		}
+		bindFirst(SFE::OCCLUSION, aoMaps, aoType);
+	}
+
 	aiTextureType normalType = aiTextureType_NORMALS;
 	auto normalMaps = loadMaterialTextures(assimpMaterial, aiTextureType_NORMALS, directory);
 	if (normalMaps.empty()) {

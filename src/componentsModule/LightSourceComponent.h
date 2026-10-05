@@ -41,6 +41,13 @@ namespace SFE::ComponentsModule {
 		float mRadius = 100.f;
 		float mNear = 0.1f;
 		bool mWithShadows = true;
+		// How much a flame's light wavers, 0 steady: its brightness goes up and down by up to this share, and the light's
+		// centre wanders round the entity (LightSourceComponent.cpp kFlickerSway), so the shadows it throws tremble.
+		float mFlicker = 0.f;
+		// At time t: the brightness as a share of the intensity, and where the light is from the entity. LightingPass and
+		// PointLightPass ask the same time, so the light falls from where its shadows were drawn.
+		float flickerGain(float t) const;
+		SFE::Math::Vec3 flickerShift(float t) const;
 	private:
 		float mBias = 0.0002f;
 		SFE::Math::Vec2 mTexelSize = { 0.004f, 0.004f };

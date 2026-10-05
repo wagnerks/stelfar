@@ -131,6 +131,7 @@ namespace SFE::PropertiesModule {
 		data["linear"] = component.mLinear;
 		data["quadratic"] = component.mQuadratic;
 		data["with_shadows"] = component.mWithShadows;
+		data["flicker"] = component.mFlicker;
 
 		data["bias"] = component.getBias();
 		data["samples"] = component.getSamples();
@@ -168,6 +169,9 @@ namespace SFE::PropertiesModule {
 		}
 		if (data.isMember("with_shadows")) {
 			component->mWithShadows = data["with_shadows"].asBool();
+		}
+		if (data.isMember("flicker")) {
+			component->mFlicker = data["flicker"].asFloat();
 		}
 		if (data.isMember("bias")) {
 			component->setBias(data["bias"].asFloat());
@@ -250,6 +254,8 @@ namespace SFE::PropertiesModule {
 
 	void ComponentSerializer<MaterialComponent>::save(const MaterialComponent& component, Json::Value& data) {
 		data["transparent"] = component.transparent;
+		data["fragment_shader"] = component.fragmentShader;
+		data["casts_shadow"] = component.castsShadow;
 		data["opacity"] = component.opacity;
 		data["ior"] = component.ior;
 		data["tint"] = Json::arrayValue;
@@ -270,6 +276,12 @@ namespace SFE::PropertiesModule {
 
 		if (data.isMember("transparent")) {
 			material->transparent = data["transparent"].asBool();
+		}
+		if (data.isMember("fragment_shader")) {
+			material->fragmentShader = data["fragment_shader"].asString();
+		}
+		if (data.isMember("casts_shadow")) {
+			material->castsShadow = data["casts_shadow"].asBool();
 		}
 		if (data.isMember("opacity")) {
 			material->opacity = data["opacity"].asFloat();
@@ -292,7 +304,13 @@ namespace SFE::PropertiesModule {
 				if (data.isMember("transparent") && material->transparent) {
 					meshMaterial.transparent = true;
 				}
+				if (data.isMember("casts_shadow")) {
+					meshMaterial.castsShadow = material->castsShadow;
+				}
 				if (material->transparent) {
+					if (data.isMember("fragment_shader")) {
+						meshMaterial.fragmentShader = material->fragmentShader;
+					}
 					if (data.isMember("opacity")) {
 						meshMaterial.opacity = material->opacity;
 					}
@@ -304,6 +322,8 @@ namespace SFE::PropertiesModule {
 					}
 				}
 			}
+			// The renderer took the mesh's materials when it was bound, before these: it takes them again.
+			SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::MATERIAL_UPDATED });
 		}
 	}
 
@@ -356,6 +376,29 @@ namespace SFE::PropertiesModule {
 			item.append(clearing.z);
 			data["clearings"].append(item);
 		}
+		data["paths"] = Json::arrayValue;
+		for (const auto& path : component.paths) {
+			Json::Value item;
+			item["width"] = path.width;
+			item["wear"] = path.wear;
+			item["points"] = Json::arrayValue;
+			for (const auto& point : path.points) {
+				Json::Value at = Json::arrayValue;
+				at.append(point.x);
+				at.append(point.y);
+				item["points"].append(at);
+			}
+			data["paths"].append(item);
+		}
+		data["patches"] = Json::arrayValue;
+		for (const auto& patch : component.patches) {
+			Json::Value item = Json::arrayValue;
+			item.append(patch.x);
+			item.append(patch.y);
+			item.append(patch.z);
+			item.append(patch.w);
+			data["patches"].append(item);
+		}
 	}
 
 	void ComponentSerializer<TerrainComponent>::load(ecss::EntityId entity, const Json::Value& data) {
@@ -377,6 +420,20 @@ namespace SFE::PropertiesModule {
 		component->clearings.clear();
 		for (const auto& clearing : data["clearings"]) {
 			component->clearings.push_back({ clearing[0].asFloat(), clearing[1].asFloat(), clearing[2].asFloat() });
+		}
+		component->paths.clear();
+		for (const auto& item : data["paths"]) {
+			auto& path = component->paths.emplace_back();
+			path.width = item.get("width", path.width).asFloat();
+			path.wear = item.get("wear", path.wear).asFloat();
+			for (const auto& point : item["points"]) {
+				path.points.push_back({ point[0].asFloat(), point[1].asFloat() });
+			}
+		}
+		component->patches.clear();
+		for (const auto& patch : data["patches"]) {
+			component->patches.push_back({ patch[0].asFloat(), patch[1].asFloat(), patch[2].asFloat(),
+				patch.size() > 3 ? patch[3].asFloat() : kDefaultWear });
 		}
 
 		auto* model = AssetsModule::getOrCreateTerrain(*component);

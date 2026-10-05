@@ -203,15 +203,25 @@ namespace SFE::SystemsModule {
 
 			auto* sound = it->second.sound.get();
 			it->second.seenFrame = mFrame;
-			ma_sound_set_volume(sound, source->mVolume);
 			ma_sound_set_pitch(sound, source->mPitch);
 			ma_sound_set_looping(sound, source->mLoop);
 			ma_sound_set_spatialization_enabled(sound, source->mSpatial);
 			ma_sound_set_min_distance(sound, source->mMinDistance);
 			ma_sound_set_max_distance(sound, source->mMaxDistance);
+			float volume = source->mVolume;
 			if (transform) {
-				setPosition(sound, Math::Vec3(transform->copyTransform()[3]));
+				const Math::Vec3 pos(transform->copyTransform()[3]);
+				setPosition(sound, pos);
+				// miniaudio's falloff only levels out at the far distance, it never goes quiet: the last fifth of the way
+				// fades it to nothing, or a fire is heard faintly across the whole map.
+				if (source->mSpatial) {
+					const auto listener = ma_engine_listener_get_position(mEngine.get(), 0);
+					const float distance = Math::length(pos - Math::Vec3(listener.x, listener.y, listener.z));
+					const float fade = (std::max)(0.2f * source->mMaxDistance, 0.01f);
+					volume *= std::clamp((source->mMaxDistance - distance) / fade, 0.f, 1.f);
+				}
 			}
+			ma_sound_set_volume(sound, volume);
 		}
 
 		// Sources whose component or entity is gone.

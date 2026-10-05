@@ -10,7 +10,7 @@ layout(location = 5) in vec4 vPrevClip;
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedoSpec;
-layout(location = 3) out vec2 gVelocity;
+layout(location = 3) out vec4 gVelocity;
 
 layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
     SFE_SHARED_MATRICES
@@ -70,5 +70,5 @@ void main() {
     gAlbedoSpec.rgb = mix(vec3(0.12, 0.12, 0.13), vec3(0.04), lines * 0.7);
     gAlbedoSpec.rgb *= vec3(fading);
     gAlbedoSpec.a = 0.28;
-    gVelocity = sfeVelocity(vClip, vPrevClip);
+    gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 0.0);
 }

@@ -15,6 +15,7 @@ layout(SFE_SET(0, 5)) uniform sampler2D gOutlines;
 layout(SFE_SET(0, 6)) uniform sampler2DArray shadowMapDepth;
 layout(SFE_SET(0, 7)) uniform sampler2DArrayShadow PointLightShadowMapArray;
 layout(SFE_SET(0, 8)) uniform sampler2DArrayShadow shadowMap;
+layout(SFE_SET(0, 9)) uniform sampler2D gVelocity; // b: what a material's occlusion map shuts out (sfeGBufferVelocity)
 layout(SFE_SET(0, 12)) uniform samplerCube irradianceMap;
 layout(SFE_SET(0, 13)) uniform samplerCube prefilterMap;
 layout(SFE_SET(0, 14)) uniform sampler2D brdfLUT;
@@ -46,7 +47,8 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     // How far the picture is pushed from what the light really does towards a painted one: the sun's light in steps
     // rather than a gradient, no highlight to speak of, and the colour flattened.
     float stylise;
-    float pad0, pad1, pad2;
+    float ssaoSun; // the share of the AO the sun's light takes
+    float pad1, pad2;
     // The area tint (AreaTintFrame): the map's place, and the foliage's and the air's colour and strength.
     vec4 tintArea;
     vec4 tintFoliage;
@@ -301,11 +303,16 @@ float PointLightCalculation(PointLight light, vec3 fragPosWorldSpace, vec3 Norma
     const float mapTexel = 1.0 / 1024.0;
     const float ndcBias = min(max(light.bias, 0.0), mapTexel * 1.5);
     const float zBias = max(ndcBias, mapTexel * 0.6) * mix(2.0, 0.35, nDotL);
+    // Looked up from a little off the surface, along its normal, by about the filter's width there (the faces' texels
+    // widen with the distance): ground the light grazes shaded itself, darker under the cube's side faces than under
+    // the one straight below, with an edge between.
+    const float reach = length(light.Position - fragPosWorldSpace);
+    const vec3 receiver = fragPosWorldSpace + Normal * reach * (light.texelSize.x + mapTexel) * 2.0 * sqrt(1.0 - nDotL * nDotL);
 
     int layer = 0;
     vec3 projCoords = vec3(0.0);
     for (; layer < light.Layers; ++layer) {
-        vec4 fragPosLightSpace = pointLightMatrices[layer + light.offset] * vec4(fragPosWorldSpace, 1.0);
+        vec4 fragPosLightSpace = pointLightMatrices[layer + light.offset] * vec4(receiver, 1.0);
         projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
         projCoords = projCoords * 0.5 + 0.5;
         if (projCoords.x > 0.0 && projCoords.x < 1.0 && projCoords.y > 0.0 && projCoords.y < 1.0 &&
@@ -376,10 +383,6 @@ vec2 calculateIllumination(vec3 lightDir, vec3 normal){
     return vec2(illumination, 1.0 - illuminationKoef);
 }
 
-float customMix(float x, float y, float a) {
-    return x * (1.0 - a) + y * a;
-}
-
 void main() {
     const vec3 FragPos = sfeScenePosition(sceneDepth, TexCoords, matrices.invProjection, matrices.invView);
     const vec4 normalSample = texture(gNormal, TexCoords);
@@ -424,6 +427,8 @@ void main() {
     }
     float ccRough = max(pbr.w, 0.04);
     const float AmbientOcclusion = texture(ssao, TexCoords).r;
+    // The material's own occlusion map: it darkens the sky's light and the reflections, never the sun or the lamps.
+    const float materialAO = 1.0 - texture(gVelocity, TexCoords).b;
 
     const vec3 V = normalize(pc.viewPos - FragPos);
     float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
@@ -435,17 +440,23 @@ void main() {
     F0 *= mix(1.0, 0.35, darkDiel);
 
     vec3 Lsun = normalize(-cascadedShadow.direction_intensity.xyz);
+    // The clouds overhead dim the sun, their shadows drifting across the forest with them: under the thickest it is
+    // kCloudShade of the way to what sfeCloudShadow says. Kept apart from the shadows things cast and lighter than
+    // them, the sky's light left as it is, so a tree's shade still falls inside a cloud's.
+    const float kCloudShade = 0.6;
+    const vec3 sunColour = cascadedShadow.color_and_misc.xyz * (1.0 - kCloudShade
+        * (1.0 - sfeCloudShadow(cloudLayer, FragPos, Lsun, pc.cloudCoverage, sfeCloudDrift(matrices.wind, matrices.wind.w))));
     vec3 Lo = cookTorrance(
         Normal, V, Lsun,
         albedo, F0, roughness, metallic,
-        cascadedShadow.color_and_misc.xyz * PI, f90);
+        sunColour * PI, f90);
     // A glint mirrors the sun whole, over a spot a few pixels across (a sharper one falls between pixels and TAA takes
     // it for a firefly); the glare in bloom_extract.fs turns it into a star. As strongly as a drawing that glints says
     // (kSfeCelGlint, its last channel), and added to the light once the drawn look has flattened that: it would swell
     // the glint towards the line where the light ends.
     vec3 flash = vec3(0.0);
     if (glint) {
-        flash = cookTorrance(Normal, V, Lsun, vec3(0.0), vec3(1.0), 0.3, 0.0, cascadedShadow.color_and_misc.xyz * PI, 1.0)
+        flash = cookTorrance(Normal, V, Lsun, vec3(0.0), vec3(1.0), 0.3, 0.0, sunColour * PI, 1.0)
             * (celGlint ? pbr.w : 1.0);
     }
 
@@ -454,7 +465,7 @@ void main() {
     if (translucency > 0.0) {
         const float behind = max(dot(-Normal, Lsun), 0.0);
         const float intoSun = pow(max(dot(-V, Lsun), 0.0), 6.0);
-        Lo += albedo * cascadedShadow.color_and_misc.xyz * translucency * (behind * 0.55 + intoSun * 1.1);
+        Lo += albedo * sunColour * translucency * (behind * 0.55 + intoSun * 1.1);
     }
 
     float nDotLSun = max(dot(Normal, Lsun), 0.0);
@@ -462,24 +473,26 @@ void main() {
     if (nDotLSun > 0.001 || translucency > 0.0) {
         shadow = ShadowCascadedCalculation(FragPos, Normal);
     }
-    // The clouds overhead shade the ground too: their shadows drift across the forest with them.
-    const float clouded = sfeCloudShadow(cloudLayer, FragPos, Lsun, pc.cloudCoverage, sfeCloudDrift(matrices.wind, matrices.wind.w));
-    shadow = 1.0 - (1.0 - shadow) * clouded;
 
+    // A point light (a fire, a lantern) is its own: its shadow darkens only its light, never the sun's or the sky's,
+    // and the sun's shadow leaves it alone. It dies away before its radius rather than ending there in a ring.
+    vec3 Lpoint = vec3(0.0);
     for (int idx = 0; idx < pc.pointLightsSize; idx++) {
-        float distance = length(plb.pointLight[idx].Position - FragPos);
-        float k = distance / plb.pointLight[idx].radius;
+        const PointLight light = plb.pointLight[idx];
+        const float distance = length(light.Position - FragPos);
+        const float k = distance / light.radius;
         if (k >= 1.0) {
             continue;
         }
-        vec3 Lp = normalize(plb.pointLight[idx].Position - FragPos);
-        float nDotLp = max(dot(Normal, Lp), 0.0);
-        if (nDotLp > 0.001) {
-            float pointShadow = PointLightCalculation(plb.pointLight[idx], FragPos, Normal) * pow(1.0 - k, 0.2);
-            shadow = customMix(shadow, pointShadow, 1.0 - k);
+        const vec3 Lp = normalize(light.Position - FragPos);
+        if (dot(Normal, Lp) <= 0.001) {
+            continue;
         }
-        const float attenuation = 1.0 / (1.0 + plb.pointLight[idx].Linear * distance + plb.pointLight[idx].Quadratic * distance * distance);
-        Lo += cookTorrance(Normal, V, Lp, albedo, F0, roughness, metallic, plb.pointLight[idx].Color * attenuation, f90);
+        const float lit = 1.0 - PointLightCalculation(light, FragPos, Normal);
+        float window = 1.0 - k * k * k * k;
+        window *= window;
+        const float attenuation = window / (1.0 + light.Linear * distance + light.Quadratic * distance * distance);
+        Lpoint += lit * cookTorrance(Normal, V, Lp, albedo, F0, roughness, metallic, light.Color * attenuation, f90);
     }
 
     // Cartoon light: a surface is either in the sun or turned from it, with a soft edge between the two rather than
@@ -495,6 +508,9 @@ void main() {
 
     const float shadowFactor = 1.0 - pc.shadowIntensity * shadow;
     Lo *= shadowFactor;
+    // Painted: a crease or the ground under a tent is darker in the sun too, by a share of the AO. The lamps keep theirs.
+    Lo *= mix(1.0, mix(1.0, AmbientOcclusion, pc.ssaoAmount), pc.ssaoSun);
+    Lo += Lpoint;
     // Over a wide range of angles: a normal map's bumps swing the normal across the terminator, and a narrow one cut
     // hard black blotches into a sunlit trunk.
     // A side turned away from the sun is as much out of it as one under a cast shadow: the ambient and sheen below
@@ -515,7 +531,7 @@ void main() {
     specular *= 1.0 - clearcoat;
     if (clearcoat > 0.01) {
         vec3 Fc0 = vec3(0.04);
-        vec3 sunCol = cascadedShadow.color_and_misc.xyz * PI;
+        vec3 sunCol = sunColour * PI;
         vec3 Fc = fresnelSchlickRoughness(max(dot(Normal, V), 0.0), Fc0, ccRough);
         float coatRough = max(ccRough, 0.08);
         Lo += cookTorrance(Normal, V, Lsun, vec3(0.0), Fc0, coatRough, 0.0, sunCol, 1.0) * clearcoat;
@@ -524,15 +540,16 @@ void main() {
         specular += preCc * (Fc * brdfCc.x + brdfCc.y) * clearcoat;
         specular += Fc * clearcoat * 0.28;
     }
+    specular *= materialAO;
     float ao = mix(1.0, AmbientOcclusion, pc.ssaoAmount);
-    ao = mix(ao, 1.0, clearcoat);
+    ao = mix(ao, 1.0, clearcoat) * materialAO;
     // A painted surface has no highlight to speak of: the sky lights it flatly and the sun does the shaping.
     vec3 ambient = kD * diffuse * ao + specular * mix(1.0, 0.15, pc.stylise);
     ambient *= mix(pc.shadowAmbient, 1.0, sunVisible);
 
     // Backend-parity debugging: isolate one term so it can be captured and diffed on its own.
-    // 1 shadow factor, 2 ambient/IBL, 3 direct light, 4 albedo, 5 normal, 6 AO, 7 irradiance,
-    // 8 prefiltered reflection, 9 brdf LUT.
+    // 1 shadow factor, 2 ambient/IBL, 3 direct light, 4 albedo, 5 normal, 6 AO (SSAO x material), 7 irradiance,
+    // 8 prefiltered reflection, 9 brdf LUT, 15 the material's occlusion map alone.
     if (pc.debugTerm > 0.5) {
         int term = int(pc.debugTerm + 0.5);
         vec3 dbg = vec3(0.0);
@@ -545,6 +562,7 @@ void main() {
         else if (term == 7) dbg = irradiance;
         else if (term == 8) dbg = prefilteredColor;
         else if (term == 9) dbg = vec3(brdf, 0.0);
+        else if (term == 15) dbg = vec3(materialAO);
         else if (term == 14) {
             // R = hardware comparison sampler result, G = manual compare on the same texel,
             // B = stored depth. If R and G disagree the comparison sampler is the problem.
@@ -604,7 +622,7 @@ void main() {
         float trans = max(-nDotL, 0.0);
         float wrapL = clamp((nDotL + wrap) / max(1.0 + wrap, 1e-3), 0.0, 1.0);
         vec3 scatter = albedo * vec3(0.55, 0.22, 0.16);
-        vec3 sssL = scatter * cascadedShadow.color_and_misc.xyz * 3.14159265
+        vec3 sssL = scatter * sunColour * 3.14159265
             * (trans * 0.9 + wrapL * 0.25) * sssW * str;
         lighting += sssL * mix(shadowFactor, 1.0, trans * 0.5);
     }
@@ -613,7 +631,7 @@ void main() {
     // held to a modest brightness.
     float fabric = (1.0 - metallic) * mix(0.15, 0.85, clamp(albedoSample.a, 0.04, 1.0)) * (1.0 - clearcoat);
     if (fabric >= 0.02 && pc.sheenStrength >= 0.01) {
-        vec3 sheenLight = cascadedShadow.color_and_misc.xyz;
+        vec3 sheenLight = sunColour;
         float peak = max(sheenLight.r, max(sheenLight.g, sheenLight.b));
         sheenLight *= peak > 1.0 ? 1.25 / peak : 1.0;
         float wrap = max(pc.padLook0, 0.0);
@@ -634,9 +652,11 @@ void main() {
         fogColor = mix(fogColor, texture(irradianceMap, horizon).rgb * pc.iblStrength * 1.6, pc.stylise);
         fogFactor = max(fogFactor, smoothstep(40.0, 320.0, Depth) * 0.58 * pc.stylise);
         // Shade is coloured, not dark: the sky fills it with its own blue, and at night the moon lights everything
-        // plainly rather than leaving it black. Most where the sun does not reach.
+        // plainly rather than leaving it black. Most where the sun does not reach, though not so much that the shade
+        // is as bright as the sun. The sky is overhead: what faces up takes all of it, a side or an underside half.
         float inShade = 1.0 - sunVisible * litSide;
-        lighting += albedo * texture(irradianceMap, Normal).rgb * pc.iblStrength * (0.8 + 1.8 * inShade) * pc.stylise * ao;
+        const float skyAbove = 0.5 + 0.5 * max(Normal.y, 0.0);
+        lighting += albedo * texture(irradianceMap, Normal).rgb * pc.iblStrength * (0.8 + 1.0 * inShade) * skyAbove * pc.stylise * ao;
         // A bright rim where a shape turns away from the eye: what outlines it against what is behind in a cartoon.
         float rim = pow(1.0 - max(dot(Normal, V), 0.0), 3.0);
         lighting += texture(irradianceMap, -V).rgb * pc.iblStrength * rim * 0.9 * pc.stylise * albedo;

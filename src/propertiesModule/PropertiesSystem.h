@@ -2,6 +2,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <json/value.h>
 
@@ -14,6 +15,25 @@ namespace SFE::PropertiesModule {
 	class PropertiesSystem {
 	public:
 		static ecss::EntityId loadScene(std::string_view path);
+
+		/// @brief The scene loadScene read last, read again from its file, and what changed in it since taken up while
+		///        the game runs: an entity moved, turned or scaled, a model swapped, an entity new to the file made
+		///        and one gone from it taken out, their colliders with them. A system that built something of its own
+		///        from a component once cannot follow, so a change the components on an entity do not take (see
+		///        addReloadable) is left as it was and named in the answer: it waits for a restart. Main thread, between
+		///        frames (the reloadScene command).
+		static std::string reloadScene();
+
+		/// @brief How a component takes the scene being read again. `read` is called once the component has been read
+		///        again from the file, with its JSON before; false puts that back, and the change waits for a restart.
+		///        `moved` is told where the entity it is on now stands in the world, once that has been moved. Without
+		///        `read` a change to the component waits for a restart, and without `moved` so does a move of its entity.
+		///        An entity of nothing but a transform and a model needs neither, and may be made and taken out as well.
+		struct Reloadable {
+			std::function<bool(ecss::EntityId entity, const Json::Value& was)> read;
+			std::function<void(ecss::EntityId entity, const Math::Mat4& world)> moved;
+		};
+		static void addReloadable(std::string_view component, Reloadable reloadable);
 
 		static void applyProperties(ecss::EntityId entity, const Json::Value& properties);
 

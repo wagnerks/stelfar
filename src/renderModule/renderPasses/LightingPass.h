@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <array>
+#include <future>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,7 @@ namespace SFE::Render::RenderPasses {
 		LightingPass();
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
+		void resize(SystemsModule::RenderData& renderDataHandle) override;
 
 	private:
 		// This frame's blocks for the dynamic bindings of mUboSet.
@@ -52,7 +54,9 @@ namespace SFE::Render::RenderPasses {
 			float cloudCoverage = 0.f;
 			// See deferred_shading.fs: 0 leaves the lighting as it is, 1 paints it.
 			float stylise = 0.f;
-			float pad0 = 0.f, pad1 = 0.f, pad2 = 0.f;
+			// GraphicsSettings::ssaoSun.
+			float ssaoSun = 0.f;
+			float pad1 = 0.f, pad2 = 0.f;
 			// The area tint (AreaTintFrame); a zero area, no tint.
 			Math::Vec4 tintArea{};
 			Math::Vec4 tintFoliage{};
@@ -119,11 +123,13 @@ namespace SFE::Render::RenderPasses {
 		int mPresentShow = 0;
 
 		IblMaps mIbl;
-		// What the sky light was baked from, when, and the maps it replaced with the frames since.
+		IblMaps mIblSpare; // what the next bake is written into, then swapped with mIbl
+		// What the sky light was baked from, and the bake under way on a worker.
 		std::array<float, 5> mIblKey{};
-		double mIblBakedAt = 0.0;
-		std::vector<std::pair<IblMaps, uint32_t>> mRetiredIbl;
+		std::future<IblTexels> mIblBaking;
 		void bakeSkyLight(SystemsModule::RenderData& renderDataHandle);
+		// mIbl bound for the frames to come.
+		void useSkyLight(SystemsModule::RenderData& renderDataHandle);
 		void updateSkyLight(SystemsModule::RenderData& renderDataHandle);
 		static std::array<float, 5> skyLightKey(const SystemsModule::RenderData& renderDataHandle);
 
@@ -140,6 +146,7 @@ namespace SFE::Render::RenderPasses {
 			BoundImage sceneDepth{};
 			BoundImage gNormal{};
 			BoundImage gAlbedo{};
+			BoundImage gVelocity{};
 			BoundImage ssao{};
 			BoundImage pointShadow{};
 			BoundImage outlines{};

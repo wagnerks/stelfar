@@ -10,15 +10,6 @@ using namespace SFE::Render::RenderPasses;
 
 void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
-
-	TextureDesc colorDesc;
-	colorDesc.width = w;
-	colorDesc.height = h;
-	colorDesc.format = TextureFormat::RGBA16F;
-	colorDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mColor = rhi->createTexture(colorDesc);
 
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
@@ -31,13 +22,7 @@ void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	rpDesc.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = TextureFormat::RGBA16F;
 	mRenderPass = rhi->createRenderPass(rpDesc);
-
-	FramebufferDesc fbDesc;
-	fbDesc.width = w;
-	fbDesc.height = h;
-	fbDesc.renderPass = mRenderPass;
-	fbDesc.colorAttachments = { { mColor } };
-	mFbo = rhi->createFramebuffer(fbDesc);
+	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(0, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
@@ -67,6 +52,10 @@ void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
 	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/ssr.fs");
 	mPipeline = rhi->createGraphicsPipeline(pipelineDesc);
+}
+
+void SSRPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mColor, mFbo, mRenderPass);
 }
 
 void SSRPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {

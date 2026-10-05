@@ -9,10 +9,8 @@
 
 using namespace SFE::Render::RenderPasses;
 
-void DoFPass::init(SystemsModule::RenderData&) {
+void DoFPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 
 	SFE::Render::SamplerDesc lin;
 	lin.minFilter = SFE::Render::FilterMode::Linear;
@@ -29,19 +27,7 @@ void DoFPass::init(SystemsModule::RenderData&) {
 	rpDesc.colorAttachments[0].storeOp = SFE::Render::AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = SFE::Render::TextureFormat::RGBA16F;
 	mRenderPass = rhi->createRenderPass(rpDesc);
-
-	SFE::Render::TextureDesc colorDesc;
-	colorDesc.width = w;
-	colorDesc.height = h;
-	colorDesc.format = SFE::Render::TextureFormat::RGBA16F;
-	colorDesc.usage = SFE::Render::TextureUsage::ColorAttachment | SFE::Render::TextureUsage::Sampled;
-	mColor = rhi->createTexture(colorDesc);
-	SFE::Render::FramebufferDesc fb;
-	fb.width = w;
-	fb.height = h;
-	fb.renderPass = mRenderPass;
-	fb.colorAttachments = { { mColor } };
-	mFbo = rhi->createFramebuffer(fb);
+	resize(renderDataHandle);
 
 	SFE::Render::DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(0, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
@@ -139,4 +125,8 @@ void DoFPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Render::C
 	rhi->cmdEndRenderPass(cmd);
 
 	frame.set(SFE::Render::FrameId::Final, { .texture = mColor, .sampler = mLinear, .framebuffer = mFbo });
+}
+
+void DoFPass::resize(SystemsModule::RenderData&) {
+	SFE::Render::Utils::screenTarget(mColor, mFbo, mRenderPass);
 }

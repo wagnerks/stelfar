@@ -11,9 +11,8 @@
 
 using namespace SFE::Render::RenderPasses;
 
-void SceneDepthPass::init(SystemsModule::RenderData&) {
+void SceneDepthPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 
 	SamplerDesc nearest;
 	nearest.minFilter = FilterMode::Nearest;
@@ -24,19 +23,7 @@ void SceneDepthPass::init(SystemsModule::RenderData&) {
 	passDesc.colorAttachmentCount = 1;
 	passDesc.colorAttachments[0] = { AttachmentLoadOp::DontCare, AttachmentStoreOp::Store, { 1.f, 0.f, 0.f, 0.f }, TextureFormat::R32F };
 	mRenderPass = rhi->createRenderPass(passDesc);
-
-	TextureDesc depthDesc;
-	depthDesc.width = screen.renderW;
-	depthDesc.height = screen.renderH;
-	depthDesc.format = TextureFormat::R32F;
-	depthDesc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	mDepth = rhi->createTexture(depthDesc);
-	FramebufferDesc fb;
-	fb.width = screen.renderW;
-	fb.height = screen.renderH;
-	fb.renderPass = mRenderPass;
-	fb.colorAttachments = { { mDepth } };
-	mFbo = rhi->createFramebuffer(fb);
+	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(0, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
@@ -58,6 +45,10 @@ void SceneDepthPass::init(SystemsModule::RenderData&) {
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/scene_depth.fs");
 	mPipeline = rhi->createGraphicsPipeline(desc);
+}
+
+void SceneDepthPass::resize(SystemsModule::RenderData&) {
+	Utils::screenTarget(mDepth, mFbo, mRenderPass, TextureFormat::R32F);
 }
 
 void SceneDepthPass::render(SystemsModule::RenderData& renderDataHandle, CommandListHandle cmd) {
