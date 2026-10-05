@@ -17,6 +17,7 @@ layout(location = 1) out vec2 TexCoords;
 layout(location = 2) out vec2 TexCoords1;
 layout(location = 3) flat out uint vMaterial;
 layout(location = 4) flat out float vPiece; // see g_buffer.vs
+layout(location = 5) out vec2 vAcross;      // metres across the light, see cascadeShadowMap.fs
 
 layout(SFE_SET(0, 1), std430) readonly buffer modelMatrices {
     mat4 model[];
@@ -39,6 +40,7 @@ layout(SFE_SET(0, 11), std140) uniform LightSpaceMatrices {
 
 SFE_PUSH_BLOCK PushConstants {
     int cascadeLayer;
+    float leafLight; // cascadeShadowMap.fs
 } params;
 
 void main() {
@@ -67,6 +69,10 @@ void main() {
     // Pancaked: a caster between the cascade and the sun, past its near plane, is pressed onto that plane instead of
     // clipped away. At a low sun a tree tens of metres up-sun throws its shadow across the whole cascade.
     gl_Position.z = max(gl_Position.z, -gl_Position.w);
+    // Where it stands across the light, in metres: the same for every leaf along one ray, in every cascade.
+    mat4 m = lightSpaceMatrices[layer];
+    vAcross = vec2(dot(worldPos.xyz, normalize(vec3(m[0][0], m[1][0], m[2][0]))),
+                   dot(worldPos.xyz, normalize(vec3(m[0][1], m[1][1], m[2][1]))));
     TexCoords = aTexCoords;
     TexCoords1 = aTexCoords1;
     vPiece = sfePieceKey(uint(SFE_VERTEX_ID), model[index][3].xyz);

@@ -273,6 +273,8 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 			cascadeRenderData.cascade.z = std::isfinite(cascade.bias) ? cascade.bias : 0.f;
 			cascadeRenderData.cascade.w = static_cast<float>(cascade.samples);
 			cascadeRenderData.cascadeExtra.x = cascade.depthRange;
+			cascadeRenderData.cascadeExtra.y = renderDataHandle.graphics.shadowSunWidth;
+			cascadeRenderData.cascadeExtra.z = renderDataHandle.graphics.shadowPenumbraMost;
 		}
 
 		const auto& levels = csm->shadowCascadeLevels;

@@ -15,6 +15,32 @@
 
 
 namespace SFE::ComponentsModule {
+	namespace {
+		// How far the furthest of `corners` is from their centre: the sphere round them, the same however they are turned.
+		float sphereRadius(const std::vector<Math::Vec4>& corners) {
+			Math::Vec3 centre(0.f);
+			for (const auto& corner : corners) {
+				centre.x += corner.x;
+				centre.y += corner.y;
+				centre.z += corner.z;
+			}
+			const float invN = 1.f / static_cast<float>(corners.size());
+			centre.x *= invN;
+			centre.y *= invN;
+			centre.z *= invN;
+			float radius = 0.f;
+			for (const auto& corner : corners) {
+				const float dx = corner.x - centre.x;
+				const float dy = corner.y - centre.y;
+				const float dz = corner.z - centre.z;
+				radius = (std::max)(radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+			}
+			return radius;
+		}
+
+		SFE::Math::Mat4 fitLightSpace(const std::vector<SFE::Math::Vec4>& corners, const SFE::Math::Mat4& lightView, float radius, float nearMultiplier, float farMultiplier, float mapSize, SFE::Math::Mat4* cullingMatrix, float* depthRange, float* worldPerTexelOut);
+	}
+
 	std::vector<Math::Vec4> CascadeShadowComponent::getFrustumCornersWorldSpace(const Math::Mat4& proj, const Math::Mat4& view) {
 		return getFrustumCornersWorldSpace(proj * view);
 	}
@@ -77,16 +103,11 @@ namespace SFE::ComponentsModule {
 		const float shadowFar = (std::min)(authoredFar > shadowCascadeLevels.front() ? authoredFar : camFar, camFar);
 		shadowCascadeLevels.back() = shadowFar;
 
-		const float nearZ = (std::max)(shadowCascadeLevels.front(), 1e-3f);
-		const size_t cascadeCount = shadowCascadeLevels.size() - 1;
-		if (cascadeCount >= 2) {
-			constexpr float lambda = 0.9f;
-			for (size_t i = 1; i < cascadeCount; ++i) {
-				const float t = static_cast<float>(i) / static_cast<float>(cascadeCount);
-				const float logS = nearZ * std::pow(shadowFar / nearZ, t);
-				const float uniS = nearZ + (shadowFar - nearZ) * t;
-				shadowCascadeLevels[i] = logS * lambda + uniS * (1.f - lambda);
-			}
+		// The levels between are as authored, held inside the two ends. They were spread over the whole distance by
+		// a formula that overwrote them: the first reached 6 m, and in a sphere round that much of a first person's view
+		// a 1024 map has 1.7 cm texels -- every shadow near the eye blurred.
+		for (size_t i = 1; i + 1 < shadowCascadeLevels.size(); ++i) {
+			shadowCascadeLevels[i] = (std::clamp)(shadowCascadeLevels[i], shadowCascadeLevels.front(), shadowFar);
 		}
 
 		auto fov = cameraProjection.getFOV();
@@ -144,18 +165,34 @@ namespace SFE::ComponentsModule {
 			lightView[0][2] = -f.x;
 			lightView[1][2] = -f.y;
 			lightView[2][2] = -f.z;
-			lightView[3][0] = -Math::dot(s, eye);
-			lightView[3][1] = -Math::dot(u, eye);
+			// Moved along the light only, not across it: the texels then lie on one grid fixed in the world, which
+			// getLightSpaceMatrix snaps the map to. Moved across with the slice's centre, the grid slid under every
+			// shadow as the camera moved or turned, and their edges shimmered as the head only breathed.
+			lightView[3][0] = 0.f;
+			lightView[3][1] = 0.f;
 			lightView[3][2] = Math::dot(f, eye);
 
+			// The sphere round the slice from the cascade's projection alone, in the camera's own space: the same to the
+			// last bit every frame, and the texel with it. Measured off the slice's corners in the world, a few hundred
+			// metres out, it came out a few tenths of a millimetre different whenever the eye drifted; and the grid,
+			// counted from the world's origin some thirty thousand texels away, slid two or three texels under every
+			// shadow every frame.
+			const float radius = sphereRadius(getFrustumCornersWorldSpace(shadowCascade.viewProjection.getProjectionsMatrix()));
 			Math::Mat4 cullingMatrix;
-			auto projViewMatrix = getLightSpaceMatrix(fitPts, lightView, shadowCascade.zMult.x, shadowCascade.zMult.y, resolution.x, &cullingMatrix, &shadowCascade.depthRange, &shadowCascade.worldPerTexel);
+			auto projViewMatrix = fitLightSpace(fitPts, lightView, radius, shadowCascade.zMult.x, shadowCascade.zMult.y, resolution.x, &cullingMatrix, &shadowCascade.depthRange, &shadowCascade.worldPerTexel);
 			mLightSpaceMatrices.push_back(projViewMatrix);
 			shadowCascade.frustum = SFE::FrustumModule::createFrustum(cullingMatrix);
 		}
 	}
 
 	SFE::Math::Mat4 CascadeShadowComponent::getLightSpaceMatrix(const std::vector<SFE::Math::Vec4>& corners, const SFE::Math::Mat4& lightView, float nearMultiplier, float farMultiplier, float mapSize, SFE::Math::Mat4* cullingMatrix, float* depthRange, float* worldPerTexelOut) {
+		return fitLightSpace(corners, lightView, sphereRadius(corners), nearMultiplier, farMultiplier, mapSize, cullingMatrix, depthRange, worldPerTexelOut);
+	}
+
+	namespace {
+	// The light's box over `corners`: across the light the square round the circle of `radius` (and a margin) about their
+	// centre, on the world's grid of its texels; along it their depth, padded.
+	SFE::Math::Mat4 fitLightSpace(const std::vector<SFE::Math::Vec4>& corners, const SFE::Math::Mat4& lightView, float radius, float nearMultiplier, float farMultiplier, float mapSize, SFE::Math::Mat4* cullingMatrix, float* depthRange, float* worldPerTexelOut) {
 		Math::Vec4 transform = lightView * corners[0];
 		auto minX = transform.x;
 		auto maxX = transform.x;
@@ -179,15 +216,18 @@ namespace SFE::ComponentsModule {
 			maxZ = (std::max)(maxZ, transform.z);
 		}
 
-		const float cx = (minX + maxX) * 0.5f;
-		const float cy = (minY + maxY) * 0.5f;
-		float radius = 0.f;
+		// The circle round the slice's centre that holds the sphere round its corners: the same size however the camera
+		// turns (the corners stay as far from the centre), so a texel keeps its size. Fitted to the slice's outline
+		// across the light, it grew and shrank as the head nodded, and the grid it snaps to with it.
+		float cx = 0.f;
+		float cy = 0.f;
 		for (const auto& corner : corners) {
 			transform = lightView * corner;
-			const float dx = transform.x - cx;
-			const float dy = transform.y - cy;
-			radius = (std::max)(radius, std::sqrt(dx * dx + dy * dy));
+			cx += transform.x;
+			cy += transform.y;
 		}
+		cx /= static_cast<float>(corners.size());
+		cy /= static_cast<float>(corners.size());
 
 		// Widened before the texel is sized: the map spans res texels, so a margin added after sizing them left the
 		// square 2r wide but starting at cx - 1.15r -- off centre by 0.15r, and the circle the lighting picks the
@@ -236,6 +276,7 @@ namespace SFE::ComponentsModule {
 			*cullingMatrix = ortho * lightView;
 		}
 		return ortho * lightView;
+	}
 	}
 
 	const std::vector<Math::Mat4>& CascadeShadowComponent::getCacheLightSpaceMatrices() {

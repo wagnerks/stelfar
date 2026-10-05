@@ -3,9 +3,9 @@
 		"CascadeShadowComponent": {
 			"cascaded_levels": [
 				0.10000000149011612,
-				24.0,
-				60.0,
-				120.0,
+				4.0,
+				12.0,
+				40.0,
 				400.0
 			],
 			"cascades": [

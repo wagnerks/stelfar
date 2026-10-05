@@ -123,12 +123,20 @@ namespace SFE::SystemsModule {
 		float sunIntensity = 3.2f;
 		float iblStrength = 1.f;
 		float shadowAmbient = 0.42f;
-		// The ambient occlusion (ssao.fs): its two rings' radii in metres, how hard it darkens, and the share of it the
-		// sun's light takes as well (painted: a crease is dark in the sun too).
-		float ssaoRadius = 1.f;
-		float ssaoFarRadius = 3.f;
-		float ssaoIntensity = 4.5f;
+		// The ambient occlusion (ssao.fs, horizon based): how far round a point it looks for what covers it and how thick
+		// it takes what stands in front to be, in metres; the power its visibility is raised to, and the share of it the
+		// sun's light takes as well (painted: a crease is dark in the sun too); the least a blade of grass keeps of it.
+		float ssaoRadius = 1.5f;
+		float ssaoThickness = 0.5f;
+		float ssaoIntensity = 1.5f;
 		float ssaoSun = 0.7f;
+		float ssaoGrassFloor = 0.85f;
+		// The sun's shadow (deferred_shading.fs): sharp where it leaves what casts it, wider the further it falls -- the
+		// sun's width, as the penumbra's metres a metre from the caster -- up to the widest penumbra, metres.
+		float shadowSunWidth = 0.04f;
+		float shadowPenumbraMost = 0.5f;
+		// The share of the sun a tree's or a plant's leaves let through to what lies under them (cascadeShadowMap.fs).
+		float shadowLeafLight = 0.f;
 
 		// The grass clumps: how many to a square metre against the default, and metres out to which they grow.
 		float grassDensity = 1.f;

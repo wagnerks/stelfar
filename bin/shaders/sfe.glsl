@@ -31,6 +31,15 @@ float sfeHash12(vec2 p) {
     return float(v.x >> 8u) / 16777216.0;
 }
 
+// A hole a tree's or a plant's leaf card lets the sun through in the sun's shadow map: wherever the 2 cm cell across the
+// light (`across`, metres) draws under `leafLight`. The same cell for every leaf along a ray, so the share holds however
+// many leaves deep the crown is (each leaf holed by itself let leafLight to the power of the leaves through); fixed in
+// the world, so it does not crawl as the view moves the cascades. Bits 32 and 64 of the map mask: a tree's or a plant's
+// sway.
+bool sfeLeafHole(float mapMask, vec2 across, float leafLight) {
+    return (uint(mapMask + 0.5) & 96u) != 0u && sfeHash12(floor(across / 0.02)) < leafLight;
+}
+
 // 0..1 for a vertex of a model standing at `origin`, passed on flat so each triangle takes its first (or, on OpenGL,
 // last) vertex's: the point on the way to bare (SfeMaterial::bare) at which that triangle of a cut-out surface, a leaf,
 // is gone. Where the model stands tells two trees of one model apart, so they do not lose the same leaves.
@@ -101,6 +110,10 @@ vec4 sfeGBufferMaterial(float metallic, float specFactor, float clearcoat, float
     return clamp(vec4(metallic, specFactor, clearcoat, clearcoatRough), 0.0, 1.0);
 }
 const float kSfeTranslucentFoliage = 0.7;
+// A leaf or a blade of grass, by the G-buffer's material: no coat, and the translucent foliage's mark.
+bool sfeIsFoliage(vec4 material) {
+    return material.z < 0.5 / 255.0 && abs(material.w - kSfeTranslucentFoliage) < 1.5 / 255.0;
+}
 // A clearcoat of exactly this is no coat but a glint: the surface is shaded as it is, and where it mirrors the sun into
 // the eye it flashes, blinding (a bald crown). Too thin for any coat to use.
 const float kSfeGlint = 1.0 / 255.0;

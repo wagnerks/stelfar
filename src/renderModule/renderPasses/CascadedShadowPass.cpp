@@ -74,13 +74,11 @@ void CascadedShadowPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto shadow = FileSystem::readJson("cascadedShadows.json");
 
 	PropertiesModule::PropertiesSystem::deserializeProperty<CascadeShadowComponent>(mShadowSource, shadow["Properties"]);
-	// A drawn frame does not want a photographic shadow: it wants a soft shape under a tree. A quarter of the map a
-	// side is a sixteenth of the texels to fill -- most of what this pass costs -- and the wider texel blurs the edge
-	// the style is after anyway: against the half-size map a sunlit meadow differs in a few hundred pixels of two
-	// million. Read once: the maps are made here and never resized.
+	// The drawn look keeps the authored map: a quarter or a half of it a side, to save filling texels, blurred every
+	// shadow near the eye and stood it off its caster by the offsets a texel that size needs. Read once: the maps are
+	// made here and never resized.
 	mStylised = renderDataHandle.graphics.stylise > 0.5f;
 	if (mStylised) {
-		cmp->resolution *= 0.25f;
 		// And half the distance. The last cascade is fitted to the slice from 120 m out, so every tree in the forest
 		// stands in it; drawing it to 200 m instead of 400 is most of what this pass costs in a wood, and past that
 		// the air has taken the contrast out of the trees anyway.
@@ -276,6 +274,8 @@ void CascadedShadowPass::initRender() {
 	// Cut-out casters are cards more often than not -- leaves, grass -- one polygon thick: culling either side leaves
 	// half of them out of the shadow, depending on which way each faces the sun.
 	pipelineDesc.cullMode = CullMode::None;
+	// Its own shader for the holes a tree's or a plant's leaves let the sun through (leafLight), the same as the cut-out's.
+	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/cascadeShadowMap_solid.fs");
 	pipelineCutoutSolid = rhi->createGraphicsPipeline(pipelineDesc);
 
 	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/cascadeShadowMap.fs");
@@ -444,13 +444,15 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		const auto drawCasters = [&]() {
 			struct ShadowPush {
 				int cascadeLayer = 0;
-				float pad[3]{};
+				float leafLight = 0.f;
+				float pad[2]{};
 			} push;
 			push.cascadeLayer = static_cast<int>(layer);
+			push.leafLight = renderDataHandle.graphics.shadowLeafLight;
 
-			// Past the first cascade (24 m) a leaf card's cut-out outline hardly reads in the shadow, only its coverage: drawn
-			// solid there, the depth test rejects hidden leaves before shading them instead of after a texture fetch and a
-			// discard. In a forest that halves the pass.
+			// Past the first cascade a leaf card's cut-out outline hardly reads in the shadow, only its coverage: drawn solid
+			// there, without the texture fetch the cut-out takes (cut out to 50 m the floor of a forest looked much the same,
+			// and the pass took 9 ms instead of 4).
 			const bool solidCutouts = layer >= 1;
 			PipelineHandle bound{};
 			// Solid casters first, so their depth is there to reject the cut-out ones behind them.

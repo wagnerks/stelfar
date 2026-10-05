@@ -38,6 +38,7 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	Render::DescriptorSetLayoutDesc texLayoutDesc;
 	texLayoutDesc.bindings.emplace_back(0, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(1, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	texLayoutDesc.bindings.emplace_back(2, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(3, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(5, Render::DescriptorType::UniformBuffer, Render::ShaderStage::Fragment);
 	mainTexSetLayout = rhi->createDescriptorSetLayout(texLayoutDesc);
@@ -47,6 +48,7 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	texLayoutBlurDesc.bindings.emplace_back(1, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutBlurDesc.bindings.emplace_back(2, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Fragment);
 	texLayoutBlurDesc.bindings.emplace_back(3, Render::DescriptorType::UniformBuffer, Render::ShaderStage::Fragment);
+	texLayoutBlurDesc.bindings.emplace_back(4, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	blurTexSetLayout = rhi->createDescriptorSetLayout(texLayoutBlurDesc);
 	mSlots.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& slot : mSlots) {
@@ -114,22 +116,29 @@ void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	const auto gPosSamp = renderDataHandle.frame.sampler(FrameId::SceneDepth);
 	const auto gNrm = renderDataHandle.frame.texture(FrameId::GBufferNormal);
 	const auto gNrmSamp = renderDataHandle.frame.sampler(FrameId::GBufferNormal);
-	if (slot.position.id != gPos.id || slot.normal.id != gNrm.id) {
+	// The material: which pixels are leaves and blades (sfeGBufferMaterial), what the ground round a tuft is not shaded by.
+	const auto gMat = renderDataHandle.frame.texture(FrameId::GBufferMaterial);
+	const auto gMatSamp = renderDataHandle.frame.sampler(FrameId::GBufferMaterial);
+	if (slot.position.id != gPos.id || slot.normal.id != gNrm.id || slot.material.id != gMat.id) {
 		slot.position = gPos;
 		slot.normal = gNrm;
+		slot.material = gMat;
 		rhi->updateDescriptorSets({
 			{ .set = slot.mainSet, .binding = 0, .images{ { gPos, gPosSamp } } },
 			{ .set = slot.mainSet, .binding = 1, .images{ { gNrm, gNrmSamp } } },
+			{ .set = slot.mainSet, .binding = 2, .images{ { gMat, gMatSamp } } },
 			{ .set = slot.blurSet, .binding = 0, .images{ { mData.mSsaoColorBuffer, mData.sampler } } },
 			{ .set = slot.blurSet, .binding = 1, .images{ { gPos, gPosSamp } } },
+			{ .set = slot.blurSet, .binding = 4, .images{ { gMat, gMatSamp } } },
 		});
 	}
 	// Without TAA there is nothing to average the rotation, so a moving pattern would only
 	// read as flicker -- hold it still in that case.
 	const auto& graphics = renderDataHandle.graphics;
 	params.intensity = graphics.ssaoIntensity;
-	params.nearRadius = graphics.ssaoRadius;
-	params.farRadius = graphics.ssaoFarRadius;
+	params.grassFloor = graphics.ssaoGrassFloor;
+	params.radius = graphics.ssaoRadius;
+	params.thickness = graphics.ssaoThickness;
 	params.frameIndex = renderDataHandle.graphics.taa ? static_cast<float>(renderDataHandle.taaFrame % 8) : 0.f;
 	const auto ssaoParams = rhi->allocTransient(params);
 	const auto ssaoBlurParams = rhi->allocTransient(blurParams);
