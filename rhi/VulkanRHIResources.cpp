@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 
 #include "rhi/VulkanRHIVkUtil.h"
 #include "rhi/RhiLog.h"
@@ -993,6 +995,15 @@ namespace SFE::Render {
 	}
 
 	namespace {
+		// Texture copies the loading threads have on the graphics queue at once, bytes. Each waits for its own fence, so
+		// without a cap a dozen loaders finishing together put their copies all ahead of the next frame, and the frame
+		// waited 50-200 ms for them (a 2K texture with its mips is 22 MB). Past the cap a loader waits for those before
+		// it, which spreads the copies over frames; one bigger than the cap goes alone.
+		constexpr size_t kTextureCopiesAtOnce = 32u << 20;
+		std::mutex gTextureCopiesMutex;
+		std::condition_variable gTextureCopiesDone;
+		size_t gTextureCopiesBytes = 0;
+
 		struct VulkanPreparedTexture : PreparedTexture {
 			VkTextureResource resource;
 			std::function<void(VkTextureResource&)> destroy;
@@ -1053,11 +1064,21 @@ namespace SFE::Render {
 		fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 		VkFence fence = VK_NULL_HANDLE;
 		vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
+		{
+			std::unique_lock lock(gTextureCopiesMutex);
+			gTextureCopiesDone.wait(lock, [&] { return gTextureCopiesBytes == 0 || gTextureCopiesBytes + total <= kTextureCopiesAtOnce; });
+			gTextureCopiesBytes += total;
+		}
 		executeImmediate([&](VkCommandBuffer cmd) {
 			transitionImageLayout(cmd, resource.image, resource.format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, arrayLayers, mipLevels);
 			vkCmdCopyBufferToImage(cmd, staging, resource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, levelCount, regions.data());
 			transitionImageLayout(cmd, resource.image, resource.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, arrayLayers, mipLevels);
 		}, pool, fence);
+		{
+			std::lock_guard lock(gTextureCopiesMutex);
+			gTextureCopiesBytes -= total;
+		}
+		gTextureCopiesDone.notify_all();
 		vkDestroyFence(m_device, fence, nullptr);
 		vkDestroyCommandPool(m_device, pool, nullptr);
 		destroyStagingBuffer(staging, stagingMemory);

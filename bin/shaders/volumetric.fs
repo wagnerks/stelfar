@@ -32,10 +32,6 @@ layout(SFE_SET(0, 15), std140) uniform PushConstants {
 const int STEPS = 16;
 const float PI = 3.14159265;
 
-float ign(vec2 p) {
-    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-}
-
 float henyeyGreenstein(float cosTheta, float g) {
     float g2 = g * g;
     float denom = pow(max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4), 1.5);
@@ -87,7 +83,9 @@ void main() {
     }
 
     float stepLen = rayLen / float(STEPS);
-    float t = ign(gl_FragCoord.xy) * stepLen;
+    // Each texel of a 4x4 block starts its ray its own sixteenth of a step in (sfeBlockNoise), and volumetric_apply.fs
+    // averages the block back together: sixteen times the steps, and nothing of the pattern left, still or moving.
+    float t = sfeBlockNoise(gl_FragCoord.xy).x * stepLen;
     vec3 L = normalize(-params.lightDir);
     float phase = henyeyGreenstein(dot(rayDir, L), clamp(params.anisotropy, -0.9, 0.9));
     float inScatter = 0.0;

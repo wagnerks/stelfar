@@ -301588,3 +301588,755 @@ init Render ok
 init chunks load
 init chunks load ok
 initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok
+initThread rhi
+initThread rhi ok
+initThread core
+init Transform
+init OcTree
+init AABB
+init Camera
+init Chunks
+init Render
+RenderSystem passes
+AnimationCompute
+CascadedShadow
+PointLight
+Geometry
+Pollution
+Grass
+Impostors
+Garbage
+Beard
+SceneDepth
+SSAO
+SunShadow
+Lighting
+Sky
+SSS
+ContactGI
+SSR
+Water
+Mist
+Glass
+Volumetric
+Underwater
+TAA
+AirLife
+Skulls
+Smoke
+LitterWave
+DoF
+Final
+GUI
+Debug
+ImGui
+RenderSystem passes ok
+init Render ok
+init chunks load
+init chunks load ok
+initThread core ok

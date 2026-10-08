@@ -321,8 +321,15 @@ namespace SFE::SystemsModule {
 					}
 				}
 			}
-			uploadDirtyGpuData();
-			mScene.update(mMaterials);
+			{
+				SFE_PROFILE_ZONE("Render dirty upload");
+				uploadDirtyGpuData();
+			}
+			{
+				SFE_PROFILE_ZONE("Render scene");
+				mScene.update(mMaterials);
+			}
+			SFE_PROFILE_ZONE("Render added");
 			// An entity can join the scene after this frame's dirty transforms were taken, its id past the
 			// buffer; the grow uploads every live transform, its own included.
 			ensureGpuCapacity(mScene.maxEntity());
@@ -333,6 +340,7 @@ namespace SFE::SystemsModule {
 			// Before the frame is recorded, so new materials go up with the frame's queued uploads; the passes'
 			// own upload() calls then find nothing to send. Sent after the list began, Vulkan would submit and
 			// wait for each one.
+			SFE_PROFILE_ZONE("Render materials");
 			mMaterials.upload();
 		}
 
@@ -942,9 +950,11 @@ namespace SFE::SystemsModule {
 				Render::AccessMask::ShaderRead,
 			});
 		}
+		const auto tEnd = Clock::now();
 		rhi->endCommandList(cmd);
 
 		const auto tSubmit = Clock::now();
+		profile("End list", tEnd, tSubmit);
 		rhi->submit(cmd);
 		const auto tSubmitted = Clock::now();
 		info->submitMs = ms(tSubmit, tSubmitted);
@@ -962,6 +972,7 @@ namespace SFE::SystemsModule {
 			}
 		}
 		if (Engine::instance()->publishEditorDisplay()) {
+			SFE_PROFILE_ZONE("Stream frame");
 			if (RuntimeBridge::RuntimeBridge::isAlive()) {
 				RuntimeBridge::RuntimeBridge::instance()->streamPresentedFrame();
 			}
