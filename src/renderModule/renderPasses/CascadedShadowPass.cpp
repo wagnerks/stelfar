@@ -336,8 +336,10 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	if (!lightMatrices.empty()) {
 		mData.lightSpaceMatrices = lightMatrices;
 	}
-	// None is drawn more often than graphics.shadowRefreshRate times a second (0: every frame), and what moves in it
-	// moves in its shadow that much later; the far ones (kFirstFar on) only kShare of that, a half and a third: each costs
+	// The near ones (before kFirstFar) are drawn every frame: the character's own shadow and the leaves swaying over the
+	// ground about it, kept a frame or two, trailed the running feet and stepped while the leaves moved smoothly.
+	// A far one is drawn no more often than graphics.shadowRefreshRate times a second (0: every frame), and what moves in
+	// it moves in its shadow that much later; kShare of that, a half and a third: each costs
 	// about as much to draw as a near one, and what moves past 12 m moves little on the screen. While the camera and the
 	// sun stay put a far cascade's volume does not move (it is fitted to a circle round its slice and snapped to texels,
 	// so turning on the spot keeps it too), and then its map is kept for up to kStaticRefreshFrames: past 60 m nothing
@@ -360,13 +362,14 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		auto& cascade = mCascades[layer];
 		const bool unmoved = cascade.lightSpace == mData.lightSpaceMatrices[layer] && cascade.framesSinceDrawn < kStaticRefreshFrames;
 		const float share = kShare[(std::min)(layer, std::size(kShare) - 1)];
-		shares += share;
+		const bool everyFrame = layer < kFirstFar;
+		shares += everyFrame ? 0.f : share;
 		++cascade.framesSinceDrawn;
 		cascade.age += step;
 		skip[layer] = true;
 		const auto& kept = cascade.lightSpace;
 		const float halfWidth = 1.f / (std::max)(Math::length(Math::Vec3{ kept[0][0], kept[1][0], kept[2][0] }), 1e-6f);
-		if (!cascade.drawn || Math::length(renderDataHandle.mCameraPos - cascade.drawnFrom) > halfWidth * kGoneShare) {
+		if (everyFrame || !cascade.drawn || Math::length(renderDataHandle.mCameraPos - cascade.drawnFrom) > halfWidth * kGoneShare) {
 			due.emplace_back(kMust, layer);
 		}
 		else if (!(layer >= kFirstFar && unmoved) && (rate <= 0.f || cascade.age * rate * share >= 1.f)) {
@@ -383,9 +386,10 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	float drawnNow = 0.f;
 	for (size_t i = 0; i < due.size(); ++i) {
 		skip[due[i].second] = i >= perFrame && due[i].first != kMust;
-		drawnNow += skip[due[i].second] ? 0.f : 1.f;
+		drawnNow += skip[due[i].second] || due[i].second < kFirstFar ? 0.f : 1.f;
 	}
-	// One drawn at once over the budget is paid back over the next frames, no more than one cascade's worth.
+	// One drawn at once over the budget is paid back over the next frames, no more than one cascade's worth; the near
+	// ones are outside the budget.
 	mDrawBudget = (std::max)(mDrawBudget - drawnNow, -1.f);
 	for (size_t layer = 0; layer < count; ++layer) {
 		auto& cascade = mCascades[layer];
