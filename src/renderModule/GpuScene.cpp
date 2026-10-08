@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
+#include "assetsModule/modelModule/Terrain.h"
 #include "componentsModule/MeshComponent.h"
 #include "componentsModule/OutlineComponent.h"
 #include "componentsModule/TransformComponent.h"
@@ -40,6 +41,11 @@ namespace SFE::Render {
 		// and no level of detail finer than a texel is drawn.
 		float texelsPerMetre = 0.f;
 		float minTexels = 0.f;
+		// The ground's batches in the G-buffer list, groundFirst up to groundEnd, none in any other, and the metres from
+		// the camera past which its chunks are drawn a level coarser than their size on screen asks for.
+		uint32_t groundFirst = 0;
+		uint32_t groundEnd = 0;
+		float groundLodDistance = 0.f;
 	};
 
 	namespace {
@@ -481,12 +487,14 @@ namespace SFE::Render {
 				return;
 			}
 			if (transparent) {
-				// A group and one batch a shader whatever the mesh, and another for it solid: sortGlass orders each one's
-				// instances by depth.
+				// A group and one batch a pair of shaders whatever the mesh, and another for it solid: sortGlass orders each
+				// one's instances by depth. The vertex shader the material's own (GlassPass::pipelineFor).
 				DrawGroup group;
+				group.vertexShader = material.vertexShader.empty() ? std::string(ComponentsModule::DefaultGBufferVS) : material.vertexShader;
 				group.fragmentShader = glassShader;
 				group.solid = material.solidGlass;
-				const auto index = groupFor(List::Glass, material.solidGlass ? glassShader + "|solid" : glassShader, std::move(group));
+				const auto key = group.vertexShader + '|' + glassShader;
+				const auto index = groupFor(List::Glass, material.solidGlass ? key + "|solid" : key, std::move(group));
 				addInstance(refs, entity, List::Glass, index, 0, { entity, mesh.meshId, materialIndex(), boneOffset });
 				return;
 			}
@@ -887,7 +895,7 @@ namespace SFE::Render {
 	}
 
 	uint32_t GpuScene::prepareView(View& view, const uint32_t instances, const uint32_t commands, const CullParams& params) {
-		static_assert(sizeof(CullParams) == 440);
+		static_assert(sizeof(CullParams) == 452);
 		auto* rhi = Engine::instance()->rhi();
 		if (!view.visible || view.visibleCapacity < instances) {
 			retire(view.visible);
@@ -932,6 +940,17 @@ namespace SFE::Render {
 		}
 		fillLodOrigin(params);
 		params.lodBias = view.lodBias + (list == List::Shadow ? 1u : 0u);
+		// The G-buffer only: the shadow views draw the ground a level or two coarser already.
+		if (list == List::GBuffer) {
+			for (const auto& group : data.groups) {
+				if (group.fragmentShader == AssetsModule::kTerrainFS) {
+					params.groundFirst = group.firstBatch;
+					params.groundEnd = group.firstBatch + group.batchCount;
+					params.groundLodDistance = renderSystem->getRenderData().graphics.terrainLodDistance;
+					break;
+				}
+			}
+		}
 		view.secondPhaseOffset = data.batchCount;
 		const uint32_t slot = prepareView(view, data.instanceCount, occlusion ? data.batchCount * 2 : data.batchCount, params);
 		if (!view.sets[slot]) {

@@ -177,9 +177,8 @@ GroundSample sampleTrack(vec2 p, vec2 dpdx, vec2 dpdy, vec3 viewTangent, float p
 }
 
 void main() {
-    if (sfeNearFaded(gl_FragCoord)) {
-        discard;
-    }
+    // No near fade (sfeNearFaded): the ground never comes that near the camera, and a discard would cost it the early
+    // depth test, so that it would be shaded under the trees and all else drawn before it too.
     vec2 p = TexCoords;
     vec2 dpdx = dFdx(p);
     vec2 dpdy = dFdy(p);
@@ -222,7 +221,8 @@ void main() {
     weight[kLitter] = land * (1.0 - layers.earth) * layers.litter;
     weight[kMoss] = land * layers.earth;
     // The lake bottom: silt, with mats of algae over it in patches, and stones where it is stony.
-    float algae = smoothstep(0.4, 0.62, sfeFbm(p * 0.09 + 41.0, 3)) * (1.0 - smoothstep(-1.2, -0.5, height));
+    // (Its noise worked out only below -0.5, where the depth lets any of it through.)
+    float algae = height < -0.5 ? smoothstep(0.4, 0.62, sfeFbm(p * 0.09 + 41.0, 3)) * (1.0 - smoothstep(-1.2, -0.5, height)) : 0.0;
     weight[kMud] = underwater * (1.0 - stony) * (1.0 - algae);
     weight[kMoss] += underwater * (1.0 - stony) * algae;
     weight[kRocks] = steep + underwater * stony;
@@ -271,8 +271,43 @@ void main() {
         soil = max(soil, bald + (1.0 - bald) * thin);
     }
 
+
+    // A layer outweighed by the heaviest by more than its height can make up (0.3) and the blend reaches (0.6) gets
+    // nothing of the blend below, its weight there nought: it is not sampled at all.
+    float heaviest = 0.0;
+    for (int i = 0; i < kLayers; ++i) {
+        heaviest = max(heaviest, weight[i]);
+    }
+    float least = max(0.01, heaviest - 0.9);
+    GroundSample samples[kLayers];
+    float blend[kLayers];
+    float highest = 0.0;
+    for (int i = 0; i < kLayers; ++i) {
+        blend[i] = 0.0;
+        if (weight[i] < least) {
+            continue;
+        }
+        samples[i] = i == kTrack ? sampleTrack(p, dpdx, dpdy, viewTangent, parallax, drawn)
+                                 : sampleGround(i, p, dpdx, dpdy, variation, viewTangent, parallax, drawn);
+        // Stones stand out of the mud, grass tufts out of the sand.
+        blend[i] = weight[i] + samples[i].height * 0.3;
+        highest = max(highest, blend[i]);
+    }
+    // The forest floor's roots and earth, whatever in it is not a plant's colour, grey with the trees' bark where the
+    // land is foul: the curve the trees go bare along (tintShore: VegetationSystem::wither's), the grey their bark takes
+    // (sfe_gbuffer_surface). Its green is the lighting's to tint, as all green is (deferred_shading).
+    if (weight[kLitter] >= least) {
+        float foul = clamp((areaTint.r - matrices.tintShore.x) / max(matrices.tintShore.y - matrices.tintShore.x, 1e-3),
+                           0.0, 1.0);
+        float dead = foul * foul * (3.0 - 2.0 * foul) * (1.0 - sfePlantColour(samples[kLitter].colour));
+        samples[kLitter].colour = mix(samples[kLitter].colour, vec3(sfeLuma(samples[kLitter].colour)), dead * 0.7);
+        // Round a clearing its fallen leaves dull and brown, darker: no bright orange by a camp.
+        float byClearing = 1.0 - smoothstep(3.0, 8.0, trodden.y);
+        vec3 brown = sfeLuma(samples[kLitter].colour) * vec3(1.3, 0.95, 0.6);
+        samples[kLitter].colour = mix(samples[kLitter].colour, brown, 0.6 * byClearing) * mix(1.0, 0.8, byClearing);
+    }
     // Over each material's own colour: a lighter and a darker tone in blotches, the bank darkening as it gets wet, and
-    // the road darker down its ruts.
+    // the road darker down its ruts. Worked out after the sampling, so as not to be held through it.
     vec3 tint[kLayers];
     for (int i = 0; i < kLayers; ++i) {
         tint[i] = vec3(mix(0.9, 1.08, blotch) * kBrightness);
@@ -287,34 +322,6 @@ void main() {
     // The soil darker in damp spots, where something was spilt or the shade keeps it.
     float damp = soil > 0.01 ? smoothstep(0.6, 0.75, sfeFbm(p * 0.45 + 61.0, 2)) : 0.0;
     tint[kSoil] *= mix(1.0, 0.7, damp);
-
-    GroundSample samples[kLayers];
-    float blend[kLayers];
-    float highest = 0.0;
-    for (int i = 0; i < kLayers; ++i) {
-        blend[i] = 0.0;
-        if (weight[i] < 0.01) {
-            continue;
-        }
-        samples[i] = i == kTrack ? sampleTrack(p, dpdx, dpdy, viewTangent, parallax, drawn)
-                                 : sampleGround(i, p, dpdx, dpdy, variation, viewTangent, parallax, drawn);
-        // Stones stand out of the mud, grass tufts out of the sand.
-        blend[i] = weight[i] + samples[i].height * 0.3;
-        highest = max(highest, blend[i]);
-    }
-    // The forest floor's roots and earth, whatever in it is not a plant's colour, grey with the trees' bark where the
-    // land is foul: the curve the trees go bare along (tintShore: VegetationSystem::wither's), the grey their bark takes
-    // (sfe_gbuffer_surface). Its green is the lighting's to tint, as all green is (deferred_shading).
-    if (weight[kLitter] >= 0.01) {
-        float foul = clamp((areaTint.r - matrices.tintShore.x) / max(matrices.tintShore.y - matrices.tintShore.x, 1e-3),
-                           0.0, 1.0);
-        float dead = foul * foul * (3.0 - 2.0 * foul) * (1.0 - sfePlantColour(samples[kLitter].colour));
-        samples[kLitter].colour = mix(samples[kLitter].colour, vec3(sfeLuma(samples[kLitter].colour)), dead * 0.7);
-        // Round a clearing its fallen leaves dull and brown, darker: no bright orange by a camp.
-        float byClearing = 1.0 - smoothstep(3.0, 8.0, trodden.y);
-        vec3 brown = sfeLuma(samples[kLitter].colour) * vec3(1.3, 0.95, 0.6);
-        samples[kLitter].colour = mix(samples[kLitter].colour, brown, 0.6 * byClearing) * mix(1.0, 0.8, byClearing);
-    }
     vec3 albedo = vec3(0.0);
     vec3 detailNormal = vec3(0.0);
     float roughness = 0.0;
@@ -323,7 +330,7 @@ void main() {
     float relief = 0.0;
     float total = 0.0;
     for (int i = 0; i < kLayers; ++i) {
-        if (weight[i] < 0.01) {
+        if (weight[i] < least) {
             continue;
         }
         float w = max(blend[i] - highest + 0.6, 0.0) * weight[i];

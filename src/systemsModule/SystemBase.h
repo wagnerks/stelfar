@@ -2,6 +2,7 @@
 
 #include <shared_mutex>
 #include <thread>
+#include <typeinfo>
 
 #include "ecss/Types.h"
 #include <vector>
@@ -98,7 +99,7 @@ namespace ecss {
 						return;
 					}
 				}
-			});
+			}, typeid(*this).name());
 			// A pool that is shutting down takes no task; nothing would ever clear the flag and stopAsync would wait forever.
 			if (!started.valid()) {
 				std::unique_lock failLock(mMutex);

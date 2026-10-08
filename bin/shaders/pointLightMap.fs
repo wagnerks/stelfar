@@ -14,13 +14,16 @@ float ign(vec2 p) {
 
 void main() {
     SfeMaterial material = sfeMaterials[vMaterial];
-    vec4 t = textureLod(texture_diffuse1, TexCoords, 0.0);
     float cutoff = abs(material.shadowCutoff);
-    float a = material.shadowCutoff < 0.0 ? max(t.r, t.g) : t.a;
-    a = min(a, textureLod(texture_diffuse1, TexCoords1, 0.0).a);
-    // A leaf of a plant gone that far bare (sfe_gbuffer_surface.glsl) casts no shadow either.
-    if (cutoff > 0.0 && (a < cutoff || (vPiece < material.bare && !sfeBareKeeps(pow(t.rgb, vec3(2.2)) * material.tint)))) {
-        discard;
+    // Read only for what is cut out; the second set of coordinates read again only where it is not the first's copy.
+    if (cutoff > 0.0) {
+        vec4 t = textureLod(texture_diffuse1, TexCoords, 0.0);
+        float a = material.shadowCutoff < 0.0 ? max(t.r, t.g) : t.a;
+        a = min(a, TexCoords1 == TexCoords ? t.a : textureLod(texture_diffuse1, TexCoords1, 0.0).a);
+        // A leaf of a plant gone that far bare (sfe_gbuffer_surface.glsl) casts no shadow either.
+        if (a < cutoff || (vPiece < material.bare && !sfeBareKeeps(pow(t.rgb, vec3(2.2)) * material.tint))) {
+            discard;
+        }
     }
     float opacity = clamp(material.casterOpacity, 0.0, 1.0);
     if (opacity < 0.999 && ign(gl_FragCoord.xy) > opacity) {

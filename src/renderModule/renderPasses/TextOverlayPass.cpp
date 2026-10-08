@@ -5,6 +5,7 @@
 #include "rhi/GraphicsBackend.h"
 #include "renderModule/TextRenderer.h"
 #include "systemsModule/systems/RenderSystem.h"
+#include "debugModule/Profiler.h"
 
 #include <cstdio>
 
@@ -31,16 +32,20 @@ namespace SFE::Render::RenderPasses {
 			return;
 		}
 
-		const auto* info = SystemsModule::RenderDebugInfo::instance();
+		// The GPU's work and the main thread's own (its waits for the GPU and the screen left out), and the share of the
+		// frame each takes: the one near 100% holds the frame back.
+		const auto load = SFE::Debug::Profiler::load();
 		std::snprintf(
 			mOverlayText,
 			sizeof(mOverlayText),
-			"%s | %s\nFPS: %d\nGPU: %.1f ms  CPU: %.1f ms",
+			"%s | %s\nFPS: %d\nGPU: %.1f ms %.0f%%  CPU: %.1f ms %.0f%%",
 			graphicsBackendName(activeGraphicsBackend()),
 			rhi->deviceName(),
 			Engine::instance()->getFPS(),
-			static_cast<double>(info->gpuMs),
-			static_cast<double>(info->cpuMs)
+			static_cast<double>(load.gpuMs),
+			static_cast<double>(load.gpu) * 100.0,
+			static_cast<double>(load.cpuMs),
+			static_cast<double>(load.cpu) * 100.0
 		);
 
 		const auto fb = renderDataHandle.frame.framebuffer(FrameId::Final);

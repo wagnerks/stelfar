@@ -299,6 +299,10 @@ namespace SFE::Render {
 		for (const auto& retired : m_retiredBuffers) {
 			vmaDestroyBuffer(m_allocator, retired.buffer, retired.allocation);
 		}
+		for (auto& retired : m_retiredTextures) {
+			destroyTextureInternal(retired.texture);
+		}
+		m_retiredTextures.clear();
 		m_retiredBuffers.clear();
 		m_transientBuffer = {};
 		m_transientRegion = 0;
@@ -481,7 +485,9 @@ namespace SFE::Render {
 			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
 
-		const bool useValidation = debugUtils && hasInstanceLayer("VK_LAYER_KHRONOS_validation");
+		// The validation layer only when asked for (STELFORGE_VALIDATION=1): on wherever the SDK is installed, it made the
+		// main thread several times slower.
+		const bool useValidation = debugUtils && std::getenv("STELFORGE_VALIDATION") && hasInstanceLayer("VK_LAYER_KHRONOS_validation");
 		const char* layers[] = { "VK_LAYER_KHRONOS_validation" };
 		auto debugInfo = makeDebugMessengerInfo();
 
@@ -612,6 +618,10 @@ namespace SFE::Render {
 		// the ones that do not draw the wrong instances with no diagnostic outside validation.
 		if (supportedFeatures.drawIndirectFirstInstance) {
 			deviceFeatures.drawIndirectFirstInstance = VK_TRUE;
+		}
+		// A fragment shader that writes a storage buffer: bloom_extract.fs telling the next frames it saw a glare.
+		if (supportedFeatures.fragmentStoresAndAtomics) {
+			deviceFeatures.fragmentStoresAndAtomics = VK_TRUE;
 		}
 
 		VkPhysicalDeviceDepthClipControlFeaturesEXT depthClipControl{
@@ -925,11 +935,11 @@ namespace SFE::Render {
 			uint64_t stamps[kMaxGpuMarks]{};
 			if (vkGetQueryPoolResults(m_device, m_markPool, m_currentFrame * kMaxGpuMarks, marks, sizeof(uint64_t) * marks, stamps,
 				sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
-				for (uint32_t i = 0; i < kMaxGpuMarks; ++i) {
-					m_markMs[i] = i + 1 < marks
-						? static_cast<double>((stamps[i + 1] - stamps[i]) & validMask) * static_cast<double>(m_timestampPeriod) / 1'000'000.0
-						: 0.0;
+				double atMs[kMaxGpuMarks]{};
+				for (uint32_t i = 0; i < marks; ++i) {
+					atMs[i] = static_cast<double>((stamps[i] - stamps[0]) & validMask) * static_cast<double>(m_timestampPeriod) / 1'000'000.0;
 				}
+				publishGpuSpans(m_markLabels[m_currentFrame], atMs, marks);
 			}
 		}
 		if (m_timestampPool == VK_NULL_HANDLE || !m_timestampPending[m_currentFrame]) {

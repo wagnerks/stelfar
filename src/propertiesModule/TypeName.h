@@ -15,6 +15,7 @@
 #include "componentsModule/WaterComponent.h"
 #include "componentsModule/AudioSourceComponent.h"
 #include "componentsModule/WindComponent.h"
+#include "componentsModule/ShelterComponent.h"
 
 namespace SFE::PropertiesModule {
 #define TYPE_NAME(type)									\
@@ -49,5 +50,6 @@ namespace SFE::PropertiesModule {
 	TYPE_NAME(TerrainComponent);
 	TYPE_NAME(WaterComponent);
 	TYPE_NAME(WindComponent);
+	TYPE_NAME(ShelterComponent);
 	TYPE_NAME(AudioSourceComponent);
 }

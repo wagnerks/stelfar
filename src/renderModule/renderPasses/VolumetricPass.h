@@ -23,8 +23,8 @@ namespace SFE::Render::RenderPasses {
 		};
 
 		Params mParams;
-		TextureHandle mHalfTex{};
-		FramebufferHandle mHalfFbo{};
+		TextureHandle mMarchTex{};
+		FramebufferHandle mMarchFbo{};
 		TextureHandle mColor{};
 		FramebufferHandle mFbo{};
 		SamplerHandle mLinear{};

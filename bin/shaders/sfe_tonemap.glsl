@@ -36,10 +36,10 @@ vec3 agxToDisplay(vec3 color) {
     float saturation = params.saturation;
     // The time of day: a low sun warms the lights and leaves the shade cool, midday is as it is, and after dusk the
     // colour drains out of everything towards blue.
-    if (params.grade.y > 0.0) {
-        float sunY = params.grade.x;
-        float golden = (1.0 - smoothstep(0.04, 0.45, sunY)) * smoothstep(-0.12, 0.02, sunY) * params.grade.y;
-        float night = (1.0 - smoothstep(-0.14, 0.02, sunY)) * params.grade.y;
+    if (params.extra.z > 0.0) {
+        float sunY = params.sunHeight;
+        float golden = (1.0 - smoothstep(0.04, 0.45, sunY)) * smoothstep(-0.12, 0.02, sunY) * params.extra.z;
+        float night = (1.0 - smoothstep(-0.14, 0.02, sunY)) * params.extra.z;
         float lights = smoothstep(0.25, 0.85, luma);
         color += (vec3(0.05, 0.015, -0.045) * lights - vec3(0.02, 0.0, -0.03) * (1.0 - lights)) * golden;
         color += vec3(-0.015, 0.0, 0.03) * night * (1.0 - lights);
@@ -58,7 +58,7 @@ float exposureScale() {
         return 1.0;
     }
     float adapted = exp(texture(adaptation, vec2(0.5)).r);
-    return clamp(kExposureKey / max(adapted, 1e-4), 0.35, 8.0);
+    return clamp(kExposureKey / max(adapted, 1e-4), 0.35, 8.0) * params.extra.y;
 }
 
 // `gain` the white balance times the exposure: the same for every pixel and every tap, so worked out once.

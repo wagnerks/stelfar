@@ -561,6 +561,9 @@ namespace SFE::Render
 	void OpenGLRHI::cmdBindPipeline(CommandListHandle cmd, PipelineHandle pipeline)
 	{
 		if (GLCommandList* list = recordingList(cmd)) {
+			if (const auto* gp = getLive(m_pipelines, pipeline.id)) {
+				pipelineBound(cmd, gp->label);
+			}
 			list->commands.emplace_back(CmdBindPipeline{ pipeline });
 		}
 	}
@@ -623,6 +626,10 @@ namespace SFE::Render
 		else {
 			glDisable(GL_BLEND);
 		}
+
+		// colour: none for a depth-only pipeline
+		const GLboolean colorWrite = gp.desc.colorWrite ? GL_TRUE : GL_FALSE;
+		glColorMask(colorWrite, colorWrite, colorWrite, colorWrite);
 
 		m_currentPipeline = pipeline;
 	}
@@ -954,8 +961,12 @@ namespace SFE::Render
 				execPipelineBarrier(recorded.barrier);
 			}
 			else if constexpr (std::is_same_v<T, CmdGpuMark>) {
-				glQueryCounter(mGpuMarkQueries[mGpuMarkWrite][recorded.mark], GL_TIMESTAMP);
-				mGpuMarkCount[mGpuMarkWrite] = (std::max)(mGpuMarkCount[mGpuMarkWrite], recorded.mark + 1);
+				auto& count = mGpuMarkCount[mGpuMarkWrite];
+				if (count < (recorded.endsPass ? kMaxGpuMarks : kGpuShaderMarks)) {
+					glQueryCounter(mGpuMarkQueries[mGpuMarkWrite][count], GL_TIMESTAMP);
+					mGpuMarkLabels[mGpuMarkWrite][count] = { recorded.label, recorded.endsPass };
+					++count;
+				}
 			}
 		}, command);
 	}
@@ -1019,14 +1030,16 @@ namespace SFE::Render
 			if (count > 1) {
 				glGetQueryObjectuiv(mGpuMarkQueries[mGpuMarkWrite][count - 1], GL_QUERY_RESULT_AVAILABLE, &available);
 			}
-			GLuint64 previous = 0;
+			GLuint64 first = 0;
+			double atMs[kMaxGpuMarks]{};
 			for (uint32_t mark = 0; available && mark < count; ++mark) {
 				GLuint64 ns = 0;
 				glGetQueryObjectui64v(mGpuMarkQueries[mGpuMarkWrite][mark], GL_QUERY_RESULT, &ns);
-				if (mark > 0) {
-					mGpuMarkMs[mark - 1] = static_cast<double>(ns - previous) / 1'000'000.0;
-				}
-				previous = ns;
+				first = mark == 0 ? ns : first;
+				atMs[mark] = static_cast<double>(ns - first) / 1'000'000.0;
+			}
+			if (available) {
+				publishGpuSpans(mGpuMarkLabels[mGpuMarkWrite], atMs, count);
 			}
 			count = 0;
 		}
@@ -1274,6 +1287,8 @@ namespace SFE::Render
 		glDepthRange(0.f, 1.f);
 		m_currentPassHeight = h;
 		glDisable(GL_SCISSOR_TEST);
+		// The clears obey the colour mask, which a depth-only pipeline (GraphicsPipelineDesc::colorWrite) leaves off.
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
 		// --- Clear color attachments (если loadOp == Clear) ---
 		for (uint32_t i = 0; i < rp.desc.colorAttachmentCount; ++i)
@@ -1701,6 +1716,9 @@ namespace SFE::Render
 
 		PipelineHandle handle;
 		gp.live = true;
+		const auto* vertex = getLive(m_shaders, desc.shaders.vertex.id);
+		const auto* fragment = getLive(m_shaders, desc.shaders.fragment.id);
+		gp.label = pipelineLabel(vertex ? vertex->desc.name : std::string(), fragment ? fragment->desc.name : std::string());
 		handle.id = storeResource(m_pipelines, m_freePipelines, std::move(gp));
 
 		return handle;
@@ -1727,6 +1745,7 @@ namespace SFE::Render
 		gp.programId = program;
 		gp.isCompute = true;
 		gp.computeShader = desc.compute;
+		gp.label = pipelineLabel(mod->desc.name);
 		gp.live = true;
 
 		PipelineHandle handle;
@@ -2726,10 +2745,10 @@ namespace SFE::Render
 		}
 	}
 
-	void OpenGLRHI::cmdGpuMark(CommandListHandle cmd, uint32_t mark)
+	void OpenGLRHI::writeGpuMark(CommandListHandle cmd, const char* label, const bool endsPass)
 	{
-		if (GLCommandList* list = recordingList(cmd); list && mark < kMaxGpuMarks && mGpuMarkQueries[0][0]) {
-			list->commands.emplace_back(CmdGpuMark{ mark });
+		if (GLCommandList* list = recordingList(cmd); list && mGpuMarkQueries[0][0]) {
+			list->commands.emplace_back(CmdGpuMark{ label, endsPass });
 		}
 	}
 

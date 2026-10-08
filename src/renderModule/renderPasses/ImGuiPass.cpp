@@ -4,6 +4,7 @@
 #include "backends/imgui_impl_glfw.h"
 #include "core/Engine.h"
 #include "debugModule/imguiDecorator.h"
+#include "debugModule/Profiler.h"
 #include "imgui.h"
 #include "systemsModule/GraphicsSettingsGui.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -113,6 +114,7 @@ namespace SFE::Render::RenderPasses {
 			}
 			ImGui::End();
 		}
+		Debug::Profiler::drawWindow();
 		ImGui::Render();
 
 		// The frame is built either way, since windows elsewhere call into ImGui every frame and would find no

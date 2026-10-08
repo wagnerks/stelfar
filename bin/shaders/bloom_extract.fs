@@ -6,6 +6,15 @@ layout(location = 0) in vec2 TexCoords;
 
 layout(SFE_SET(0, 0)) uniform sampler2D inputTexture;
 
+// The frame a glare source (kGlare) was last seen in, counted as params.extra.w counts this one's (modulo kGlareFrames).
+layout(SFE_SET(0, 16), std430) buffer GlareSeen {
+    uint glareSeenAt;
+};
+
+// What is far brighter than anything lit: a glint mirroring the sun (kSfeGlint).
+const float kGlare = 60.0;
+const uint kGlareFrames = 1u << 20;
+
 void main() {
     vec2 texel = 1.0 / vec2(textureSize(inputTexture, 0));
     vec3 acc = vec3(0.0);
@@ -47,10 +56,16 @@ void main() {
         float onScreen = (1.0 - smoothstep(0.7, 1.0, max(off.x, off.y))) * (1.0 - smoothstep(0.0, 0.25, beyond));
         filtered += gathered / max(total, 1e-4) * params.extra.x * onScreen / params.bloomStrength;
     }
-    // A glare: what is far brighter than anything lit (a glint mirroring the sun, kSfeGlint) throws a star of rays
-    // well past the glow, a flash that blinds. Nothing else in a frame comes near that bright, so elsewhere it is nothing.
-    if (params.bloomStrength > 0.0) {
-        const float kGlare = 60.0;
+    // A glare: what is far brighter than anything lit (kGlare) throws a star of rays well past the glow, a flash that
+    // blinds. Nothing else in a frame comes near that bright, so elsewhere it is nothing -- and most frames have no
+    // source at all, while its rays cost most of this pass. So a source tells the frames after it, and the rays are
+    // gathered only in the two after one was seen: they read the input on the same texels as this pixel's own (its
+    // middle), stepped a pixel of this target at a time, so where no pixel's own was that bright they gather nothing.
+    uint frame = uint(params.extra.w);
+    if (any(greaterThan(texture(inputTexture, TexCoords).rgb, vec3(kGlare)))) {
+        glareSeenAt = frame;
+    }
+    if (params.bloomStrength > 0.0 && ((frame - glareSeenAt) & (kGlareFrames - 1u)) <= 2u) {
         vec3 star = vec3(0.0);
         // Four rays, a cross; a step of four texels is one of this target's.
         const vec2 dirs[4] = vec2[](vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));

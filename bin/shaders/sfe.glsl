@@ -68,11 +68,21 @@ float sfeInterleavedGradientNoise(vec2 p, uint frame) {
     return float(outer >> 8u) / 16777216.0;
 }
 
+// A pattern that stands still and still leaves no grain: each texel of a 4x4 block takes its own sixteenth, in an order
+// that spreads neighbours apart (Bayer), and a blur over exactly one block (sfe_block_blur.glsl) puts the sixteen back
+// together. x the sixteenth itself, (index + 0.5) / 16; y the golden ratio's sequence over the same, in another order.
+vec2 sfeBlockNoise(vec2 fragCoord) {
+    const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    ivec2 cell = ivec2(fragCoord) & 3;
+    float index = BAYER[cell.y * 4 + cell.x];
+    return vec2((index + 0.5) / 16.0, fract(0.5 + index * 0.618034));
+}
+
 // What is right at the camera fades out towards the near plane rather than being cut off by it: over the first
 // SFE_NEAR_FADE of the near distance past it, more of its pixels dropped in a dither the nearer it is. Measured off
 // the depth buffer's own value: with the far plane far off, a depth z is near / (1 - z) away, so (distance - near) /
 // near is z / (1 - z) -- whatever the near plane is, and with no matrices. Every surface drawn into the view asks it
-// first thing.
+// first thing, but the ground (g_buffer_terrain.fs).
 const float SFE_NEAR_FADE = 0.2;
 bool sfeNearFaded(vec4 fragCoord) {
     float past = fragCoord.z / max(1.0 - fragCoord.z, 1e-6);

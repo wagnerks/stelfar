@@ -473,6 +473,9 @@ namespace SFE::Render
 		PolygonFillMode			fillMode = PolygonFillMode::Fill;
 		DepthStencilStateDesc	depthStencilState;
 		BlendStateDesc			blend;
+		// False: nothing reaches the colour attachments, only the depth -- a depth pre-pass inside a pass that has them.
+		// A fragment shader with no colour outputs does not leave them as they were: what it writes there is undefined.
+		bool					colorWrite = true;
 
 		// For openGL backend it can be ignored.
 		// For Vulkan backend: which render pass and subpass this pipeline is compatible with.
@@ -735,11 +738,23 @@ namespace SFE::Render
 		virtual void submit(CommandListHandle list) = 0;
 		virtual void present() = 0;
 		virtual double lastGpuMs() const { return 0.0; }
-		// GPU time between marks a frame writes into its command lists, from the latest frame the GPU has finished:
-		// gpuMarkMs(i) runs from mark i to mark i + 1. Zero where the backend has no timestamps.
-		static constexpr uint32_t kMaxGpuMarks = 32;
-		virtual void cmdGpuMark(CommandListHandle, uint32_t) {}
-		virtual double gpuMarkMs(uint32_t) const { return 0.0; }
+		// GPU timestamps through a frame, each the end of a span of its work and the start of the next. A mark names the
+		// span it ends: a render pass when `endsPass`, nullptr the rest of a pass between what is named; the frame's first
+		// mark ends nothing. While gpuShaderMarks is on, a backend also marks each change of pipeline, the span before it
+		// named by the pipeline drawn with (pipelineLabel: "animal.vs | g_buffer_animal.fs"). Labels must outlive the
+		// program. gpuSpans() has the spans of the latest frame the GPU finished, in order, none where the backend has no
+		// timestamps. Main thread, as the frame is recorded.
+		struct GpuSpan {
+			const char* label = nullptr;
+			bool endsPass = false;
+			double ms = 0.0;
+		};
+		static constexpr uint32_t kMaxGpuMarks = 512;
+		void cmdGpuMark(CommandListHandle cmd, const char* label, bool endsPass);
+		const std::vector<GpuSpan>& gpuSpans() const { return mGpuSpans; }
+		// Marks by pipeline cost the GPU a timestamp at each change of one and OpenGL the CPU a read of each; off, a frame
+		// has a mark a pass.
+		std::atomic<bool> gpuShaderMarks{ false };
 		// The GPU this backend picked, as the driver names it. Empty before the device exists.
 		virtual const char* deviceName() const { return ""; }
 		// Exact readback of one colour texture -- full resolution, no rescale, converted to RGBA8
@@ -778,6 +793,21 @@ namespace SFE::Render
 	protected:
 		RhiSurface hostSurface() const { return m_host ? m_host->surface() : RhiSurface{}; }
 		bool hostPresentsToScreen() const { return m_host && m_host->presentToScreen(); }
+		// A backend's own mark: a timestamp, its label kept with it until the frame's times are read (cmdGpuMark).
+		virtual void writeGpuMark(CommandListHandle, const char* /*label*/, bool /*endsPass*/) {}
+		// A backend calls it as a pipeline is bound, with the pipeline's label.
+		void pipelineBound(CommandListHandle cmd, const char* label);
+		// What a pipeline is called in the GPU's spans: its shaders' names without their folders, kept for good.
+		static const char* pipelineLabel(std::string_view first, std::string_view second = {});
+		// What a backend keeps of a mark until the frame's timestamps are read back.
+		struct GpuMarkLabel {
+			const char* label = nullptr;
+			bool endsPass = false;
+		};
+		// Past this many a frame no more marks by pipeline, so the passes' own marks still fit.
+		static constexpr uint32_t kGpuShaderMarks = kMaxGpuMarks - 64;
+		// The spans of a frame the GPU finished, from its marks' labels and their times in ms.
+		void publishGpuSpans(const GpuMarkLabel* labels, const double* atMs, uint32_t count);
 		// Backends call these where a texture or buffer is created and where it is finally released.
 		void trackTextureMemory(const TextureDesc& desc, const bool created) {
 			const auto kind = (desc.usage & TextureUsage::DepthStencilAttachment) ? MemoryKind::Depth
@@ -798,6 +828,9 @@ namespace SFE::Render
 
 	private:
 		RhiHost* m_host = nullptr;
+		std::vector<GpuSpan> mGpuSpans;
+		const char* mMarkedShader = nullptr; // the pipeline drawn with since the last mark, marked by pipeline
+		CommandListHandle mMarkedList{};     // the list the marks go in: pipelines bound in others are not marked
 
 	};
 }

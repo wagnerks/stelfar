@@ -7,6 +7,7 @@
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
 #include "assetsModule/modelModule/ModelLoader.h"
+#include "assetsModule/modelModule/Terrain.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/MaterialTextures.h"
 #include "renderModule/Utils.h"
@@ -31,6 +32,13 @@
 #include "systemsModule/SystemsPriority.h"
 
 using namespace SFE::Render::RenderPasses;
+
+namespace {
+	// The foliage pre-pass (drawGBuffer): g_buffer_masked.fs's cut alone, into the depth, and then the surface shaded
+	// where that depth is its own. All three are sfe_gbuffer_masked.glsl, so they cut alike.
+	constexpr const char* kMaskedDepthFS = "shaders/g_buffer_masked_depth.fs";
+	constexpr const char* kMaskedEarlyFS = "shaders/g_buffer_masked_early.fs";
+}
 
 void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	if (mInited) {
@@ -406,13 +414,30 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 	PipelineHandle bound{};
 	auto& scene = renderSystem->scene();
 	// Solid surfaces first, cut-out ones (leaves, grass cards) after: a discarding shader turns early depth testing off,
-	// so a leaf hidden behind a trunk or the ground is only rejected before shading if their depth is already there.
-	for (const bool cutoutPass : { false, true })
+	// so a leaf hidden behind a trunk is only rejected before shading if the trunk's depth is already there. The ground
+	// last of all: it covers most of the view and costs the most a pixel, and where what stands on it hides it, it is
+	// then rejected before it is shaded.
+	// With the foliage pre-pass (GraphicsSettings::foliagePrepass) the leaves of g_buffer_masked.fs lay their depth
+	// after the solid surfaces, with nothing but their cut, and are then shaded only where that depth is their own:
+	// once a pixel, rather than once for every leaf card over it. Other cut-out surfaces cut in shaders of their own,
+	// which a pre-pass would have to match exactly, so they are drawn as before; and so is wireframe.
+	const bool prepass = renderSystem->getRenderData().graphics.foliagePrepass > 0.5f && fillMode == PolygonFillMode::Fill;
+	enum class Turn { Solid, Prepass, Cutout, Ground };
+	for (const auto turn : { Turn::Solid, Turn::Prepass, Turn::Cutout, Turn::Ground })
 	for (const auto& group : scene.groups(GpuScene::List::GBuffer)) {
-		if (group.batchCount == 0 || group.cutout != cutoutPass) {
+		const bool laid = prepass && group.cutout && group.vertexShader == ComponentsModule::DefaultGBufferVS
+			&& group.fragmentShader == ComponentsModule::DefaultGBufferMaskedFS;
+		const auto its = group.fragmentShader == AssetsModule::kTerrainFS ? Turn::Ground : group.cutout ? Turn::Cutout : Turn::Solid;
+		if (group.batchCount == 0 || (its != turn && !(laid && turn == Turn::Prepass))) {
 			continue;
 		}
-		const auto pipeline = getGBufferPipeline(group.vertexShader, group.fragmentShader, fillMode);
+		// Textures let go of (the model's, AssetsModule::releaseModel): nothing of the group is left to draw, and its
+		// set, written with them, is not bound.
+		if (!texturesLive(group.textures)) {
+			continue;
+		}
+		const auto pipeline = getGBufferPipeline(group.vertexShader,
+			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode);
 		if (pipeline.id != bound.id) {
 			bound = pipeline;
 			rhi->cmdBindPipeline(cmd, pipeline);
@@ -455,6 +480,20 @@ SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& 
 	desc.shaders.vertex = vert;
 	desc.shaders.fragment = frag;
 	desc.fillMode = fillMode;
+	// The ground is a height field seen from above: wherever one of its back faces is in view, a front face of it is
+	// nearer. Left out, they are not rasterised, nor shaded for nothing where they come first.
+	if (fs == AssetsModule::kTerrainFS) {
+		desc.cullMode = CullMode::Back;
+	}
+	// The foliage pre-pass (drawGBuffer): the cut into the depth alone; then the leaves shaded over it where it is
+	// exactly theirs, tested before they are shaded (g_buffer_masked_early.fs), the depth left as it is.
+	if (fs == kMaskedDepthFS) {
+		desc.colorWrite = false;
+	}
+	else if (fs == kMaskedEarlyFS) {
+		desc.depthStencilState.depthWrite = false;
+		desc.depthStencilState.depthCompareOp = CompareOp::Equal;
+	}
 	const auto pipeline = rhi->createGraphicsPipeline(desc);
 	mGBufferPipelines.emplace(key, pipeline);
 	return pipeline;

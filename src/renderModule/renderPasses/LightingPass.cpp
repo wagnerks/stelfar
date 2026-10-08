@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "componentsModule/LightSourceComponent.h"
 #include "componentsModule/ModelComponent.h"
+#include "componentsModule/ShelterComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
@@ -18,6 +19,7 @@
 #include "debugModule/Benchmark.h"
 #include "ecss/Registry.h"
 #include "systemsModule/SystemsPriority.h"
+#include "renderModule/renderPasses/SunShadowPass.h"
 
 using namespace SFE::Render::RenderPasses;
 
@@ -43,6 +45,7 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 	texLayoutDesc.bindings.emplace_back(7, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(8, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(9, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	texLayoutDesc.bindings.emplace_back(10, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(12, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(13, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(14, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
@@ -189,6 +192,47 @@ void LightingPass::resize(SystemsModule::RenderData& renderDataHandle) {
 	renderDataHandle.frame.set(FrameId::Final, { .texture = mPresentTex[0], .sampler = mPresentSampler, .framebuffer = mPresentFbo[0] });
 }
 
+void LightingPass::fillCascadedShadows(const SystemsModule::RenderData& renderDataHandle, const CsmFrame& csm,
+	CascadedShadowBlock& block) {
+	block.direction_intensity.xyz = csm.lightDirection;
+	block.direction_intensity.w = csm.shadowsIntensity;
+	block.color_and_misc.xyz = csm.lightColor;
+	block.color_and_misc.w = static_cast<float>(csm.shadowCascades.size());
+
+	for (size_t i = 0; i < csm.shadowCascades.size(); ++i) {
+		auto& cascade = csm.shadowCascades[i];
+		auto& cascadeRenderData = block.data[i];
+
+		const float invRes = 1.f / (std::max)(1.f, csm.resolution.x);
+		cascadeRenderData.cascade.x = invRes;
+		// y carried max(texelSize.x, invRes), but texelSize is never filled for cascades and no
+		// shader read the slot -- it held a duplicate of x. It now carries the world size of one
+		// shadow-map texel, which is what the normal-offset bias needs.
+		cascadeRenderData.cascade.y = cascade.worldPerTexel;
+		// bias is authored in depth units. That means very different world distances per
+		// cascade (worldPerTexel and depthRange differ by ~40x between the near and far one),
+		// which is worth revisiting -- but converting it to texel-relative units changes the
+		// picture on both backends, so it is not a standalone fix.
+		cascadeRenderData.cascade.z = std::isfinite(cascade.bias) ? cascade.bias : 0.f;
+		cascadeRenderData.cascade.w = static_cast<float>(cascade.samples);
+		cascadeRenderData.cascadeExtra.x = cascade.depthRange;
+		cascadeRenderData.cascadeExtra.y = renderDataHandle.graphics.shadowSunWidth;
+		cascadeRenderData.cascadeExtra.z = renderDataHandle.graphics.shadowPenumbraMost;
+	}
+
+	const auto& levels = csm.shadowCascadeLevels;
+	auto splitAt = [&levels](size_t i) {
+		return (i < levels.size()) ? levels[i] : 1.0e6f;
+	};
+	block.cascadeSplits = {
+		splitAt(1), splitAt(2), splitAt(3), splitAt(4)
+	};
+	block.cascadeSplits2 = {
+		splitAt(5), splitAt(6), 1.0e6f,
+		ECSHandler::getSystem<SystemsModule::RenderSystem>()->isShadowsDebugData() ? 1.f : 0.f
+	};
+}
+
 void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	assert(mTexSetInitialized);
 	updateSkyLight(renderDataHandle);
@@ -251,44 +295,7 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 		drawData.cascadeCount = static_cast<int>(csm->shadowCascades.size());
 		drawData.shadowIntensity = csm->shadowsIntensity;
 
-		cascadedShadowData.direction_intensity.xyz = csm->lightDirection;
-		cascadedShadowData.direction_intensity.w = csm->shadowsIntensity;
-		cascadedShadowData.color_and_misc.xyz = csm->lightColor;
-		cascadedShadowData.color_and_misc.w = static_cast<float>(drawData.cascadeCount);
-	
-		for (size_t i = 0; i < csm->shadowCascades.size(); ++i) {
-			auto& cascade = csm->shadowCascades[i];
-			auto& cascadeRenderData = cascadedShadowData.data[i];
-
-			const float invRes = 1.f / (std::max)(1.f, csm->resolution.x);
-			cascadeRenderData.cascade.x = invRes;
-			// y carried max(texelSize.x, invRes), but texelSize is never filled for cascades and no
-			// shader read the slot -- it held a duplicate of x. It now carries the world size of one
-			// shadow-map texel, which is what the normal-offset bias needs.
-			cascadeRenderData.cascade.y = cascade.worldPerTexel;
-			// bias is authored in depth units. That means very different world distances per
-			// cascade (worldPerTexel and depthRange differ by ~40x between the near and far one),
-			// which is worth revisiting -- but converting it to texel-relative units changes the
-			// picture on both backends, so it is not a standalone fix.
-			cascadeRenderData.cascade.z = std::isfinite(cascade.bias) ? cascade.bias : 0.f;
-			cascadeRenderData.cascade.w = static_cast<float>(cascade.samples);
-			cascadeRenderData.cascadeExtra.x = cascade.depthRange;
-			cascadeRenderData.cascadeExtra.y = renderDataHandle.graphics.shadowSunWidth;
-			cascadeRenderData.cascadeExtra.z = renderDataHandle.graphics.shadowPenumbraMost;
-		}
-
-		const auto& levels = csm->shadowCascadeLevels;
-		auto splitAt = [&levels](size_t i) {
-			return (i < levels.size()) ? levels[i] : 1.0e6f;
-		};
-		cascadedShadowData.cascadeSplits = {
-			splitAt(1), splitAt(2), splitAt(3), splitAt(4)
-		};
-		cascadedShadowData.cascadeSplits2 = {
-			splitAt(5), splitAt(6), 1.0e6f,
-			ECSHandler::getSystem<SystemsModule::RenderSystem>()->isShadowsDebugData() ? 1.f : 0.f
-		};
-
+		fillCascadedShadows(renderDataHandle, *csm, cascadedShadowData);
 	}
 
 	drawData.fogEnd = Engine::instance()->getWindow()->getScreenData().far;
@@ -323,6 +330,16 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	else {
 		drawData.tintArea = {};
 	}
+	int shelters = 0;
+	for (const auto& [id, shelter, transform] : ECSHandler::registry().view<const ShelterComponent, const TransformComponent>()) {
+		if (shelter && transform && shelters < DrawData::kMostShelters) {
+			auto& to = drawData.shelters[shelters++];
+			to.toLocal = Math::inverseAffine(transform->getTransform());
+			to.box = { shelter->size.x, shelter->size.y, shelter->size.z, shelter->eaves };
+			to.sky = { shelter->sky, 0.f, 0.f, 0.f };
+		}
+	}
+	drawData.shelterCount = static_cast<float>(shelters);
 
 	// Every block every frame: a dynamic binding needs this frame's offset even when its data did not change.
 	static const std::vector<Math::Mat4> noMatrices;
@@ -414,6 +431,7 @@ void LightingPass::updateTextures(SystemsModule::RenderData& renderDataHandle, R
 		}
 		addImage(3, ssaoTex, ssaoSampler, slotSets.ssao);
 	}
+	addImage(10, frame.texture(SunShadowPass::kMask), frame.sampler(SunShadowPass::kMask), slotSets.sunShadow);
 
 	{
 		// The cloud layer, for the shadows the clouds lay over the ground.

@@ -36,6 +36,18 @@ namespace SFE::Render
 		VkDeviceSize size = 0;
 	};
 
+	// A texture's region written through the frame's upload ring, as a device-local buffer's is (queueTextureUpload).
+	struct PendingTextureUpload {
+		uint32_t dstId = UINT32_MAX;
+		VkDeviceSize srcOffset = 0;
+		uint32_t x = 0;
+		uint32_t y = 0;
+		uint32_t w = 0;
+		uint32_t h = 0;
+		uint32_t mip = 0;
+		uint32_t layer = 0;
+	};
+
 	struct VkTextureResource {
 		VkImage image = VK_NULL_HANDLE;
 		VmaAllocation allocation = VK_NULL_HANDLE;
@@ -103,6 +115,7 @@ namespace SFE::Render
 		GraphicsPipelineDesc desc{};
 		ComputePipelineDesc computeDesc{};
 		RenderPassHandle ownedRenderPass{};
+		const char* label = nullptr; // in the GPU's spans (pipelineLabel)
 		bool isCompute = false;
 		uint32_t generation = 0;
 		bool live = false;
@@ -199,8 +212,7 @@ namespace SFE::Render
 		void submit(CommandListHandle list) override;
 		void present() override;
 		double lastGpuMs() const override { return mLastGpuMs; }
-		void cmdGpuMark(CommandListHandle cmd, uint32_t mark) override;
-		double gpuMarkMs(uint32_t mark) const override { return mark < kMaxGpuMarks ? m_markMs[mark] : 0.0; }
+		void writeGpuMark(CommandListHandle cmd, const char* label, bool endsPass) override;
 		const char* deviceName() const override { return m_deviceName.c_str(); }
 		void updateTexture(TextureHandle tex, uint32_t x, uint32_t y, uint32_t w, uint32_t h, TextureFormat fmt, const void* data, uint32_t mip, uint32_t layer) override;
 		void updateCubeFace(TextureHandle tex, uint32_t face, uint32_t mip, const void* data) override;
@@ -296,6 +308,9 @@ namespace SFE::Render
 		void destroyTimestampQueries();
 		void collectGpuTimestamp();
 		void queueBufferUpload(uint32_t bufferId, size_t offset, size_t size, const void* data);
+		bool queueTextureUpload(uint32_t textureId, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t mip, uint32_t layer,
+			const void* data, size_t size);
+		void recordTextureUploads(VkCommandBuffer cmd);
 		void flushBufferUploads(VkCommandBuffer cmd);
 
 		void createInstance();
@@ -392,10 +407,10 @@ namespace SFE::Render
 		static constexpr uint32_t kTimestampsPerFrame = 2;
 		static constexpr VkDeviceSize kUploadRingSize = 8 * 1024 * 1024;
 		VkQueryPool m_timestampPool = VK_NULL_HANDLE;
-		// cmdGpuMark's timestamps: kMaxGpuMarks a frame slot, how many the slot's frame wrote, and the times between.
+		// cmdGpuMark's timestamps: kMaxGpuMarks a frame slot, how many the slot's frame wrote, and what each one ends.
 		VkQueryPool m_markPool = VK_NULL_HANDLE;
 		uint32_t m_markCount[kMaxFramesInFlight]{};
-		double m_markMs[kMaxGpuMarks]{};
+		GpuMarkLabel m_markLabels[kMaxFramesInFlight][kMaxGpuMarks]{};
 		float m_timestampPeriod = 0.f;
 		uint32_t m_timestampValidBits = 0;
 		bool m_timestampPending[kMaxFramesInFlight]{};
@@ -412,6 +427,12 @@ namespace SFE::Render
 			int waitsLeft = 0;
 		};
 		std::vector<RetiredBuffer> m_retiredBuffers;
+		// Destroyed textures, the same way: a set an in-flight frame binds may still hold the image.
+		struct RetiredTexture {
+			VkTextureResource texture;
+			int waitsLeft = 0;
+		};
+		std::vector<RetiredTexture> m_retiredTextures;
 		// updateDescriptorSets' working storage. Where each accepted write's infos begin: the pointers are filled
 		// in only after every push_back, since an array descriptor pushes several infos and the vectors can grow.
 		struct DescriptorWriteScratch {
@@ -445,6 +466,7 @@ namespace SFE::Render
 		VkDeviceSize m_uploadRingUsed = 0;
 		bool m_uploadsFlushed = false;
 		std::vector<PendingBufferUpload> m_uploadOps;
+		std::vector<PendingTextureUpload> m_textureUploadOps;
 
 		std::vector<VkSemaphore> m_imageAvailableSemaphores;
 		std::vector<VkSemaphore> m_renderFinishedSemaphores;

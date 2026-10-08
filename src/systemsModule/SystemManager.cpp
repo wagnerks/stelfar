@@ -3,6 +3,7 @@
 
 #include "systemsModule/SystemBase.h"
 #include "debugModule/Benchmark.h"
+#include "debugModule/Profiler.h"
 
 #include <algorithm>
 #include <atomic>
@@ -85,11 +86,16 @@ namespace ecss {
 			worker->system = system;
 			worker->next = Clock::now();
 			auto* raw = worker.get();
+			size_t number = 0;
 			{
 				std::lock_guard lock(mWorkersMutex);
 				mWorkers.push_back(std::move(worker));
+				number = mWorkers.size();
 			}
-			raw->thread = std::thread([raw] { work(*raw); });
+			raw->thread = std::thread([raw, number] {
+				SFE::Debug::Profiler::nameThread("Tick", static_cast<int>(number));
+				work(*raw);
+			});
 			if (!mThread.joinable()) {
 				mThread = std::thread([this] { schedule(); });
 			}
@@ -121,6 +127,7 @@ namespace ecss {
 				}
 				const float step = 1.f / worker.system->getTicks();
 				for (int i = 0; i < owed; ++i) {
+					SFE_PROFILE_ZONE(typeid(*worker.system).name());
 					worker.system->update(step);
 				}
 			}
@@ -204,15 +211,18 @@ namespace ecss {
 			const float step = 1.f / ticked.system->getTicks();
 			ticked.accumulated += dt;
 			while (ticked.accumulated >= step) {
+				SFE_PROFILE_ZONE(typeid(*ticked.system).name());
 				ticked.system->update(step);
 				ticked.accumulated -= step;
 			}
 		}
 
 		for (const auto system : mMainThreadSystems) {
+			SFE_PROFILE_ZONE(typeid(*system).name());
 			system->update(dt);
 		}
 
+		SFE_PROFILE_ZONE("Debug updates");
 		for (auto system : mSystemsMap) {
 			if (system) { // slots are type-indexed, so gaps are normal
 				system->debugUpdate(dt);

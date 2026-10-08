@@ -47,7 +47,21 @@ namespace SFE::Render {
 		return writes;
 	}
 
-	DescriptorSetHandle SingleTextureSets::get(const DescriptorSetLayoutHandle layout, const uint32_t binding, const TextureHandle texture) {
+	bool texturesLive(const ComponentsModule::Materials& materials) {
+		const auto* rhi = Engine::instance()->rhi();
+		for (uint8_t i = 0; i < materials.materialsCount; ++i) {
+			const auto texture = materials.material[i].texture;
+			if (texture && rhi->getNativeTextureId(texture) == 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	DescriptorSetHandle SingleTextureSets::get(const DescriptorSetLayoutHandle layout, const uint32_t binding, TextureHandle texture) {
+		if (texture && Engine::instance()->rhi()->getNativeTextureId(texture) == 0) {
+			texture = {};
+		}
 		auto& set = mSets[texture.id];
 		if (!set) {
 			const auto* white = AssetsModule::TextureHandler::instance()->loadTexture("white.png");

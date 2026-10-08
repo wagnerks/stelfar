@@ -41,6 +41,7 @@ namespace SFE::Render
 	{
 		GLuint programId = 0;
 		GLuint vaoId = 0;
+		const char* label = nullptr; // in the GPU's spans (pipelineLabel)
 
 		// кешируем GL-формы состояний
 		GLenum primitiveGL;
@@ -119,7 +120,7 @@ namespace SFE::Render
 	struct CmdBlit { FramebufferHandle src; FramebufferHandle dst; BlitMask mask = BlitMask::Color; BlitFilter filter = BlitFilter::Nearest; };
 	struct CmdSetScissor { int32_t x = 0, y = 0; uint32_t width = 0, height = 0; };
 	struct CmdPipelineBarrier { PipelineBarrier barrier; };
-	struct CmdGpuMark { uint32_t mark = 0; };
+	struct CmdGpuMark { const char* label = nullptr; bool endsPass = false; };
 
 	using GLCommand = std::variant<
 		CmdBeginRenderPass,
@@ -290,11 +291,11 @@ namespace SFE::Render
 		int mGpuQueriesIssued = 0;
 		double mLastGpuMs = 0.0;
 		// cmdGpuMark's timestamps the same way: kMaxGpuMarks a submit that marks, kGpuTimeQueries such submits round,
-		// read as the oldest comes to be written again; and the times between the marks last read.
+		// read as the oldest comes to be written again; and what each mark ends.
 		GLuint mGpuMarkQueries[kGpuTimeQueries][kMaxGpuMarks]{};
 		uint32_t mGpuMarkCount[kGpuTimeQueries]{};
 		int mGpuMarkWrite = 0;
-		double mGpuMarkMs[kMaxGpuMarks]{};
+		GpuMarkLabel mGpuMarkLabels[kGpuTimeQueries][kMaxGpuMarks]{};
 		TextureHandle m_presentBlitTexture{};
 		// A hidden window's frames, which nothing swaps: the fences (GLsync) of the last few presented, the oldest
 		// waited for.
@@ -351,8 +352,7 @@ namespace SFE::Render
 		void runOnWorkerThread(const std::function<void()>& work) override;
 		void setPresentBlitSource(TextureHandle texture, SamplerHandle sampler) override;
 		double lastGpuMs() const override { return mLastGpuMs; }
-		void cmdGpuMark(CommandListHandle cmd, uint32_t mark) override;
-		double gpuMarkMs(uint32_t mark) const override { return mark < kMaxGpuMarks ? mGpuMarkMs[mark] : 0.0; }
+		void writeGpuMark(CommandListHandle cmd, const char* label, bool endsPass) override;
 		const char* deviceName() const override { return m_deviceName.c_str(); }
 		bool readbackTexture(TextureHandle tex, std::vector<uint8_t>& rgba, int& width, int& height, uint32_t layer = 0) override;
 		TextureHandle presentSourceTexture() const override { return m_presentBlitTexture; }

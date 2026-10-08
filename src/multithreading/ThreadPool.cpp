@@ -14,7 +14,7 @@ namespace SFE {
 
 	void ThreadPool::drainSync() {
 		while (true) {
-			std::packaged_task<void()> task;
+			PoolTask task;
 			{
 				std::lock_guard lock(mSyncMtx);
 				if (mSyncTasks.empty()) {
@@ -23,8 +23,9 @@ namespace SFE {
 				task = std::move(mSyncTasks.front());
 				mSyncTasks.pop();
 			}
-			if (task.valid()) {
-				task();
+			if (task.work.valid()) {
+				SFE_PROFILE_ZONE(task.label);
+				task.work();
 			}
 		}
 	}
@@ -62,7 +63,7 @@ namespace SFE {
 		syncUpdate();
 	}
 
-	std::shared_future<void> ThreadPool::addTaskToSynchronization(std::function<void()>&& task) {
+	std::shared_future<void> ThreadPool::addTaskToSynchronization(std::function<void()>&& task, const char* label) {
 		if (mShuttingDown.load(std::memory_order_acquire)) {
 			return {};
 		}
@@ -71,11 +72,11 @@ namespace SFE {
 			return {};
 		}
 
-		mSyncTasks.emplace(std::move(task));
-		return mSyncTasks.back().get_future();
+		mSyncTasks.push({ label, std::packaged_task<void()>(std::move(task)) });
+		return mSyncTasks.back().work.get_future();
 	}
 
-	std::shared_future<void> ThreadPool::addLoadingTask(std::function<void()>&& task) {
-		return mLoadingWorkers.addTask(std::move(task));
+	std::shared_future<void> ThreadPool::addLoadingTask(std::function<void()>&& task, const char* label) {
+		return mLoadingWorkers.addTask(std::move(task), label);
 	}
 }

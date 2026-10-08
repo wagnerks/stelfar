@@ -7,13 +7,39 @@
 #include "renderModule/renderPasses/RenderPass.h"
 #include "renderModule/IblBaker.h"
 
+namespace SFE::Render {
+	struct CsmFrame;
+}
+
 namespace SFE::Render::RenderPasses {
 	class LightingPass : public RenderPass {
 	public:
+		struct CascadData {
+			// x 1/resolution, y world size of one texel, z depth bias, w samples
+			Math::Vec4 cascade;
+			// x light-space depth extent of the cascade, so the shader can turn a depth difference
+			// into a world distance; the rest is spare. std140 gives the array a 32 byte stride
+			// with two vec4s, which is what this struct is.
+			Math::Vec4 cascadeExtra;
+		};
+		struct CascadedShadowBlock {
+			Math::Vec4 direction_intensity; // xyz direction, w intensity
+			Math::Vec4 color_and_misc;
+			CascadData data[6];
+			Math::Vec4 cascadeSplits;
+			Math::Vec4 cascadeSplits2;
+		};
+		// The sun shadow block (sfe_sun_shadow.glsl) of this frame's cascades, for every pass that looks the shadow up:
+		// this one, and SunShadowPass before it.
+		static void fillCascadedShadows(const SystemsModule::RenderData& renderDataHandle, const CsmFrame& csm,
+			CascadedShadowBlock& block);
+
 		LightingPass();
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
 		void resize(SystemsModule::RenderData& renderDataHandle) override;
+		// This frame's sun shadow block (sfe_sun_shadow.glsl), for the passes after this one that look the shadow up too.
+		const auto& cascadedShadows() const { return cascadedShadowData; }
 
 	private:
 		// This frame's blocks for the dynamic bindings of mUboSet.
@@ -56,28 +82,20 @@ namespace SFE::Render::RenderPasses {
 			float stylise = 0.f;
 			// GraphicsSettings::ssaoSun.
 			float ssaoSun = 0.f;
-			float pad1 = 0.f, pad2 = 0.f;
+			float shelterCount = 0.f;
+			float pad2 = 0.f;
 			// The area tint (AreaTintFrame); a zero area, no tint.
 			Math::Vec4 tintArea{};
 			Math::Vec4 tintFoliage{};
 			Math::Vec4 tintAir{};
 			Math::Vec4 tintGround{};
-		};
-
-		struct CascadData {
-			// x 1/resolution, y world size of one texel, z depth bias, w samples
-			Math::Vec4 cascade;
-			// x light-space depth extent of the cascade, so the shader can turn a depth difference
-			// into a world distance; the rest is spare. std140 gives the array a 32 byte stride
-			// with two vec4s, which is what this struct is.
-			Math::Vec4 cascadeExtra;
-		};
-		struct CascadedShadowBlock {
-			Math::Vec4 direction_intensity; // xyz direction, w intensity
-			Math::Vec4 color_and_misc;
-			CascadData data[6];
-			Math::Vec4 cascadeSplits;
-			Math::Vec4 cascadeSplits2;
+			// The ShelterComponents in the scene, the first kMostShelters.
+			static constexpr int kMostShelters = 4;
+			struct Shelter {
+				Math::Mat4 toLocal{};  // world to the shelter's own space
+				Math::Vec4 box{};      // x width, y the ridge's height, z length, w the eaves' height
+				Math::Vec4 sky{};      // x the share of the sky's light that comes in
+			} shelters[kMostShelters];
 		};
 
 		CascadedShadowBlock cascadedShadowData;
@@ -148,6 +166,7 @@ namespace SFE::Render::RenderPasses {
 			BoundImage gAlbedo{};
 			BoundImage gVelocity{};
 			BoundImage ssao{};
+			BoundImage sunShadow{};
 			BoundImage pointShadow{};
 			BoundImage outlines{};
 			BoundImage clouds{};

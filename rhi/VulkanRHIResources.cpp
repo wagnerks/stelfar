@@ -90,6 +90,7 @@ namespace SFE::Render {
 			}
 		}
 		m_uploadOps.clear();
+		m_textureUploadOps.clear();
 		m_uploadRingUsed = 0;
 	}
 
@@ -114,6 +115,13 @@ namespace SFE::Render {
 			vmaDestroyBuffer(m_allocator, retired.buffer, retired.allocation);
 			return true;
 		});
+		std::erase_if(m_retiredTextures, [this](RetiredTexture& retired) {
+			if (--retired.waitsLeft > 0) {
+				return false;
+			}
+			destroyTextureInternal(retired.texture);
+			return true;
+		});
 		// After the retired buffers: what this retires must wait its own full round.
 		resetTransient();
 		if (m_timestampPool != VK_NULL_HANDLE) {
@@ -127,6 +135,7 @@ namespace SFE::Render {
 		}
 		m_uploadRingUsed = 0;
 		m_uploadOps.clear();
+		m_textureUploadOps.clear();
 		m_uploadsFlushed = false;
 		m_frameWaited = true;
 	}
@@ -187,11 +196,56 @@ namespace SFE::Render {
 		m_uploadRingUsed += aligned;
 	}
 
+	// A texture written on the device thread before the frame's first command list goes the way a device-local buffer
+	// does: into this frame's upload ring, copied at the start of that list. The other way, a submit waited for on the
+	// spot, waits for all the GPU was given before it: the frames in flight, and the loading threads' texture copies.
+	// Textures take the ring up to half, so the frame's buffers still find room; false when it cannot go this way.
+	bool VulkanRHI::queueTextureUpload(const uint32_t textureId, const uint32_t x, const uint32_t y, const uint32_t w,
+		const uint32_t h, const uint32_t mip, const uint32_t layer, const void* data, const size_t size) {
+		waitForInFlightFrame();
+		// Where a copy may start: on a whole texel of any format (RGBA32F's 16 bytes).
+		const VkDeviceSize offset = (m_uploadRingUsed + 15u) & ~VkDeviceSize{ 15 };
+		if (m_uploadsFlushed || !m_uploadRingMapped[m_currentFrame] || offset + size > kUploadRingSize / 2) {
+			return false;
+		}
+		std::memcpy(static_cast<uint8_t*>(m_uploadRingMapped[m_currentFrame]) + offset, data, size);
+		m_textureUploadOps.push_back({ textureId, offset, x, y, w, h, mip, layer });
+		m_uploadRingUsed = (offset + size + 3u) & ~VkDeviceSize{ 3 };
+		return true;
+	}
+
+	// The texture writes waiting in the ring recorded into `cmd`, ahead of whatever comes after them: at the start of
+	// the frame, or before an immediate write or a readback, so all land in the order they were asked for.
+	void VulkanRHI::recordTextureUploads(const VkCommandBuffer cmd) {
+		if (m_textureUploadOps.empty()) {
+			return;
+		}
+		vmaFlushAllocation(m_allocator, m_uploadRingAlloc[m_currentFrame], 0, m_uploadRingUsed);
+		for (const auto& op : m_textureUploadOps) {
+			auto* texture = getLive(m_textures, op.dstId);
+			if (!texture || !texture->image) {
+				continue;
+			}
+			ensureTextureLayout(cmd, *texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+			VkBufferImageCopy region{};
+			region.bufferOffset = op.srcOffset;
+			region.imageSubresource.aspectMask = aspectMaskForFormat(texture->format);
+			region.imageSubresource.mipLevel = op.mip;
+			region.imageSubresource.baseArrayLayer = op.layer;
+			region.imageSubresource.layerCount = 1;
+			region.imageOffset = { static_cast<int32_t>(op.x), static_cast<int32_t>(op.y), 0 };
+			region.imageExtent = { op.w, op.h, 1 };
+			vkCmdCopyBufferToImage(cmd, m_uploadRing[m_currentFrame], texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+			ensureTextureLayout(cmd, *texture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		}
+		m_textureUploadOps.clear();
+	}
+
 	void VulkanRHI::flushBufferUploads(const VkCommandBuffer cmd) {
 		if (cmd == VK_NULL_HANDLE) {
 			return;
 		}
-		if (m_uploadOps.empty()) {
+		if (m_uploadOps.empty() && m_textureUploadOps.empty()) {
 			m_uploadsFlushed = true;
 			return;
 		}
@@ -209,6 +263,7 @@ namespace SFE::Render {
 			copyRegion.size = op.size;
 			vkCmdCopyBuffer(cmd, m_uploadRing[m_currentFrame], dst->buffer, 1, &copyRegion);
 		}
+		recordTextureUploads(cmd);
 		VkMemoryBarrier barrier{};
 		barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
 		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1027,7 +1082,12 @@ namespace SFE::Render {
 			if (tex->image != VK_NULL_HANDLE) {
 				trackTextureMemory(tex->desc, false);
 			}
-			destroyTextureInternal(*tex);
+			if (m_inited) {
+				m_retiredTextures.push_back({ *tex, kMaxFramesInFlight });
+			}
+			else {
+				destroyTextureInternal(*tex);
+			}
 			recycleResource(m_textures, m_freeTextures, texture.id);
 		}
 	}
@@ -1040,9 +1100,13 @@ namespace SFE::Render {
 			return;
 		}
 		const size_t imageSize = static_cast<size_t>(w) * h * bytesPerPixel(texture->desc.format);
+		if (queueTextureUpload(tex.id, x, y, w, h, mip, layer, data, imageSize)) {
+			return;
+		}
 		VmaAllocation stagingMemory = VK_NULL_HANDLE;
 		const VkBuffer staging = createStagingBuffer(imageSize, stagingMemory, data);
 		executeImmediate([&](VkCommandBuffer cmd) {
+			recordTextureUploads(cmd);
 			ensureTextureLayout(cmd, *texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			VkBufferImageCopy region{};
 			region.bufferOffset = 0;
@@ -1648,12 +1712,14 @@ namespace SFE::Render {
 		vkCmdCopyBuffer(list->cmd, source->buffer, destination->buffer, 1, &region);
 	}
 
-	void VulkanRHI::cmdGpuMark(const CommandListHandle cmd, const uint32_t mark) {
+	void VulkanRHI::writeGpuMark(const CommandListHandle cmd, const char* label, const bool endsPass) {
 		auto* list = getLive(m_commandLists, cmd.id);
-		if (!list || m_markPool == VK_NULL_HANDLE || mark >= kMaxGpuMarks || mark < m_markCount[m_currentFrame]) {
+		auto& count = m_markCount[m_currentFrame];
+		if (!list || m_markPool == VK_NULL_HANDLE || count >= (endsPass ? kMaxGpuMarks : kGpuShaderMarks)) {
 			return;
 		}
-		vkCmdWriteTimestamp(list->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_markPool, m_currentFrame * kMaxGpuMarks + mark);
-		m_markCount[m_currentFrame] = mark + 1;
+		vkCmdWriteTimestamp(list->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_markPool, m_currentFrame * kMaxGpuMarks + count);
+		m_markLabels[m_currentFrame][count] = { label, endsPass };
+		++count;
 	}
 }

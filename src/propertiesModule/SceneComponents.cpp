@@ -517,6 +517,29 @@ namespace SFE::PropertiesModule {
 		component->strength = data.get("strength", component->strength).asFloat();
 	}
 
+	// ===== ShelterComponent ===================================================
+
+	void ComponentSerializer<ShelterComponent>::save(const ShelterComponent& component, Json::Value& data) {
+		data["size"] = Json::Value(Json::arrayValue);
+		data["size"].append(component.size.x);
+		data["size"].append(component.size.y);
+		data["size"].append(component.size.z);
+		data["eaves"] = component.eaves;
+		data["sky"] = component.sky;
+	}
+
+	void ComponentSerializer<ShelterComponent>::load(ecss::EntityId entity, const Json::Value& data) {
+		auto component = ECSHandler::registry().addComponent<ShelterComponent>(entity);
+		if (!component) {
+			return;
+		}
+		if (auto val = JsonUtils::getValueArray(data, "size")) {
+			component->size = JsonUtils::getVec3(*val);
+		}
+		component->eaves = data.get("eaves", component->eaves).asFloat();
+		component->sky = data.get("sky", component->sky).asFloat();
+	}
+
 	// ===== AudioSourceComponent ===============================================
 
 	void ComponentSerializer<AudioSourceComponent>::save(const AudioSourceComponent& component, Json::Value& data) {
@@ -589,6 +612,7 @@ namespace SFE::PropertiesModule {
 			entryFor<TerrainComponent>(LoadPhase::AfterBind),
 			entryFor<WaterComponent>(LoadPhase::Direct),
 			entryFor<WindComponent>(LoadPhase::Direct),
+			entryFor<ShelterComponent>(LoadPhase::Direct),
 			entryFor<AudioSourceComponent>(LoadPhase::Direct),
 		};
 	}

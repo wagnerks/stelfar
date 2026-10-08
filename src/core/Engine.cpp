@@ -33,6 +33,7 @@
 #include "rhi/RhiFactory.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/FrameCapture.h"
+#include "debugModule/Profiler.h"
 
 namespace SFE {
 	using Render::activeGraphicsBackend;
@@ -68,6 +69,7 @@ namespace SFE {
 		}
 
 		mMainThreadID = std::this_thread::get_id();
+		Debug::Profiler::nameThread("Main");
 		if (activeGraphicsBackend() == GraphicsBackend::OpenGL) {
 			glfwMakeContextCurrent(mWindow->getWindow());
 		}
@@ -130,6 +132,30 @@ namespace SFE {
 	// (RuntimeBridge::runQueued).
 	void Engine::addRuntimeCommands() {
 		auto* bridge = RuntimeBridge::RuntimeBridge::instance();
+		bridge->addCommand("profile",
+			"Where the frame's time goes (Debug::Profiler; F2 shows it in the game), over the last {\"frames\"} frames, all that "
+			"are kept (600) if left out, as JSON: the frame, the main thread's waits, the GPU, what holds the frame back (the "
+			"GPU, the CPU or the fps limit), each zone of the CPU's work by thread, each render pass on the GPU. {\"file\": path} writes it "
+			"there as text too, beside the game unless absolute; {\"on\": false} stops recording zones, true starts it again; "
+			"{\"window\": true | false} opens or closes the window; {\"shaders\": true} times the GPU by the pipelines drawn "
+			"in each pass too, with a timestamp at each change of one (RenderHardwareInterface::gpuShaderMarks).",
+			[this](const Json::Value& args) {
+				const bool given = args.isObject();
+				const int frames = given ? args.get("frames", 0).asInt() : 0;
+				if (given && args.isMember("on")) {
+					Debug::Profiler::gOn.store(args["on"].asBool(), std::memory_order_relaxed);
+				}
+				if (given && args.isMember("window")) {
+					Debug::Profiler::showWindow(args["window"].asBool());
+				}
+				if (given && args.isMember("shaders") && mRHI) {
+					mRHI->gpuShaderMarks.store(args["shaders"].asBool(), std::memory_order_relaxed);
+				}
+				if (given && args.isMember("file") && !Debug::Profiler::writeSummary(args["file"].asString(), frames)) {
+					return "not written: " + args["file"].asString();
+				}
+				return Debug::Profiler::summaryJson(frames);
+			});
 		bridge->addCommand("display",
 			"The display as the Graphics panel sets it, for this run only (display.json is left as it is): {\"mode\": "
 			"\"windowed\" | \"borderless\" | \"fullscreen\", \"width\", \"height\", \"frameInfo\"}, what is left out kept. "
@@ -309,6 +335,8 @@ namespace SFE {
 		if (!checkNeedClose()) {
 			return;
 		}
+		// The frame before closed for the profiler, before anything of this one is timed.
+		Debug::Profiler::frame();
 
 		// The display the player set (Window::setDisplay), put on the screen between frames. A picture of another size has
 		// every pass make its targets again, and the camera takes its new shape.
@@ -327,11 +355,13 @@ namespace SFE {
 		// The GPU first: the frame's time is taken once the frame it replaces has left the GPU, so each frame is one of
 		// the GPU's, and what is read from the input is as fresh as it can be for the picture it goes into.
 		if (mRHI) {
+			SFE_PROFILE_ZONE(Debug::Profiler::kWaitGpu);
 			mRHI->beginFrame();
 		}
 		// The commands asked for since the last frame, now that it has begun and nothing of it is recorded yet: what they
 		// upload goes with the frame's own uploads.
 		if (RuntimeBridge::RuntimeBridge::isAlive()) {
+			SFE_PROFILE_ZONE("Bridge commands");
 			RuntimeBridge::RuntimeBridge::instance()->runQueued();
 		}
 		updateDelta();
@@ -339,12 +369,14 @@ namespace SFE {
 		mCore.update(mDeltaTime);
 	
 		if (getMainWindow()) {
+			SFE_PROFILE_ZONE("Input");
 			glfwPollEvents();
 		}
 
 		//getWindow()->swapBuffers();
 
 		if (mFixedDeltaTime <= 0.f) {
+			SFE_PROFILE_ZONE(Debug::Profiler::kIdle);
 			fpsSync(maxFPS);
 		}
 	}

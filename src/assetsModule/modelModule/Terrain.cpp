@@ -826,9 +826,22 @@ namespace AssetsModule {
 		meshObj.material[SFE::METALLIC] = SFE::MaterialTexture{ terrainRoadFrameTexture(t), SFE::METALLIC, SFE::METALLIC };
 		meshObj.material[SFE::SUBSURFACE] = SFE::MaterialTexture{ terrainPathTexture(t), SFE::SUBSURFACE, SFE::SUBSURFACE };
 
-		// The root holds nothing; every chunk is a child with the ground's material and its own bounds.
+		// The root holds nothing; every chunk is a child with the ground's material and its own bounds. They are drawn in
+		// this order, which runs from the middle out: the lake is there and the world is lived in round it, so the ground
+		// nearer the camera mostly goes first and the depth test turns away what it hides before it is shaded.
+		std::vector<size_t> order(chunkMeshes.size());
+		std::iota(order.begin(), order.end(), size_t{ 0 });
+		const auto fromMiddle = [&](const size_t c) {
+			// Twice the chunk's middle, from its first and last vertices, its opposite corners.
+			const auto& vertices = chunkMeshes[c].mesh.vertices;
+			const float x = vertices.front().position.x + vertices.back().position.x;
+			const float z = vertices.front().position.z + vertices.back().position.z;
+			return x * x + z * z;
+		};
+		std::stable_sort(order.begin(), order.end(), [&](const size_t a, const size_t b) { return fromMiddle(a) < fromMiddle(b); });
 		SFE::Tree<SFE::MeshObject3D> tree;
-		for (auto& chunk : chunkMeshes) {
+		for (const size_t c : order) {
+			auto& chunk = chunkMeshes[c];
 			SFE::Math::Vec3 lo = chunk.mesh.vertices.front().position;
 			SFE::Math::Vec3 hi = lo;
 			for (const auto& v : chunk.mesh.vertices) {

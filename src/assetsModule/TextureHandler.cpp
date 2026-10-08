@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -13,6 +14,7 @@
 #include <unordered_map>
 
 #include "AssetsManager.h"
+#include "assetsModule/modelModule/ModelRelease.h"
 #include "core/FileSystem.h"
 #include "rhi/GraphicsBackend.h"
 #include "core/Engine.h"
@@ -149,8 +151,8 @@ namespace {
 		}
 		auto* pool = SFE::ThreadPool::instance();
 		const auto done = SFE::Render::activeGraphicsBackend() == SFE::Render::GraphicsBackend::OpenGL
-			? pool->addTask<SFE::WorkerType::RESOURCE_LOADING>([work] { SFE::Engine::instance()->rhi()->runOnWorkerThread(work); })
-			: pool->addTask<SFE::WorkerType::SYNC>(std::move(work));
+			? pool->addTask<SFE::WorkerType::RESOURCE_LOADING>([work] { SFE::Engine::instance()->rhi()->runOnWorkerThread(work); }, "Texture upload")
+			: pool->addTask<SFE::WorkerType::SYNC>(std::move(work), "Texture upload");
 		if (!done.valid()) {
 			return;
 		}
@@ -177,6 +179,59 @@ namespace {
 				desc.format, levels[i].data(), mip);
 		}
 		return tex;
+	}
+
+	// A decoded image made `texture`'s on the device: adopted where the RHI prepared it already, made here otherwise.
+	// Waits for the device thread (onDevice).
+	void putOnDevice(Texture& texture, const SFE::Render::TextureDesc& desc, DecodedImage&& image) {
+		onDevice([&texture, desc, image = std::make_shared<DecodedImage>(std::move(image))] {
+			auto* rhi = SFE::Engine::instance()->rhi();
+			texture.texture = image->prepared ? rhi->adoptTexture(std::move(image->prepared)) : createWithMips(desc, image->data.get());
+			if (!texture.sampler) {
+				texture.sampler = rhi->createSampler(fileSamplerDesc());
+			}
+		});
+	}
+
+	// Textures releaseTexture let go of, each with whether a thread is reading it back now.
+	std::mutex gReleasedMutex;
+	std::condition_variable gReadBack;
+	std::unordered_map<Texture*, bool> gReleased;
+
+	// A texture let go of read from its file and put on the device again, as it was read the first time, by the first
+	// thread to ask for it; another asking meanwhile waits for that, the device thread doing the device's work as it
+	// waits (as ModelLoader::load does).
+	void readBack(Texture& texture) {
+		std::unique_lock lock(gReleasedMutex);
+		auto it = gReleased.find(&texture);
+		if (it == gReleased.end()) {
+			return;
+		}
+		if (it->second) {
+			const bool main = SFE::Engine::isMainThread();
+			while (gReleased.contains(&texture)) {
+				if (!main) {
+					gReadBack.wait(lock);
+					continue;
+				}
+				gReadBack.wait_for(lock, std::chrono::milliseconds(1));
+				lock.unlock();
+				SFE::ThreadPool::instance()->syncUpdate();
+				lock.lock();
+			}
+			return;
+		}
+		it->second = true;
+		lock.unlock();
+		auto image = decodeImage(texture.assetPath, texture.flip);
+		if (image.read()) {
+			const auto desc = fileTextureDesc(image.width, image.height, texture.format);
+			prepare(image, desc);
+			putOnDevice(texture, desc, std::move(image));
+		}
+		lock.lock();
+		gReleased.erase(&texture);
+		gReadBack.notify_all();
 	}
 }
 
@@ -384,6 +439,7 @@ std::vector<std::vector<unsigned char>> TextureHandler::buildMipChain(const unsi
 
 Texture* TextureHandler::loadTexture(const std::string& path, bool flip, SFE::Render::TextureFormat format) {
 	if (auto* texture = AssetsManager::instance()->getAsset<Texture>(path)) {
+		readBack(*texture);
 		return texture;
 	}
 
@@ -413,10 +469,20 @@ Texture* TextureHandler::loadTexture(const std::string& path, bool flip, SFE::Re
 	texture->height = image.height;
 	texture->flip = flip;
 	texture->format = format;
-	onDevice([texture, desc, image = std::make_shared<DecodedImage>(std::move(image))] {
-		auto* rhi = SFE::Engine::instance()->rhi();
-		texture->texture = image->prepared ? rhi->adoptTexture(std::move(image->prepared)) : createWithMips(desc, image->data.get());
-		texture->sampler = rhi->createSampler(fileSamplerDesc());
-	});
+	putOnDevice(*texture, desc, std::move(image));
 	return texture;
+}
+
+void AssetsModule::releaseTexture(Texture& texture) {
+	// Only one read from a single image file: loadTexture reads it again.
+	if (!texture.texture || !texture.width) {
+		return;
+	}
+	std::lock_guard lock(gReleasedMutex);
+	if (gReleased.contains(&texture)) {
+		return;
+	}
+	SFE::Engine::instance()->rhi()->destroyTexture(texture.texture);
+	texture.texture = {};
+	gReleased.emplace(&texture, false);
 }

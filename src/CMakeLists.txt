@@ -51,9 +51,12 @@ target_link_libraries(${ENGINE_NAME} PUBLIC ecss)
 add_subdirectory(submodules/meshoptimizer)
 target_link_libraries(${ENGINE_NAME} PRIVATE meshoptimizer)
 
-# Audio. miniaudio is one C file; its own CMakeLists also looks for libvorbis/libopus and builds extra nodes,
-# none of which the engine uses.
-add_library(miniaudio STATIC "${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio/miniaudio.c")
+# Audio. miniaudio is one C file; its own CMakeLists also looks for libvorbis/libopus and builds extra nodes, of
+# which the engine takes only the reverb, for AudioSystem's echo of the wood.
+add_library(miniaudio STATIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio/miniaudio.c"
+	"${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio/extras/nodes/ma_reverb_node/ma_reverb_node.c"
+)
 target_include_directories(miniaudio PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio")
 target_link_libraries(${ENGINE_NAME} PRIVATE miniaudio)
 
@@ -125,7 +128,15 @@ if(MSVC)
 		IMPORTED_IMPLIB "${ENGINE_PATH}/lib/jsoncpp/lib/release/jsoncpp.lib"
 		IMPORTED_LOCATION "${ENGINE_PATH}/lib/jsoncpp/lib/release/jsoncpp.dll"
 	)
-	set(SFE_NATIVE_SHARED_LIBS sfe_assimp sfe_jsoncpp)
+	# Steam Audio (Apache 2.0): the HRTF and the air absorption AudioSystem hears world sounds through. Delay-loaded, so
+	# a run without an audio device (the None backend, the tests) never loads it.
+	add_library(sfe_phonon SHARED IMPORTED GLOBAL)
+	set_target_properties(sfe_phonon PROPERTIES
+		IMPORTED_IMPLIB "${ENGINE_PATH}/lib/steamaudio/lib/windows-x64/phonon.lib"
+		IMPORTED_LOCATION "${ENGINE_PATH}/lib/steamaudio/lib/windows-x64/phonon.dll"
+	)
+	target_include_directories(${ENGINE_NAME} PRIVATE "${ENGINE_PATH}/lib/steamaudio/include")
+	set(SFE_NATIVE_SHARED_LIBS sfe_assimp sfe_jsoncpp sfe_phonon)
 	if(VLD)
 		add_library(sfe_vld SHARED IMPORTED GLOBAL)
 		set_target_properties(sfe_vld PROPERTIES
@@ -187,6 +198,7 @@ if(MSVC)
 		"${ENGINE_PATH}/lib/freetype/lib/win/release/freetype.lib"
 		sfe_jsoncpp
 		sfe_assimp
+		sfe_phonon
 		MSVCRT
 	)
 

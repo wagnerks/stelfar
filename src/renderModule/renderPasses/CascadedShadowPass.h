@@ -56,17 +56,21 @@ namespace SFE::Render::RenderPasses {
 			// What the map was last drawn with; a cascade that skips a frame is lit with these.
 			bool drawn = false;
 			uint32_t framesSinceDrawn = 0;
+			float age = 0.f;      // seconds since it was drawn
+			Math::Vec3 drawnFrom; // where the camera was then
 			Math::Mat4 lightSpace;
 			ComponentsModule::ShadowCascade settings;
 		};
-		// Cascades from this one out take turns, one a frame.
-		static constexpr size_t kFirstAlternating = 2;
+		// Cascades from this one out are the far ones: drawn less often, kept while their volume stays put, and their
+		// casters not culled to what the camera sees.
+		static constexpr size_t kFirstFar = 2;
 		// Metres up-sun past a cascade's near plane that its casters are still drawn from.
 		static constexpr float kCasterReachTowardsSun = 400.f;
 		// Frames a far cascade whose volume has not moved keeps its map at most, so what moved inside it (a fallen
 		// log spawned, a tree swapped for its picture) still shows up.
 		static constexpr uint32_t kStaticRefreshFrames = 30;
-		uint32_t mFrame = 0;
+		// Cascades that may yet be drawn, carried on from frame to frame (shadowRefreshRate).
+		float mDrawBudget = 0.f;
 		Render::DescriptorSetLayoutHandle mBufferLayout;
 		Render::DescriptorSetLayoutHandle mTextureLayout;
 		std::vector<Cascade> mCascades;

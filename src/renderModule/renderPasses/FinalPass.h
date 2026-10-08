@@ -54,7 +54,7 @@ namespace SFE::Render::RenderPasses {
 		struct PostParams {
 			float bloomStrength = 0.62f;
 			float exposure = 0.92f;
-			float vignette = 0.14f;
+			float sunHeight = 1.f; // see sfe_post.glsl
 			float ca = 0.0028f;
 			float sharpness = 0.5f;
 			float autoExposure = 1.f;
@@ -69,8 +69,7 @@ namespace SFE::Render::RenderPasses {
 			float adaptSeconds = 0.f;
 			float adaptSpeed = 1.f;
 			float sunColor[4]{};
-			float grade[4]{ 1.f, 0.f, 0.f, 0.f }; // see sfe_post.glsl
-			float extra[4]{};
+			float extra[4]{}; // see sfe_post.glsl
 		} mPostParams;
 
 		// Auto exposure and the sun's visibility for the flare: the frame's log luminance from 64x64 down to 1x1, and

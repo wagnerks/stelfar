@@ -59,6 +59,10 @@ void main() {
 	}
 
 	bool VulkanRHI::readbackTexture(TextureHandle handle, std::vector<uint8_t>& rgba, int& width, int& height, uint32_t layer) {
+		// Texture writes still waiting in the frame's upload ring (queueTextureUpload) copied first: what was written is read.
+		if (!m_textureUploadOps.empty()) {
+			executeImmediate([&](VkCommandBuffer cmd) { recordTextureUploads(cmd); });
+		}
 		auto* source = getLive(m_textures, handle.id);
 		if (!source) {
 			return false;
@@ -1044,7 +1048,8 @@ void main() {
 		blendAttachment.srcAlphaBlendFactor = toVkBlendFactor(desc.blend.srcAlpha.value_or(desc.blend.srcColor));
 		blendAttachment.dstAlphaBlendFactor = toVkBlendFactor(desc.blend.dstAlpha.value_or(desc.blend.dstColor));
 		blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-		blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+		blendAttachment.colorWriteMask = desc.colorWrite
+			? VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT : 0;
 
 		// Must match the render pass subpass (0 for depth-only CSM). Forcing 1 breaks
 		// vkCreateGraphicsPipelines / produces a pipeline that cannot draw into layered depth FBOs.
@@ -1125,6 +1130,7 @@ void main() {
 
 		out = {};
 		out.desc = local;
+		out.label = pipelineLabel(vert->desc.name, frag->desc.name);
 		out.ownedRenderPass = ownedRp;
 		out.layout = pipelineLayout;
 		out.live = true;
@@ -1187,6 +1193,7 @@ void main() {
 
 		out = {};
 		out.computeDesc = desc;
+		out.label = pipelineLabel(compute->desc.name);
 		out.layout = pipelineLayout;
 		out.isCompute = true;
 		out.live = true;
@@ -1412,6 +1419,7 @@ void main() {
 		if (!list || !gp) {
 			return;
 		}
+		pipelineBound(cmd, gp->label);
 		list->boundLayout = gp->layout;
 		list->boundBindPoint = gp->isCompute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
 		vkCmdBindPipeline(list->cmd, list->boundBindPoint, gp->pipeline);

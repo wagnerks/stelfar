@@ -105,13 +105,11 @@ void main() {
     // The first step at least a pixel and a half out, or it finds the point itself.
     float minS = 1.5 / radiusPx;
     vec2 signs = vec2(matrices.projection[0][0] < 0.0 ? -1.0 : 1.0, matrices.projection[1][1] < 0.0 ? -1.0 : 1.0);
-    // The texel's place in its 4x4 block, in an order that spreads neighbours apart (Bayer): its slices' turn, and its
-    // steps' offset from the golden ratio of the same, so no two texels of a block search alike.
-    const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    ivec2 cell = ivec2(gl_FragCoord.xy) & 3;
-    float index = BAYER[cell.y * 4 + cell.x];
-    float noiseSlice = (index + 0.5) / 16.0;
-    float noiseStep = fract(0.5 + index * 0.618034);
+    // The texel's place in its 4x4 block (sfeBlockNoise): its slices' turn, and its steps' offset from the golden ratio
+    // of the same, so no two texels of a block search alike.
+    vec2 noise = sfeBlockNoise(gl_FragCoord.xy);
+    float noiseSlice = noise.x;
+    float noiseStep = noise.y;
 
     float visibility = 0.0;
     for (int slice = 0; slice < SLICES; ++slice) {

@@ -90,7 +90,7 @@ void main() {
     float t = ign(gl_FragCoord.xy) * stepLen;
     vec3 L = normalize(-params.lightDir);
     float phase = henyeyGreenstein(dot(rayDir, L), clamp(params.anisotropy, -0.9, 0.9));
-    vec3 inScatter = vec3(0.0);
+    float inScatter = 0.0;
     float trans = 1.0;
     float dens = max(params.density, 0.0);
     float lit = 0.0;
@@ -106,7 +106,7 @@ void main() {
         // Under a cloud there is no shaft: the sun is already cut off far above the trees.
         vis *= sfeCloudShadow(cloudLayer, origin + rayDir * min(t, rayLen), L, params.cloudCoverage, cloudDrift);
         lit += vis;
-        inScatter += params.lightColor * params.intensity * dens * phase * vis * stepLen * trans;
+        inScatter += params.intensity * dens * phase * vis * stepLen * trans;
         trans *= exp(-dens * stepLen);
         t += stepLen;
     }
@@ -115,5 +115,8 @@ void main() {
     // shade -- under the trees -- keeps its light, which is where the shafts are seen.
     float shaded = 1.0 - lit / float(STEPS);
     float shafts = mix(0.2, 1.0, smoothstep(0.05, 0.5, shaded));
-    FragColor = vec4(inScatter * shafts, mix(1.0, trans, shafts));
+    // The light as one number, its colour the same for every ray (volumetric_apply.fs puts it back on), so the texel has
+    // room for how far its ray went: the apply takes a texel at a pixel only where its ray ends about where the pixel's
+    // own does.
+    FragColor = vec4(inScatter * shafts, mix(1.0, trans, shafts), rayLen, 0.0);
 }

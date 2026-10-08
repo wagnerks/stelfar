@@ -11,12 +11,23 @@
 #include "renderModule/Atmosphere.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/Utils.h"
+#include "componentsModule/ShelterComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "core/ECSHandler.h"
 #include "systemsModule/systems/CameraSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
+#include "debugModule/Profiler.h"
 
 using namespace SFE::Render::RenderPasses;
+
+namespace {
+	// The frame a glare source was last seen in, which bloom_extract.fs writes, and the number of this one it is told
+	// (PostParams::extra[3]), both counted modulo kGlareFrames so a float holds it exactly: the glare's star is gathered
+	// only in the frames just after one with a source, as most have none and it costs most of that pass.
+	constexpr uint32_t kGlareFrames = 1u << 20;
+	SFE::Render::BufferHandle gGlareSeen{};
+	uint32_t gFrame = 0;
+}
 
 SFE::Render::PipelineHandle FinalPass::makeFullscreen(SFE::Render::RenderHardwareInterface* rhi, RenderPassHandle renderPass, const char* vsPath, const char* fsPath) {
 	GraphicsPipelineDesc pipelineDesc;
@@ -48,7 +59,16 @@ void FinalPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(2, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(3, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
+	layoutDesc.bindings.emplace_back(16, DescriptorType::StorageBuffer, ShaderStage::Fragment); // gGlareSeen
 	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	if (!gGlareSeen) {
+		BufferDesc glare;
+		glare.size = sizeof(uint32_t);
+		glare.usage = BufferUsage::Storage;
+		glare.cpuAccess = CpuAccess::None;
+		glare.debugName = "Glare seen";
+		gGlareSeen = rhi->createBuffer(glare);
+	}
 	// One set per frame slot: what it binds alternates with the slot, and writing a set the previous
 	// frame still binds costs a copy of it.
 	for (uint32_t i = 0; i < (std::max)(1u, rhi->framesInFlight()); ++i) {
@@ -260,18 +280,22 @@ void FinalPass::drawOverlay(const Render::CommandListHandle cmd, const int scree
 			cameraRot = transform->getRotate();
 		}
 	}
+	// The GPU's work and the main thread's own (its waits left out), each with its share of the frame.
+	const auto load = SFE::Debug::Profiler::load();
 	char overlay[512];
 	std::snprintf(
 		overlay,
 		sizeof(overlay),
-		"%s | %s\nframe %.1f ms (%.0f fps)  worst %.1f\ngpu %.1f ms  cpu %.1f ms\nram %.0f MB (committed %.0f)\nvram %.0f MB: targets %.0f  depth %.0f  textures %.0f  meshes %.0f  buffers %.0f\ncamera %.1f,%.1f,%.1f  rot %.1f,%.1f,%.1f",
+		"%s | %s\nframe %.1f ms (%.0f fps)  worst %.1f\ngpu %.1f ms %.0f%%  cpu %.1f ms %.0f%%\nram %.0f MB (committed %.0f)\nvram %.0f MB: targets %.0f  depth %.0f  textures %.0f  meshes %.0f  buffers %.0f\ncamera %.1f,%.1f,%.1f  rot %.1f,%.1f,%.1f",
 		graphicsBackendName(activeGraphicsBackend()),
 		rhi->deviceName(),
 		static_cast<double>(average),
 		average > 0.f ? 1000.0 / static_cast<double>(average) : 0.0,
 		static_cast<double>(worst),
-		static_cast<double>(info->gpuMs),
-		static_cast<double>(info->cpuMs),
+		static_cast<double>(load.gpuMs),
+		static_cast<double>(load.gpu) * 100.0,
+		static_cast<double>(load.cpuMs),
+		static_cast<double>(load.cpu) * 100.0,
 		static_cast<double>(processMemory.inRam) / kMegabyte,
 		static_cast<double>(processMemory.committed) / kMegabyte,
 		static_cast<double>(gpuMemory.total()) / kMegabyte,
@@ -336,7 +360,6 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 
 	mPostParams.bloomStrength = gfx.bloom ? gfx.bloomStrength : 0.f;
 	mPostParams.exposure = gfx.exposure;
-	mPostParams.vignette = gfx.vignette;
 	mPostParams.ca = gfx.chromaticAberration;
 	mPostParams.sharpness = gfx.sharpness;
 	mPostParams.autoExposure = gfx.autoExposure ? 1.f : 0.f;
@@ -367,21 +390,29 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		}
 		std::copy(std::begin(sky.sunColor), std::begin(sky.sunColor) + 3, mPostParams.sunColor);
 	}
-	mPostParams.grade[0] = outdoor ? sky.toSun[1] : 1.f;
-	mPostParams.grade[1] = gfx.timeGrade;
-	mPostParams.grade[2] = gfx.filmGrain;
+	mPostParams.sunHeight = outdoor ? sky.toSun[1] : 1.f;
 	mPostParams.extra[0] = gfx.sunRays;
-	// A capture's grain the same every run.
-	mPostParams.grade[3] = Engine::instance()->capturingFrame() ? 0.f : static_cast<float>(std::fmod(Engine::clockSeconds(), 1000.0));
-
+	mPostParams.extra[2] = gfx.timeGrade;
+	// The eye under a roof makes up only part of the dark the roof keeps the sky's light out by.
+	{
+		float skyIn = 1.f;
+		for (const auto& [id, shelter, transform] : ECSHandler::registry().view<const ShelterComponent, const TransformComponent>()) {
+			if (shelter && transform) {
+				const auto local = Math::inverseAffine(transform->getTransform()) * Math::Vec4{ renderDataHandle.mCameraPos, 1.f };
+				skyIn = (std::min)(skyIn, 1.f + (shelter->sky - 1.f) * shelter->inside({ local.x, local.y, local.z }));
+			}
+		}
+		mPostParams.extra[1] = std::pow((std::max)(skyIn, 1e-3f), 1.f - ShelterComponent::eyeAdapts);
+	}
 	// A debug term carries a value to be read off the image, not a picture to be graded. Exposure
-	// and vignette silently rescale it, which turns any absolute reading into nonsense.
+	// silently rescales it, which turns any absolute reading into nonsense.
 	if (Engine::instance()->lightingDebugTerm() != 0) {
 		mPostParams.bloomStrength = 0.f;
 		mPostParams.exposure = 1.f;
-		mPostParams.vignette = 0.f;
 		mPostParams.ca = 0.f;
 	}
+	gFrame = (gFrame + 1) % kGlareFrames;
+	mPostParams.extra[3] = static_cast<float>(gFrame);
 	const auto post = rhi->allocTransient(mPostParams);
 	adapt(renderDataHandle, cmd, src, post);
 
@@ -395,7 +426,11 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		params.set = mBloomSet;
 		params.binding = 15;
 		params.buffers.push_back({ post.buffer, 0, sizeof(PostParams) });
-		rhi->updateDescriptorSets({ w, params });
+		WriteDescriptor glare{};
+		glare.set = mBloomSet;
+		glare.binding = 16;
+		glare.buffers.push_back({ gGlareSeen, 0, sizeof(uint32_t) });
+		rhi->updateDescriptorSets({ w, params, glare });
 
 		RenderPassBeginInfo beginInfo;
 		beginInfo.framebuffer = mBloomFbo;

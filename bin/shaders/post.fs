@@ -74,15 +74,5 @@ void main() {
     vec3 weight = sqrt(headroom) * (-1.0 / mix(8.0, 5.0, clamp(params.sharpness, 0.0, 1.0)));
     mapped = clamp(((north + south + west + east) * weight + mapped) / (1.0 + 4.0 * weight), lo, hi);
 
-    vec2 p = uv * 2.0 - 1.0;
-    float vig = 1.0 - dot(p, p) * params.vignette;
-    mapped *= vig;
-    // Grain, finer than a pixel's worth of TAA shimmer and new every frame; strongest in the mid tones, where film shows it.
-    if (params.grade.z > 0.0) {
-        float noise = fract(sin(dot(gl_FragCoord.xy + fract(params.grade.w * 7.13) * 311.7, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
-        float mids = 4.0 * dot(mapped, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - dot(mapped, vec3(0.2126, 0.7152, 0.0722)));
-        mapped = clamp(mapped + noise * params.grade.z * mids, 0.0, 1.0);
-    }
-
     FragColor = vec4(mapped, 1.0);
 }

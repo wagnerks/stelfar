@@ -10,9 +10,11 @@
 #include "MeshUtils.h"
 #include "MeshLod.h"
 #include "MeshVaoRegistry.h"
+#include "ModelRelease.h"
 #include "logsModule/logger.h"
 #include "assetsModule/TextureHandler.h"
 #include "componentsModule/ArmatureComponent.h"
+#include "core/Engine.h"
 #include "core/FileSystem.h"
 #include "core/LoadTrace.h"
 #include "multithreading/ThreadPool.h"
@@ -32,8 +34,81 @@
 #include <limits>
 #include <map>
 #include <tuple>
+#include <unordered_set>
 
 using namespace AssetsModule;
+
+// What releaseModel let go of, under a lock of its own: one never held while waiting for the device thread, which
+// ModelLoader::mtx is (publish binds meshes under it), so the device thread may take it.
+namespace {
+	std::mutex gResidencyMutex;
+	// How many loaded models use each texture, the textures each model is a user of (counted), and the models whose
+	// textures were let go of.
+	std::unordered_map<Texture*, int> gUsers;
+	std::unordered_map<const Model*, std::vector<Texture*>> gHeld;
+	std::unordered_set<const Model*> gReleased;
+
+	// The parts of a model, or of one being loaded, as Model::getLODs has them: those with vertices.
+	std::vector<SFE::MeshObject3D*> partsOf(Model& model) {
+		std::vector<SFE::MeshObject3D*> parts;
+		for (auto& lod : *model.getLODs()) {
+			parts.insert(parts.end(), lod.meshes.begin(), lod.meshes.end());
+		}
+		return parts;
+	}
+
+	std::vector<SFE::MeshObject3D*> partsOf(SFE::Tree<SFE::MeshObject3D>& meshes) {
+		std::vector<SFE::MeshObject3D*> parts;
+		for (auto& node : meshes) {
+			if (!node.value.mesh.vertices.empty()) {
+				parts.push_back(&node.value);
+			}
+		}
+		return parts;
+	}
+
+	bool released(const Model* model) {
+		std::lock_guard lock(gResidencyMutex);
+		return gReleased.contains(model);
+	}
+
+	// The textures read from files that the parts' materials name, each once, held: one more user of each -- first, so
+	// that no model let go of meanwhile takes one away -- then each one let go of read again (TextureHandler::loadTexture
+	// reads it back) and the materials pointed at them. So a model never keeps a texture let go of, whether it was
+	// itself let go of or was loading while another one was.
+	std::vector<Texture*> hold(const std::vector<SFE::MeshObject3D*>& parts) {
+		std::vector<Texture*> textures;
+		for (const auto* part : parts) {
+			for (const auto& [type, slot] : part->material.materialTextures) {
+				auto* texture = slot.path.empty() ? nullptr : AssetsManager::instance()->getAsset<Texture>(slot.path);
+				if (texture && std::find(textures.begin(), textures.end(), texture) == textures.end()) {
+					textures.push_back(texture);
+				}
+			}
+		}
+		{
+			std::lock_guard lock(gResidencyMutex);
+			for (auto* texture : textures) {
+				++gUsers[texture];
+			}
+		}
+		for (auto* part : parts) {
+			for (auto& [type, slot] : part->material.materialTextures) {
+				if (!slot.path.empty()) {
+					slot.texture = TextureHandler::loadTexture(slot.path)->texture;
+				}
+			}
+		}
+		return textures;
+	}
+
+	// A model whose textures were held (hold): their user, till releaseModel lets go of them.
+	void counted(const Model& model, std::vector<Texture*> textures) {
+		std::lock_guard lock(gResidencyMutex);
+		gReleased.erase(&model);
+		gHeld[&model] = std::move(textures);
+	}
+}
 
 namespace {
 	// A glTF names its files as URIs: a space in the name as "%20", "(" as "%28".
@@ -235,21 +310,46 @@ namespace {
 AssetsModule::Model* ModelLoader::load(const std::string& path) {
 	SFE::LoadTrace::Step step("models");
 	auto asset = AssetsManager::instance()->getAsset<Model>(path);
-	if (asset) {
+	if (asset && !released(asset)) {
 		return asset;
 	}
 
-	mtx.lock();
-	auto searchLock = loading.find(path);
-	if (searchLock != loading.end()) {
-		mtx.unlock();
-		auto mutex = std::unique_lock(mtx);
-		searchLock->second.wait(mutex);
+	std::unique_lock lock(mtx);
+	if (loading.contains(path)) {
+		// Being loaded on another thread: waited for under the lock, so its publish cannot slip in between and leave
+		// this waiting for good. That thread waits on the main one for what goes to the device (SYNC tasks), so the main
+		// thread does those while it waits.
+		const bool main = SFE::Engine::isMainThread();
+		for (auto found = loading.find(path); found != loading.end(); found = loading.find(path)) {
+			if (!main) {
+				found->second.wait(lock);
+				continue;
+			}
+			found->second.wait_for(lock, std::chrono::milliseconds(1));
+			if (loading.contains(path)) {
+				lock.unlock();
+				SFE::ThreadPool::instance()->syncUpdate();
+				lock.lock();
+			}
+		}
 		return AssetsManager::instance()->getAsset<Model>(path);
+	}
+	// Published, or read back, between the look above and the lock.
+	if (asset = AssetsManager::instance()->getAsset<Model>(path); asset && !released(asset)) {
+		return asset;
 	}
 
 	loading[path];
-	mtx.unlock();
+	lock.unlock();
+
+	// One whose textures were let go of (releaseModel): read again, as a load reads them, before anyone draws it.
+	if (asset) {
+		counted(*asset, hold(partsOf(*asset)));
+		lock.lock();
+		loading[path].notify_all();
+		loading.erase(path);
+		return asset;
+	}
 
 	Assimp::Importer import;
 	const aiScene* scene = readScene(import, path);
@@ -409,20 +509,47 @@ AssetsModule::Model* ModelLoader::reload(const std::string& path) {
 	if (!loaded.ok) {
 		return nullptr;
 	}
+	auto textures = hold(partsOf(loaded.meshes));
 	auto* model = new Model(std::move(loaded.meshes), std::move(loaded.armature), std::move(loaded.animations));
+	counted(*model, std::move(textures));
 	std::lock_guard lock(mtx);
 	AssetsManager::instance()->replaceAsset(path, model);
 	return model;
 }
 
 AssetsModule::Model* ModelLoader::publish(const std::string& path, Loaded&& loaded) {
+	// Its textures held before anyone can see it, and outside the lock (hold may wait for the device thread): one let
+	// go of since it was read (releaseModel) is read back first.
+	auto textures = loaded.ok ? hold(partsOf(loaded.meshes)) : std::vector<Texture*>{};
 	std::lock_guard lock(mtx);
 	AssetsModule::Model* asset = loaded.ok
 		? AssetsManager::instance()->createAsset<Model>(path, std::move(loaded.meshes), std::move(loaded.armature), std::move(loaded.animations))
 		: nullptr;
+	if (asset) {
+		counted(*asset, std::move(textures));
+	}
 	loading[path].notify_all();
 	loading.erase(path);
 	return asset;
+}
+
+void AssetsModule::releaseModel(const std::string& path) {
+	auto* model = AssetsManager::instance()->getAsset<Model>(path);
+	if (!model) {
+		return;
+	}
+	std::lock_guard lock(gResidencyMutex);
+	// Once, and only one counted (published here): one still being read back is let go of already.
+	const auto held = gHeld.find(model);
+	if (held == gHeld.end() || !gReleased.insert(model).second) {
+		return;
+	}
+	for (auto* texture : held->second) {
+		if (auto& users = gUsers[texture]; --users <= 0) {
+			users = 0;
+			releaseTexture(*texture);
+		}
+	}
 }
 
 std::tuple<SFE::Tree<SFE::MeshObject3D>, Armature> ModelLoader::loadModel(const aiScene* scene, const std::string& path) {

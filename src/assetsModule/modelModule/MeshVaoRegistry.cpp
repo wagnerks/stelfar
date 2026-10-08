@@ -43,7 +43,7 @@ namespace SFE {
 		lock.unlock();
 		auto futur = ThreadPool::instance()->addTask<WorkerType::SYNC>([mesh]() {
 			MeshVaoRegistry::instance()->initMesh(mesh);
-		});
+		}, "Mesh upload");
 		if (futur.valid()) {
 			while (futur.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
 				if (!ThreadPool::isAlive() || ThreadPool::instance()->isShuttingDown()) {
@@ -118,7 +118,7 @@ namespace SFE {
 		}
 		auto futur = ThreadPool::instance()->addTask<WorkerType::SYNC>([&meshes]() {
 			MeshVaoRegistry::instance()->initMeshes(meshes);
-		});
+		}, "Mesh upload");
 		if (futur.valid()) {
 			while (futur.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
 				if (!ThreadPool::isAlive() || ThreadPool::instance()->isShuttingDown()) {

@@ -1,7 +1,9 @@
 ﻿#include "CascadedShadowPass.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "imgui.h"
@@ -44,6 +46,12 @@
 #include "logsModule/logger.h"
 
 using namespace SFE::Render::RenderPasses;
+
+namespace {
+	// How far the camera goes from where a cascade was drawn, as a share of its half width, before it is drawn anew
+	// whatever the refresh rate: a teleport, a fall. Walking never goes that far between two of its frames.
+	constexpr float kGoneShare = 0.25f;
+}
 
 CascadedShadowPass::CascadedShadowPass() {
 }
@@ -328,20 +336,59 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	if (!lightMatrices.empty()) {
 		mData.lightSpaceMatrices = lightMatrices;
 	}
-	// The far cascades take turns, one a frame: each costs about as much to draw as a near one, and past 60 m a
-	// shadow a frame late does not show. While the camera and the sun stay put a far cascade's volume does not move
-	// (it is fitted to a circle round its slice and snapped to texels, so turning on the spot keeps it too), and
-	// then its map is kept for up to kStaticRefreshFrames: past 60 m nothing sways enough to see. One that skips keeps
-	// the matrix it was last drawn with, so lighting reads its map where it was drawn.
-	++mFrame;
+	// None is drawn more often than graphics.shadowRefreshRate times a second (0: every frame), and what moves in it
+	// moves in its shadow that much later; the far ones (kFirstFar on) only kShare of that, a half and a third: each costs
+	// about as much to draw as a near one, and what moves past 12 m moves little on the screen. While the camera and the
+	// sun stay put a far cascade's volume does not move (it is fitted to a circle round its slice and snapped to texels,
+	// so turning on the spot keeps it too), and then its map is kept for up to kStaticRefreshFrames: past 60 m nothing
+	// sways enough to see. One that skips keeps the matrix it was last drawn with, so lighting reads its map where it was
+	// drawn. Those due are drawn the most overdue first, and no more of them a frame than keep them all to their rates at
+	// the rate the frames come, the fractions carried on rather than rounded up: the cost spread over the frames, no more
+	// than kMostBanked saved up for one. One the camera has gone kGoneShare of its half width from is drawn at once,
+	// whatever the rate.
+	constexpr float kShare[] = { 1.f, 1.f, 0.5f, 1.f / 3.f };
+	constexpr float kMostBanked = 2.f;
 	mCascades.resize(lightFbos.size());
 	std::vector<bool> skip(mCascades.size(), false);
-	for (size_t layer = 0; layer < mCascades.size() && layer < mData.lightSpaceMatrices.size() && layer < mData.shadowCascades.size(); ++layer) {
+	const size_t count = (std::min)({ mCascades.size(), mData.lightSpaceMatrices.size(), mData.shadowCascades.size() });
+	const float rate = renderDataHandle.graphics.shadowRefreshRate;
+	const float step = Engine::instance()->getDeltaTime();
+	constexpr float kMust = std::numeric_limits<float>::max();
+	std::vector<std::pair<float, size_t>> due; // how overdue each is, and which
+	float shares = 0.f;
+	for (size_t layer = 0; layer < count; ++layer) {
 		auto& cascade = mCascades[layer];
 		const bool unmoved = cascade.lightSpace == mData.lightSpaceMatrices[layer] && cascade.framesSinceDrawn < kStaticRefreshFrames;
-		const bool notItsTurn = (layer - kFirstAlternating) % 2 != mFrame % 2;
-		skip[layer] = cascade.drawn && layer >= kFirstAlternating && (unmoved || notItsTurn);
+		const float share = kShare[(std::min)(layer, std::size(kShare) - 1)];
+		shares += share;
 		++cascade.framesSinceDrawn;
+		cascade.age += step;
+		skip[layer] = true;
+		const auto& kept = cascade.lightSpace;
+		const float halfWidth = 1.f / (std::max)(Math::length(Math::Vec3{ kept[0][0], kept[1][0], kept[2][0] }), 1e-6f);
+		if (!cascade.drawn || Math::length(renderDataHandle.mCameraPos - cascade.drawnFrom) > halfWidth * kGoneShare) {
+			due.emplace_back(kMust, layer);
+		}
+		else if (!(layer >= kFirstFar && unmoved) && (rate <= 0.f || cascade.age * rate * share >= 1.f)) {
+			due.emplace_back(cascade.age * rate * share, layer);
+		}
+	}
+	size_t perFrame = count;
+	if (rate > 0.f) {
+		const float earned = shares * rate * step;
+		mDrawBudget = (std::min)(mDrawBudget + earned, (std::max)(earned, kMostBanked));
+		perFrame = static_cast<size_t>((std::max)(mDrawBudget, 0.f));
+	}
+	std::stable_sort(due.begin(), due.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+	float drawnNow = 0.f;
+	for (size_t i = 0; i < due.size(); ++i) {
+		skip[due[i].second] = i >= perFrame && due[i].first != kMust;
+		drawnNow += skip[due[i].second] ? 0.f : 1.f;
+	}
+	// One drawn at once over the budget is paid back over the next frames, no more than one cascade's worth.
+	mDrawBudget = (std::max)(mDrawBudget - drawnNow, -1.f);
+	for (size_t layer = 0; layer < count; ++layer) {
+		auto& cascade = mCascades[layer];
 		if (skip[layer]) {
 			mData.lightSpaceMatrices[layer] = cascade.lightSpace;
 			mData.shadowCascades[layer] = cascade.settings;
@@ -351,6 +398,8 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 			cascade.settings = mData.shadowCascades[layer];
 			cascade.drawn = true;
 			cascade.framesSinceDrawn = 0;
+			cascade.age = 0.f;
+			cascade.drawnFrom = renderDataHandle.mCameraPos;
 		}
 	}
 	const auto matrices = Utils::allocMatrices(mData.lightSpaceMatrices, CsmFrame::kMaxCascades);
@@ -386,10 +435,11 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		}
 		auto& cascade = mCascades[layer];
 
-		// The cascade's own volume, widened a little so casters just outside it still reach in.
+		// The cascade's own volume, widened a little so casters just outside it still reach in: casters are culled by
+		// their bounds, so a margin is only for those that move past their bounds between the cull and the draw.
 		auto frustum = layer < shadowsComp->cascades.size() ? shadowsComp->cascades[layer].frustum : FrustumModule::Frustum{};
 		for (auto* plane : { &frustum.leftFace, &frustum.rightFace, &frustum.topFace, &frustum.bottomFace, &frustum.nearFace, &frustum.farFace }) {
-			plane->distance += 16.f;
+			plane->distance += 2.f;
 		}
 		// Towards the sun without a limit that matters: the casters shaders press onto the near plane (pancaking) still
 		// have to be drawn, and at a low sun they stand far up-sun of what they shade.
@@ -406,7 +456,7 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		// Past the first cascade a caster's own shading is too far off to show the coarser silhouette.
 		cascade.view.lodBias = layer > 0 ? 1u : 0u;
 		const bool visible = !skip[layer] && layer < shadowsComp->cascades.size()
-			&& scene.cullShadowCasters(cmd, cascade.view, frustum, layer < kFirstAlternating ? &renderDataHandle.mCamFrustum : nullptr,
+			&& scene.cullShadowCasters(cmd, cascade.view, frustum, layer < kFirstFar ? &renderDataHandle.mCamFrustum : nullptr,
 				mData.lightDirection, texelsPerMetre);
 
 		if (visible) {

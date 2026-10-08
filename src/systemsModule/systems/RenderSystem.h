@@ -85,7 +85,6 @@ namespace SFE::SystemsModule {
 
 		float bloomStrength = 0.12f;
 		float exposure = 1.12f;
-		float vignette = 0.08f;
 		float chromaticAberration = 0.f;
 		// Contrast adaptive sharpening after the tonemap: 0 leaves the image as TAA resolved it, 1 is as far
 		// as the filter goes before it starts ringing.
@@ -137,6 +136,9 @@ namespace SFE::SystemsModule {
 		float shadowPenumbraMost = 0.5f;
 		// The share of the sun a tree's or a plant's leaves let through to what lies under them (cascadeShadowMap.fs).
 		float shadowLeafLight = 0.f;
+		// How many times a second each cascade of the sun's shadow is drawn anew at most, 0 every frame
+		// (CascadedShadowPass).
+		float shadowRefreshRate = 0.f;
 
 		// The grass clumps: how many to a square metre against the default, and metres out to which they grow.
 		float grassDensity = 1.f;
@@ -144,14 +146,19 @@ namespace SFE::SystemsModule {
 		// How far the models keep their full detail: 1 drops a level as its triangles reach a pixel, 2 holds each
 		// level to twice the distance.
 		float lodDetail = 1.8f;
+		// Metres from the eye to a chunk of the ground past which it is drawn a level coarser (about half its triangles):
+		// far off its triangles are a few pixels and shading wastes most of each 2x2 quad; past the view, never.
+		float terrainLodDistance = 200.f;
+		// The foliage's cut-out leaves drawn for their depth alone before they are shaded, so each pixel of them is shaded
+		// once (GeometryPass): 1 on, 0 off.
+		float foliagePrepass = 1.f;
 
 		// How far the picture is pushed from what the light really does towards a painted one: 0 leaves it, 1 puts the
 		// sun's light in steps, takes the highlights off and flattens the colour.
 		float stylise = 1.f;
 
-		// How much the time of day grades the picture (warm low sun, blue night), and the film grain.
+		// How much the time of day grades the picture (warm low sun, blue night).
 		float timeGrade = 1.f;
-		float filmGrain = 0.012f;
 		// Shafts of light from the sun through the gaps in the clouds and the trees, gathered over the bloom pass.
 		float sunRays = 0.45f;
 
@@ -215,8 +222,22 @@ namespace SFE::SystemsModule {
 		uint32_t shadowPipeline = 0;
 		float shadowIntensity = 0.f;
 
-		PassTime passTimes[Render::RenderHardwareInterface::kMaxGpuMarks - 1]{};
+		static constexpr int kMaxPasses = 64;
+		PassTime passTimes[kMaxPasses]{};
 		int passCount = 0;
+		// The GPU's time of the latest frame it finished, by pass and, where it was marked by pipeline
+		// (RenderHardwareInterface::gpuShaderMarks), by the pipelines drawn in the pass: a pass's whole has no shader, and
+		// what of a marked pass no pipeline drew is its "other".
+		struct GpuTime {
+			const char* pass = "";
+			const char* shader = nullptr;
+			float ms = 0.f;
+		};
+		std::vector<GpuTime> gpuTimes;
+		// gpuTimes made from the spans the RHI read back.
+		void takeGpuSpans(const std::vector<Render::RenderHardwareInterface::GpuSpan>& spans);
+		// A pass's whole in gpuTimes; 0 if it is not there.
+		float gpuMsOf(const char* pass) const;
 		float cpuMs = 0.f;
 		float prepareMs = 0.f; // the passes' prepare(), before the command list
 		float waitMs = 0.f;    // beginning the command list: on Vulkan, waiting for the frame in flight to finish
@@ -402,6 +423,7 @@ namespace SFE::SystemsModule {
 		int mRenderedFrames = 0; // drives the one-shot per-pass dump
 		std::vector<std::unique_ptr<Render::RenderPass>> mRenderPasses;
 		std::vector<std::string> mPassNames; // one per pass, same order
+		std::vector<const char*> mPassZones; // the same names kept for good, the profiler's (Debug::Profiler::intern)
 		std::shared_future<void> updateLock;
 
 		Render::BufferHandle cameraMatricesUBO;

@@ -28,6 +28,7 @@
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
+#include "debugModule/Profiler.h"
 #include "ecss/Registry.h"
 #include "renderModule/Utils.h"
 #include "renderModule/renderPasses/CascadedShadowPass.h"
@@ -771,6 +772,7 @@ namespace SFE::SystemsModule {
 		}
 		pass->init(mRenderData);
 		mRenderPasses.insert(mRenderPasses.begin() + static_cast<std::ptrdiff_t>(position), std::move(pass));
+		mPassZones.insert(mPassZones.begin() + static_cast<std::ptrdiff_t>(position), Debug::Profiler::intern(name));
 		mPassNames.insert(mPassNames.begin() + static_cast<std::ptrdiff_t>(position), std::move(name));
 		return true;
 	}
@@ -787,6 +789,7 @@ namespace SFE::SystemsModule {
 		}
 		const auto index = it - mPassNames.begin();
 		mRenderPasses.erase(mRenderPasses.begin() + index);
+		mPassZones.erase(mPassZones.begin() + index);
 		mPassNames.erase(it);
 		return true;
 	}
@@ -843,15 +846,26 @@ namespace SFE::SystemsModule {
 
 	void RenderSystem::renderFrame()
 	{
+		using Clock = std::chrono::steady_clock;
+		const auto ms = [](Clock::time_point from, Clock::time_point to) {
+			return std::chrono::duration<float, std::milli>(to - from).count();
+		};
+		// A span of the frame for the profiler, from the same readings of the clock as the times kept here.
+		const auto profile = [](const char* name, Clock::time_point from, Clock::time_point to) {
+			Debug::Profiler::zone(name, from.time_since_epoch().count(), to.time_since_epoch().count());
+		};
+
 		auto* info = RenderDebugInfo::instance();
 		info->objectsRendered = 0;
 		info->verticesRendered = 0;
 		info->drawCalls = 0;
 		info->passCount = 0;
 
-		const auto tFrame = std::chrono::high_resolution_clock::now();
+		const auto tFrame = Clock::now();
 
 		auto rhi = Engine::instance()->rhi();
+		info->takeGpuSpans(rhi->gpuSpans());
+		profile("GPU spans", tFrame, Clock::now());
 
 		// One diagnostic frame can snapshot every pass in turn. That needs each pass submitted on
 		// its own so the GPU has actually produced the image before it is read back, which is far
@@ -866,31 +880,42 @@ namespace SFE::SystemsModule {
 
 		// No frame-wide bind here: every pass binds its own sets against its pipeline, as Vulkan requires, and a bind
 		// with no pipeline would be kept by OpenGL alone and hide a pass that forgot one.
+		// Each pass's prepare a zone of its own, "Prepare <pass>": a long "Prepare passes" names the pass it was in.
+		static std::unordered_map<const char*, const char*> prepareZones;
 		for (size_t i = 0; i < mRenderPasses.size(); ++i) {
 			if (shouldRunPass(i)) {
+				const auto tPrepare = Clock::now();
 				mRenderPasses[i]->prepare(mRenderData);
+				auto& zone = prepareZones[mPassZones[i]];
+				if (!zone) {
+					zone = Debug::Profiler::intern(std::string("Prepare ") + mPassZones[i]);
+				}
+				profile(zone, tPrepare, Clock::now());
 			}
 		}
 		// After prepare: the game makes the area tint's map in its own, and may have just replaced it.
+		const auto tTint = Clock::now();
 		updateAreaTint();
-		const auto tBegin = std::chrono::high_resolution_clock::now();
-		info->prepareMs = std::chrono::duration<float, std::milli>(tBegin - tFrame).count();
+		const auto tBegin = Clock::now();
+		profile("Area tint", tTint, tBegin);
+		info->prepareMs = ms(tFrame, tBegin);
+		profile("Prepare passes", tFrame, tBegin);
 		auto cmd = rhi->beginCommandList(Render::CommandListType::Graphics);
-		info->waitMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - tBegin).count();
-		rhi->cmdGpuMark(cmd, 0);
+		const auto tBegun = Clock::now();
+		info->waitMs = ms(tBegin, tBegun);
+		profile(Debug::Profiler::kWaitGpu, tBegin, tBegun);
+		rhi->cmdGpuMark(cmd, nullptr, false);
 		for (size_t i = 0; i < mRenderPasses.size(); ++i) {
 			if (!shouldRunPass(i)) {
 				continue;
 			}
-			const auto tPass = std::chrono::high_resolution_clock::now();
+			const auto tPass = Clock::now();
 			mRenderPasses[i]->render(mRenderData, cmd);
+			const auto tPassEnd = Clock::now();
+			profile(mPassZones[i], tPass, tPassEnd);
+			rhi->cmdGpuMark(cmd, mPassZones[i], true);
 			if (info->passCount < static_cast<int>(std::size(info->passTimes))) {
-				rhi->cmdGpuMark(cmd, static_cast<uint32_t>(info->passCount) + 1);
-				info->passTimes[info->passCount] = {
-					mPassNames[i].c_str(),
-					std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - tPass).count(),
-					static_cast<float>(rhi->gpuMarkMs(static_cast<uint32_t>(info->passCount)))
-				};
+				info->passTimes[info->passCount] = { mPassZones[i], ms(tPass, tPassEnd), info->gpuMsOf(mPassZones[i]) };
 				++info->passCount;
 			}
 
@@ -919,9 +944,11 @@ namespace SFE::SystemsModule {
 		}
 		rhi->endCommandList(cmd);
 
-		const auto tSubmit = std::chrono::high_resolution_clock::now();
+		const auto tSubmit = Clock::now();
 		rhi->submit(cmd);
-		info->submitMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - tSubmit).count();
+		const auto tSubmitted = Clock::now();
+		info->submitMs = ms(tSubmit, tSubmitted);
+		profile("Submit", tSubmit, tSubmitted);
 		info->gpuMs = static_cast<float>(rhi->lastGpuMs());
 		{
 			auto presentTex = mRenderData.frame.texture(Render::FrameId::Final);
@@ -940,12 +967,61 @@ namespace SFE::SystemsModule {
 			}
 		}
 
-		const auto tPresent = std::chrono::high_resolution_clock::now();
+		const auto tPresent = Clock::now();
 		rhi->present();
-		info->presentMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - tPresent).count();
-		info->cpuMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - tFrame).count();
+		const auto tPresented = Clock::now();
+		info->presentMs = ms(tPresent, tPresented);
+		profile(Debug::Profiler::kPresent, tPresent, tPresented);
+		info->cpuMs = ms(tFrame, tPresented);
 		// The whole frame, not just what this function took: the graph is about what the player feels.
 		info->pushFrame(Engine::instance()->getDeltaTime() * 1000.f, info->gpuMs);
+	}
+
+	void RenderDebugInfo::takeGpuSpans(const std::vector<Render::RenderHardwareInterface::GpuSpan>& spans) {
+		static constexpr const char* kOther = "other";
+		gpuTimes.clear();
+		size_t first = 0; // where the pass being read starts in gpuTimes
+		float whole = 0.f;
+		bool byShader = false;
+		for (const auto& span : spans) {
+			const auto ms = static_cast<float>(span.ms);
+			whole += ms;
+			// A pipeline's part of the pass, or the pass's rest; each once a pass, its spans summed.
+			const char* part = span.endsPass || !span.label ? kOther : span.label;
+			byShader |= !span.endsPass && span.label;
+			auto it = std::find_if(gpuTimes.begin() + static_cast<std::ptrdiff_t>(first), gpuTimes.end(),
+				[&](const GpuTime& time) { return time.shader == part; });
+			if (it == gpuTimes.end()) {
+				it = gpuTimes.insert(gpuTimes.end(), { nullptr, part, 0.f });
+			}
+			it->ms += ms;
+			if (!span.endsPass) {
+				continue;
+			}
+			// The pass ends here: its parts kept if it was marked by pipeline, and its whole after them.
+			if (byShader) {
+				for (size_t i = first; i < gpuTimes.size(); ++i) {
+					gpuTimes[i].pass = span.label;
+				}
+			}
+			else {
+				gpuTimes.resize(first);
+			}
+			gpuTimes.push_back({ span.label, nullptr, whole });
+			first = gpuTimes.size();
+			whole = 0.f;
+			byShader = false;
+		}
+		gpuTimes.resize(first);
+	}
+
+	float RenderDebugInfo::gpuMsOf(const char* pass) const {
+		for (const auto& time : gpuTimes) {
+			if (!time.shader && time.pass == pass) {
+				return time.ms;
+			}
+		}
+		return 0.f;
 	}
 
 	RenderSystem::~RenderSystem() = default;

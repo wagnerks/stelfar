@@ -184,6 +184,8 @@ void PointLightPass::ensureGpu(SystemsModule::RenderData&) {
 	vaoDesc.attributes.push_back({ 7, 0, Render::VertexFormat::Float2, static_cast<std::uint32_t>(offsetof(SFE::Vertex3D, texCoords1)), true });
 	pipelineDesc.layout = vaoDesc;
 	pipeline = rhi->createGraphicsPipeline(pipelineDesc);
+	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/cascadeShadowMap_opaque.fs");
+	pipelineOpaque = rhi->createGraphicsPipeline(pipelineDesc);
 }
 
 void PointLightPass::publish(SystemsModule::RenderData& renderDataHandle) {
@@ -244,23 +246,31 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 	rhi->cmdBeginRenderPass(cmd, begin);
 	if (visible) {
 		const auto* meshes = SFE::MeshVaoRegistry::instance();
-		rhi->cmdBindPipeline(cmd, pipeline);
-		rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
-		rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
 		// The casters drawn again for each light, its six faces at once (pointLightMap.gs): a geometry shader that may
 		// write the vertices of every light's faces is slow however few it writes, the lights' faces in one draw took
-		// more than twice as long for a single light.
+		// more than twice as long for a single light. The opaque ones first, depth only, so their depth is there to
+		// reject the cut-out ones behind them.
 		PointShadowPush push;
 		for (size_t light = 0; light < data.shadowEntities.size(); ++light) {
 			push.light = static_cast<int>(light);
-			rhi->cmdPushConstants(cmd, pipeline, ShaderStage::Geometry | ShaderStage::Fragment, &push, sizeof(push));
+			PipelineHandle bound{};
+			for (const bool cutoutPass : { false, true })
 			for (const auto& group : scene.groups(GpuScene::List::Shadow)) {
 				// Transparent casters only reach the cascades, through the glass proxy.
-				if (group.transparent || group.batchCount == 0) {
+				if (group.transparent || group.batchCount == 0 || group.cutout != cutoutPass) {
 					continue;
 				}
+				const auto drawn = group.cutout ? pipeline : pipelineOpaque;
+				if (drawn.id != bound.id) {
+					bound = drawn;
+					rhi->cmdBindPipeline(cmd, drawn);
+					// After the pipeline: OpenGL keeps the vertex and index buffers on the pipeline's VAO.
+					rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
+					rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
+					rhi->cmdPushConstants(cmd, drawn, ShaderStage::Geometry | ShaderStage::Fragment, &push, sizeof(push));
+				}
 				const DescriptorSetHandle sets[] = { mSet, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
-				rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, &matricesBlock.offset, 1);
+				rhi->cmdBindDescriptorSets(cmd, drawn, 0, sets, 2, &matricesBlock.offset, 1);
 				scene.draw(cmd, mView, group);
 			}
 		}

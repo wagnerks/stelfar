@@ -21,8 +21,12 @@ namespace SFE::CoreModule {
 		FUNCTION_BENCHMARK;
 
 		ThreadPool::instance()->syncUpdate();
-		ECSHandler::systemManager().update(dt);
+		{
+			SFE_PROFILE_ZONE("Systems");
+			ECSHandler::systemManager().update(dt);
+		}
 		ThreadPool::instance()->syncUpdate();
+		SFE_PROFILE_ZONE("Registry");
 		ECSHandler::registry().update();
 	}
 

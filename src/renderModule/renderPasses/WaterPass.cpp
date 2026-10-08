@@ -1,4 +1,5 @@
 #include "WaterPass.h"
+#include "LightingPass.h"
 
 #include <cmath>
 
@@ -26,7 +27,8 @@ namespace {
 		float look[4]{};    // x clarity, yz 1 / render size, w 1 when the water looks for reflections on screen
 		SFE::Math::Vec4 tintArea{}; // the area tint (AreaTintFrame); a zero area, no tint
 		SFE::Math::Vec4 tintWater{};
-		SFE::Math::Vec4 current{}; // xy the surface current (WaterComponent::current) on world x/z, metres a second
+		SFE::Math::Vec4 current{}; // xy the surface current (WaterComponent::current) on world x/z, metres a second; z the
+		                           // sky's share left in the sun's shade (GraphicsSettings::shadowAmbient)
 	};
 
 	// The scene's first water surface under its sky, as the shaders take it: false with no sky or no water.
@@ -54,6 +56,7 @@ namespace {
 				const auto current = water->current(*wind);
 				params.current = { current.x, current.y, 0.f, 0.f };
 			}
+			params.current.z = renderData.graphics.shadowAmbient;
 			if (const auto* tint = renderData.frame.data<SFE::Render::AreaTintFrame>(SFE::Render::FrameId::AreaTint)) {
 				params.tintArea = tint->area;
 				params.tintWater = tint->water;
@@ -99,6 +102,9 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(6, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(7, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
+	layoutDesc.bindings.emplace_back(8, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
+	layoutDesc.bindings.emplace_back(9, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
+	layoutDesc.bindings.emplace_back(10, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(21, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
@@ -153,10 +159,28 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	// The fine ripple map; without it the water keeps the sum of waves alone, which is what it had before.
 	const auto* ripple = AssetsModule::TextureHandler::instance()->loadTexture("textures/water/ripple.png");
 	const auto tint = Utils::areaTintMap(renderDataHandle.frame);
+	// The sun's shadow on it (sfe_sun_shadow.glsl): the lighting pass's block and the cascades' matrices. Without a
+	// lighting pass the block is zero, the shadow's strength with it.
+	const LightingPass* lighting = nullptr;
+	for (const auto& pass : ECSHandler::getSystem<SystemsModule::RenderSystem>()->renderPasses()) {
+		if ((lighting = dynamic_cast<const LightingPass*>(pass.get()))) {
+			break;
+		}
+	}
+	using ShadowBlock = std::remove_cvref_t<decltype(lighting->cascadedShadows())>;
+	static const std::vector<Math::Mat4> noMatrices;
+	const auto* csm = renderDataHandle.frame.data<CsmFrame>(FrameId::Csm);
+	const auto shadows = rhi->allocTransient(lighting ? lighting->cascadedShadows() : ShadowBlock{});
+	const auto lightMatrices = Utils::allocMatrices(csm ? csm->lightSpaceMatrices : noMatrices, CsmFrame::kMaxCascades);
+	if (const auto csmDepth = renderDataHandle.frame.texture(FrameId::ShadowCsmDepth)) {
+		rhi->updateDescriptorSets({ { .set = set, .binding = 8, .images{ { csmDepth, renderDataHandle.frame.sampler(FrameId::ShadowCsmDepth) } } } });
+	}
 	rhi->updateDescriptorSets({
 		{ .set = set, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },
 		{ .set = set, .binding = 6, .images{ { mSceneCopy, mLinear } } },
 		{ .set = set, .binding = 7, .images{ { sceneDepth, mNearest } } },
+		{ .set = set, .binding = 9, .buffers{ { shadows.buffer, 0, sizeof(ShadowBlock) } } },
+		{ .set = set, .binding = 10, .buffers{ { lightMatrices.buffer, 0, sizeof(Math::Mat4) * CsmFrame::kMaxCascades } } },
 		{ .set = set, .binding = 15, .buffers{ { block.buffer, 0, sizeof(params) } } },
 		{ .set = set, .binding = 20, .images{ { skyLut.texture, skyLut.sampler } } },
 		{ .set = set, .binding = 21, .images{ { clouds.texture ? clouds.texture : skyLut.texture, clouds.sampler ? clouds.sampler : skyLut.sampler } } },
@@ -173,7 +197,9 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	begin.height = static_cast<uint32_t>(screen.renderH);
 	rhi->cmdBeginRenderPass(cmd, begin);
 	rhi->cmdBindPipeline(cmd, mSurfacePipeline);
-	rhi->cmdBindDescriptorSets(cmd, mSurfacePipeline, 0, &set, 1, &block.offset, 1);
+	// The dynamic offsets in binding order: 9, 10, 15.
+	const uint32_t offsets[] = { shadows.offset, lightMatrices.offset, block.offset };
+	rhi->cmdBindDescriptorSets(cmd, mSurfacePipeline, 0, &set, 1, offsets, 3);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 }

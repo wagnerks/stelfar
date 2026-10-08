@@ -13,6 +13,10 @@
 using namespace SFE::Render::RenderPasses;
 
 namespace {
+	// The march takes one ray for every 4x4 pixels: the light in the haze is soft, and the apply brings it back to each
+	// pixel by depth (volumetric_apply.fs), so the edges of what stands in front of it stay clean.
+	constexpr int kMarchDivisor = 4;
+
 	SFE::Render::PipelineHandle makeFs(SFE::Render::RenderHardwareInterface* rhi, SFE::Render::RenderPassHandle renderPass,
 		SFE::Render::DescriptorSetLayoutHandle layout, const char* vsPath, const char* fsPath) {
 		SFE::Render::GraphicsPipelineDesc pipelineDesc;
@@ -64,6 +68,9 @@ void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 	SFE::Render::DescriptorSetLayoutDesc applyLayout;
 	applyLayout.bindings.emplace_back(0, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
 	applyLayout.bindings.emplace_back(1, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
+	applyLayout.bindings.emplace_back(2, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
+	applyLayout.bindings.emplace_back(5, SFE::Render::DescriptorType::UniformBuffer, SFE::Render::ShaderStage::Fragment);
+	applyLayout.bindings.emplace_back(15, SFE::Render::DescriptorType::UniformBufferDynamic, SFE::Render::ShaderStage::Fragment);
 	mApplyLayout = rhi->createDescriptorSetLayout(applyLayout);
 	mApplySet = rhi->allocateDescriptorSet(mApplyLayout);
 
@@ -72,7 +79,7 @@ void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 }
 
 void VolumetricPass::resize(SystemsModule::RenderData&) {
-	SFE::Render::Utils::screenTarget(mHalfTex, mHalfFbo, mRenderPass, SFE::Render::TextureFormat::RGBA16F, 2);
+	SFE::Render::Utils::screenTarget(mMarchTex, mMarchFbo, mRenderPass, SFE::Render::TextureFormat::RGBA16F, kMarchDivisor);
 	SFE::Render::Utils::screenTarget(mColor, mFbo, mRenderPass);
 }
 
@@ -169,10 +176,10 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 	{
 		SFE::Render::RenderPassBeginInfo beginInfo;
-		beginInfo.framebuffer = mHalfFbo;
+		beginInfo.framebuffer = mMarchFbo;
 		beginInfo.renderPass = mRenderPass;
-		beginInfo.width = std::max(1, screen.renderW / 2);
-		beginInfo.height = std::max(1, screen.renderH / 2);
+		beginInfo.width = std::max(1, screen.renderW / kMarchDivisor);
+		beginInfo.height = std::max(1, screen.renderH / kMarchDivisor);
 		rhi->cmdBeginRenderPass(cmd, beginInfo);
 		rhi->cmdBindPipeline(cmd, mMarchPipeline);
 		const uint32_t offsets[] = { matrices.offset, params.offset }; // bindings 11, 15
@@ -191,10 +198,32 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 			applyWrites.push_back(std::move(w));
 		}
 		{
+			// Gathered texel by texel, and weighed by the depth of each: nothing blended by the sampler.
 			SFE::Render::WriteDescriptor w{};
 			w.set = mApplySet;
 			w.binding = 1;
-			w.images.push_back({ mHalfTex, mLinear });
+			w.images.push_back({ mMarchTex, mNearest });
+			applyWrites.push_back(std::move(w));
+		}
+		{
+			SFE::Render::WriteDescriptor w{};
+			w.set = mApplySet;
+			w.binding = 2;
+			w.images.push_back({ pos, mNearest });
+			applyWrites.push_back(std::move(w));
+		}
+		if (renderDataHandle.cameraMatricesUBO) {
+			SFE::Render::WriteDescriptor w{};
+			w.set = mApplySet;
+			w.binding = 5;
+			w.buffers.push_back({ renderDataHandle.cameraMatricesUBO });
+			applyWrites.push_back(std::move(w));
+		}
+		{
+			SFE::Render::WriteDescriptor w{};
+			w.set = mApplySet;
+			w.binding = 15;
+			w.buffers.push_back({ params.buffer, 0, sizeof(Params) });
 			applyWrites.push_back(std::move(w));
 		}
 		rhi->updateDescriptorSets(applyWrites);
@@ -206,7 +235,7 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 		beginInfo.height = screen.renderH;
 		rhi->cmdBeginRenderPass(cmd, beginInfo);
 		rhi->cmdBindPipeline(cmd, mApplyPipeline);
-		rhi->cmdBindDescriptorSets(cmd, mApplyPipeline, 0, &mApplySet, 1);
+		rhi->cmdBindDescriptorSets(cmd, mApplyPipeline, 0, &mApplySet, 1, &params.offset, 1); // binding 15
 		SFE::Render::Utils::renderQuad(cmd);
 		rhi->cmdEndRenderPass(cmd);
 	}

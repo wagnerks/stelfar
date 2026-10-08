@@ -119,9 +119,7 @@ namespace SFE::SystemsModule {
 			changed |= ImGui::SliderFloat("IBL", &gfx.iblStrength, 0.f, 2.f, "%.2f");
 			changed |= ImGui::SliderFloat("shadow fill", &gfx.shadowAmbient, 0.f, 1.f, "%.2f");
 			changed |= ImGui::SliderFloat("bloom", &gfx.bloomStrength, 0.f, 2.f, "%.2f");
-			changed |= ImGui::SliderFloat("vignette", &gfx.vignette, 0.f, 0.5f, "%.3f");
 			changed |= ImGui::SliderFloat("time of day grade", &gfx.timeGrade, 0.f, 2.f, "%.2f");
-			changed |= ImGui::SliderFloat("film grain", &gfx.filmGrain, 0.f, 0.1f, "%.3f");
 			changed |= ImGui::SliderFloat("sun rays", &gfx.sunRays, 0.f, 3.f, "%.2f");
 			changed |= ImGui::SliderFloat("air life", &gfx.airLifeAmount, 0.f, 3.f, "%.2f");
 		}
@@ -203,7 +201,6 @@ namespace SFE::SystemsModule {
 		root["dofBlur"] = gfx.dofBlur;
 		root["bloomStrength"] = gfx.bloomStrength;
 		root["exposure"] = gfx.exposure;
-		root["vignette"] = gfx.vignette;
 		root["chromaticAberration"] = gfx.chromaticAberration;
 		root["sharpness"] = gfx.sharpness;
 		root["fogStart"] = gfx.fogStart;
@@ -235,7 +232,6 @@ namespace SFE::SystemsModule {
 		root["lodDetail"] = gfx.lodDetail;
 		root["stylise"] = gfx.stylise;
 		root["timeGrade"] = gfx.timeGrade;
-		root["filmGrain"] = gfx.filmGrain;
 		root["sunRays"] = gfx.sunRays;
 		root["airLife"] = gfx.airLife;
 		root["airLifeAmount"] = gfx.airLifeAmount;
@@ -275,7 +271,6 @@ namespace SFE::SystemsModule {
 		f("dofBlur", gfx.dofBlur);
 		f("bloomStrength", gfx.bloomStrength);
 		f("exposure", gfx.exposure);
-		f("vignette", gfx.vignette);
 		f("chromaticAberration", gfx.chromaticAberration);
 		f("sharpness", gfx.sharpness);
 		f("fogStart", gfx.fogStart);
@@ -307,7 +302,6 @@ namespace SFE::SystemsModule {
 		f("lodDetail", gfx.lodDetail);
 		f("stylise", gfx.stylise);
 		f("timeGrade", gfx.timeGrade);
-		f("filmGrain", gfx.filmGrain);
 		f("sunRays", gfx.sunRays);
 		b("airLife", gfx.airLife);
 		f("airLifeAmount", gfx.airLifeAmount);

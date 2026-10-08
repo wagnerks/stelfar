@@ -26,6 +26,8 @@ namespace SFE::Render::RenderPasses {
 		SamplerHandle mLightDepthMapsSampler;
 		RenderPassHandle renderPass;
 		PipelineHandle pipeline;
+		// Opaque casters, depth only: a discard anywhere in a fragment shader takes its pipeline off the early depth test.
+		PipelineHandle pipelineOpaque;
 		Render::DescriptorSetLayoutHandle mBufferLayout{};
 		Render::DescriptorSetLayoutHandle mTextureLayout{};
 		Render::DescriptorSetHandle mSet{};

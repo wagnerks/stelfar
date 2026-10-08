@@ -26,17 +26,27 @@ namespace AssetsModule {
 			return find<T>(key(path));
 		}
 
-		// The asset `path` names, made from `args` if there is none yet.
+		// The asset `path` names, made from `args` if there is none yet. Made with the lock let go: a model made on a
+		// worker thread waits on the main thread to bind its meshes, and the main thread may be asking for an asset
+		// meanwhile (a pass's texture) -- each waited on the other for good. Made twice at once, the first made is the one
+		// kept; the other is kept aside till the end, as a replaced one is.
 		template <class T, class... ARGS>
 		T* createAsset(const std::string& path, ARGS&&... args) {
 			auto id = key(path);
-			std::lock_guard lock(mMutex);
-			if (mAssets.contains(id)) {
-				return find<T>(id);
+			{
+				std::lock_guard lock(mMutex);
+				if (mAssets.contains(id)) {
+					return find<T>(id);
+				}
 			}
 			auto* asset = new T(std::forward<ARGS>(args)...);
 			asset->assetPath = path;
 			stamp(*asset);
+			std::lock_guard lock(mMutex);
+			if (mAssets.contains(id)) {
+				mReplaced.push_back(asset);
+				return find<T>(id);
+			}
 			mAssets.emplace(std::move(id), asset);
 			return asset;
 		}

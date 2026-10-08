@@ -36,9 +36,9 @@ namespace SFE::Render::RenderPasses {
 		};
 
 		void ensureTargets(SystemsModule::RenderData& renderDataHandle);
-		// The pipeline drawing with `fragmentShader`, made the first time it is asked for.
+		// The pipeline drawing with `vertexShader` and `fragmentShader`, made the first time it is asked for.
 		// `depthOnly`: a solid group's (MaterialComponent::solidGlass) depth, laid before its colour, the colour kept.
-		PipelineHandle pipelineFor(const std::string& fragmentShader, bool depthOnly = false);
+		PipelineHandle pipelineFor(const std::string& vertexShader, const std::string& fragmentShader, bool depthOnly = false);
 
 		Params mParams;
 		TextureHandle mSceneCopy{};

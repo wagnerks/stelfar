@@ -104,13 +104,17 @@ void GlassPass::resize(SystemsModule::RenderData&) {
 	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
 }
 
-SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& fragmentShader, bool depthOnly) {
-	const auto key = depthOnly ? fragmentShader + "|depth" : fragmentShader;
+SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& vertexShader, const std::string& fragmentShader, bool depthOnly) {
+	const auto key = vertexShader + '|' + (depthOnly ? fragmentShader + "|depth" : fragmentShader);
 	if (const auto it = mPipelines.find(key); it != mPipelines.end()) {
 		return it->second;
 	}
 	auto* rhi = Engine::instance()->rhi();
 	auto desc = mPipelineDesc;
+	// Its own vertex shader where the material names one (a held thing drawn from the eyes, fp_held.vs), else g_buffer.vs.
+	if (vertexShader != ComponentsModule::DefaultGBufferVS) {
+		desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, vertexShader);
+	}
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, fragmentShader);
 	// Only where it is, through the shader's own discards: the colour under it is kept as it is.
 	if (depthOnly) {
@@ -119,9 +123,9 @@ SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& fragmentSh
 		desc.blend.dstColor = BlendFactor::One;
 	}
 	// A missing shader is remembered too, as nothing drawn: otherwise it is compiled again every frame.
-	const auto pipeline = desc.shaders.fragment ? rhi->createGraphicsPipeline(desc) : PipelineHandle{};
+	const auto pipeline = desc.shaders.vertex && desc.shaders.fragment ? rhi->createGraphicsPipeline(desc) : PipelineHandle{};
 	if (!pipeline) {
-		LogsModule::Logger::LOG_WARNING("Glass shader missing: %s", fragmentShader.c_str());
+		LogsModule::Logger::LOG_WARNING("Glass shader missing: %s or %s", vertexShader.c_str(), fragmentShader.c_str());
 	}
 	mPipelines.emplace(key, pipeline);
 	return pipeline;
@@ -183,10 +187,10 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	};
 	std::vector<Drawn> drawn;
 	for (uint32_t group = 0; group < groups.size(); ++group) {
-		const auto pipeline = pipelineFor(groups[group].fragmentShader);
+		const auto pipeline = pipelineFor(groups[group].vertexShader, groups[group].fragmentShader);
 		if (pipeline && scene.sortGlass(cmd, mGroups[group].view, group, renderDataHandle.mCamFrustum, renderDataHandle.mCameraPos,
 			renderDataHandle.mViewDir)) {
-			drawn.push_back({ group, pipeline, groups[group].solid ? pipelineFor(groups[group].fragmentShader, true) : PipelineHandle{} });
+			drawn.push_back({ group, pipeline, groups[group].solid ? pipelineFor(groups[group].vertexShader, groups[group].fragmentShader, true) : PipelineHandle{} });
 		}
 	}
 	if (drawn.empty()) {

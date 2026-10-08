@@ -13,6 +13,7 @@
 #include "renderModule/renderPasses/RenderPass.h"
 #include "renderModule/renderPasses/SSAOPass.h"
 #include "renderModule/renderPasses/SSRPass.h"
+#include "renderModule/renderPasses/SunShadowPass.h"
 #include "renderModule/renderPasses/SkyPass.h"
 #include "renderModule/renderPasses/WaterPass.h"
 #include "renderModule/renderPasses/GlassPass.h"
@@ -40,6 +41,7 @@ namespace SFE::SystemsModule {
 		{ "Geometry",       true,  &createRenderPass<Render::RenderPasses::GeometryPass> },
 		{ "SceneDepth",     true,  &createRenderPass<Render::RenderPasses::SceneDepthPass> },
 		{ "SSAO",           true,  &createRenderPass<Render::RenderPasses::SSAOPass> },
+		{ "SunShadow",      true,  &createRenderPass<Render::RenderPasses::SunShadowPass> },
 		{ "Lighting",       true,  &createRenderPass<Render::RenderPasses::LightingPass> },
 		{ "Sky",            true,  &createRenderPass<Render::RenderPasses::SkyPass> },
 		{ "SSS",            true,  &createRenderPass<Render::RenderPasses::SSSPass> },

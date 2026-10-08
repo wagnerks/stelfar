@@ -73,6 +73,11 @@ layout(SFE_SET(0, 31), std430) readonly buffer CullView {
     // A shadow cascade's texels per metre, 0 for other views, and the fewest texels a caster must span.
     float texelsPerMetre;
     float minTexels;
+    // The ground's batches, groundFirst up to groundEnd (none outside the G-buffer list), and the metres from the
+    // camera past which its chunks are drawn a level coarser than their size on screen asks for.
+    uint groundFirst;
+    uint groundEnd;
+    float groundLodDistance;
 } view;
 
 // Which level of a chain belongs on screen at this size. The bands are in pixels of screen height, so they
@@ -218,6 +223,11 @@ void main() {
         if (mesh.lodCount > 1u) {
             float distance = max(length(center - view.lodOrigin.xyz), 1e-3);
             uint level = min(lodForSize(radius * view.lodOrigin.w / distance, mesh.lodCount) + view.lodBias, mesh.lodCount - 1u);
+            // A far ground chunk is still large on screen, but seen nearly edge on its triangles are slivers a pixel
+            // or two high, shaded mostly for nothing: past the distance it keeps about half of them.
+            if (b >= view.groundFirst && b < view.groundEnd && distance > view.groundLodDistance) {
+                level = min(level + 1u, mesh.lodCount - 1u);
+            }
             // Never finer than the map's texels show, which in a far cascade is coarser than the camera's pixels ask.
             if (view.texelsPerMetre > 0.0) {
                 level = max(level, lodForSize(texels, mesh.lodCount));
