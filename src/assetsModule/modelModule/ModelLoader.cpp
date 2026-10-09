@@ -521,13 +521,15 @@ AssetsModule::Model* ModelLoader::publish(const std::string& path, Loaded&& load
 	// Its textures held before anyone can see it, and outside the lock (hold may wait for the device thread): one let
 	// go of since it was read (releaseModel) is read back first.
 	auto textures = loaded.ok ? hold(partsOf(loaded.meshes)) : std::vector<Texture*>{};
-	std::lock_guard lock(mtx);
+	// Made outside the lock too: made on a worker, the model waits on the main thread to bind its meshes, and the main
+	// thread may be in here meanwhile with a model of its own (a web's veil) -- each waited on the other for good.
 	AssetsModule::Model* asset = loaded.ok
 		? AssetsManager::instance()->createAsset<Model>(path, std::move(loaded.meshes), std::move(loaded.armature), std::move(loaded.animations))
 		: nullptr;
 	if (asset) {
 		counted(*asset, std::move(textures));
 	}
+	std::lock_guard lock(mtx);
 	loading[path].notify_all();
 	loading.erase(path);
 	return asset;

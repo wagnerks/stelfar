@@ -1,10 +1,10 @@
 start
-D:\projects\pet\litteraly\out\Litteraly\RelWithDebInfo\Litteraly.exe --serve --serve-port 7760
+D:\projects\pet\litteraly\out\Litteraly\RelWithDebInfo\Litteraly.exe --serve --serve-port 7760 --visible
 D:\projects\pet\litteraly\content
 glfwInit ok
 createWindow ok
 initThread
 initThread ok
 initRender ok
-loop cfg backend=Vulkan present=0 visible=0 shouldClose=0 alive=1
+loop cfg backend=Vulkan present=1 visible=1 shouldClose=0 alive=1
 entering loop
