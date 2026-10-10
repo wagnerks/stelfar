@@ -187,8 +187,8 @@ namespace ecss {
 			}
 		}
 
-		for (const auto system : mSystemsMap) {
-			delete system;
+		for (auto system = mMade.rbegin(); system != mMade.rend(); ++system) {
+			delete *system;
 		}
 	}
 

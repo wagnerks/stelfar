@@ -45,6 +45,7 @@ namespace ecss {
 				mSystemsMap.resize(index + 1, nullptr);
 			}
 			mSystemsMap[index] = system;
+			mMade.push_back(system);
 
 			return system;
 		}
@@ -73,6 +74,9 @@ namespace ecss {
 		void addTickSystem(System* system, float ticks);
 
 		std::vector<System*> mSystemsMap;
+		// In the order they were made, each after the ones its constructor made or asked for: deleted the other way, so
+		// a system goes before those it was made on (a character's bodies before the world they are in).
+		std::vector<System*> mMade;
 
 		std::vector<System*> mMainThreadSystems;
 
