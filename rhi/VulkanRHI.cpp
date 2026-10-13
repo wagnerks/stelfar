@@ -610,6 +610,10 @@ namespace SFE::Render {
 			deviceFeatures.fillModeNonSolid = VK_TRUE;
 			m_fillModeNonSolid = true;
 		}
+		if (supportedFeatures.depthBiasClamp) {
+			deviceFeatures.depthBiasClamp = VK_TRUE;
+			m_depthBiasClamp = true;
+		}
 		if (supportedFeatures.multiDrawIndirect) {
 			deviceFeatures.multiDrawIndirect = VK_TRUE;
 		}

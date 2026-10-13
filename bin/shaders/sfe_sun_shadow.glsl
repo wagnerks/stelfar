@@ -14,7 +14,8 @@
 struct CascadData{
     // x 1/resolution, y world size of one texel, z depth bias, w samples
     vec4 cascade;
-    // x light-space depth extent of this cascade, the rest spare
+    // x light-space depth extent of this cascade, y the sun's width (the penumbra's metres a metre from the caster),
+    // z the widest penumbra, metres, w how far light spreads under the skin, metres
     vec4 cascadeExtra;
 };
 
@@ -51,7 +52,7 @@ vec2 vogel_disk_sample(uint sample_index, int sample_count, float angle) {
 // does. Of what lies within `searchUv` of it only what is far enough over it for its penumbra to reach this far
 // sideways: round the foot of a trunk the trunk's top, a stride off across the map, made the shadow there as soft as
 // its tip's.
-float blockerGap(int layer, vec3 proj, vec2 slope, float searchUv, float uvTexel, float worldTexel, float depthRange,
+float blockerGap(int layer, vec3 proj, float searchUv, float uvTexel, float worldTexel, float depthRange,
                  float sunWidth, float angle, float ring) {
     const int BLOCKER_SAMPLES = 16;
     float sum = 0.0;
@@ -59,8 +60,7 @@ float blockerGap(int layer, vec3 proj, vec2 slope, float searchUv, float uvTexel
     for (int i = 0; i < BLOCKER_SAMPLES; ++i) {
         vec2 offset = vogel_disk_sample(uint(i), BLOCKER_SAMPLES, angle, ring) * searchUv;
         float depth = texture(shadowMapDepth, vec3(proj.xy + offset, float(layer))).r;
-        // Measured from the receiver's own plane there (receiverSlope): the slope it lies on is not over it.
-        float gap = (proj.z + dot(slope, offset) - depth) * depthRange;
+        float gap = (proj.z - depth) * depthRange;
         // Metres aside, a texel and a half spared: what stands on the point itself always counts.
         float aside = length(offset) / uvTexel * worldTexel;
         if (gap > 0.5 * worldTexel && aside <= 0.5 * gap * sunWidth + 1.5 * worldTexel) {
@@ -74,41 +74,23 @@ float blockerGap(int layer, vec3 proj, vec2 slope, float searchUv, float uvTexel
     return sum / float(count);
 }
 
-// How the receiver's depth in this cascade's map changes across the map, from two steps along its surface (tx, ty,
-// world): d(depth)/d(uv) of its plane. Each texel is compared with the surface at the texel's own centre (litAt), so
-// neither the filter's width nor the texel's needs a bias -- the bias it took (texels of depth, and as many again along
-// the normal) stood every shadow off its caster's foot, centimetres near the eye and decimetres further out.
-vec2 receiverSlope(int layer, vec3 tx, vec3 ty, float uvTexel, float worldTexel, float depthRange) {
-    mat3 m = mat3(lightSpaceMatrices[layer]);
-    vec3 a = 0.5 * (m * tx);
-    vec3 b = 0.5 * (m * ty);
-    float det = a.x * b.y - a.y * b.x;
-    if (abs(det) < 1e-24) {
-        return vec2(0.0);
-    }
-    vec2 slope = vec2(a.z * b.y - b.z * a.y, b.z * a.x - a.z * b.x) / det;
-    // Held to a surface ten times steeper than its rise along the light: one turned edge-on has none to speak of.
-    float most = 10.0 * worldTexel / uvTexel / depthRange;
-    float len = length(slope);
-    return len > most ? slope * (most / len) : slope;
-}
-
-// The four texels round `uv`, each lit where what it stores is not nearer the sun than the receiver's plane at the
-// texel's own centre less `bias`; bilinear between them, as the comparison sampler did.
-float litAt(int layer, vec2 uv, vec3 proj, vec2 slope, float bias, float texels) {
+// The four texels round `uv`, each lit where what it stores is not nearer the sun than `depth`; bilinear between them,
+// as the comparison sampler did.
+float litAt(int layer, vec2 uv, float depth, float texels) {
     vec2 t = uv * texels - 0.5;
     vec2 base = floor(t);
     vec2 f = t - base;
     vec4 stored = textureGather(shadowMapDepth, vec3((base + 1.0) / texels, float(layer))); // (0,1) (1,1) (1,0) (0,0)
-    vec2 c = (base + 0.5) / texels - proj.xy;
-    float one = 1.0 / texels;
-    vec4 receiver = proj.z - bias + vec4(dot(slope, c + vec2(0.0, one)), dot(slope, c + vec2(one, one)),
-                                          dot(slope, c + vec2(one, 0.0)), dot(slope, c));
-    vec4 lit = step(receiver, stored);
+    vec4 lit = step(vec4(depth), stored);
     return mix(mix(lit.w, lit.z, f.x), mix(lit.x, lit.y, f.x), f.y);
 }
 
-float TechniqueVogelCascaded(int layer, float bias, vec3 projCoords, vec2 slope) {
+// The filter's least radius, texels: an edge sharper than the map can draw it showed the map's texels as stairs along
+// it -- under a chin, over a shoulder.
+const float kLeastTexels = 1.5;
+
+// `leastUv`: the filter's least radius (sampleCascade).
+float TechniqueVogelCascaded(int layer, float bias, vec3 projCoords, float leastUv) {
     if (projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0 ||
         projCoords.z < 0.0 || projCoords.z > 1.0) {
         return 0.0;
@@ -125,14 +107,15 @@ float TechniqueVogelCascaded(int layer, float bias, vec3 projCoords, vec2 slope)
     // width (cascadeExtra.y, the penumbra's metres a metre from the caster) spreads it, up to the widest penumbra
     // (cascadeExtra.z, metres). It was held to ten texels: a few centimetres near the eye, so near shadows were all
     // sharp and the far ones soft only by their cascade's coarser texels.
+    // Never sharper than leastUv.
     float worldTexel = max(cascadedShadow.data[layer].cascade.y, 1e-6);
     float depthRange = max(cascadedShadow.data[layer].cascadeExtra.x, 1e-4);
     float sunWidth = cascadedShadow.data[layer].cascadeExtra.y;
-    float widestUv = max(0.5 * cascadedShadow.data[layer].cascadeExtra.z / worldTexel, 1.5) * uvTexel;
-    float radius = uvTexel * 0.7;
-    float gap = blockerGap(layer, projCoords, slope, widestUv, uvTexel, worldTexel, depthRange, sunWidth, angle, turn.y);
+    float widestUv = max(0.5 * cascadedShadow.data[layer].cascadeExtra.z / worldTexel * uvTexel, leastUv);
+    float radius = leastUv;
+    float gap = blockerGap(layer, projCoords, widestUv, uvTexel, worldTexel, depthRange, sunWidth, angle, turn.y);
     if (gap > 0.0) {
-        radius = clamp(0.5 * gap * sunWidth / worldTexel * uvTexel, uvTexel * 0.7, widestUv);
+        radius = clamp(0.5 * gap * sunWidth / worldTexel * uvTexel, leastUv, widestUv);
     }
     float shadow = 0.0;
     int used = 0;
@@ -142,7 +125,7 @@ float TechniqueVogelCascaded(int layer, float bias, vec3 projCoords, vec2 slope)
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
             continue;
         }
-        float lit = litAt(layer, uv, projCoords, slope, 0.0, 1.0 / uvTexel);
+        float lit = litAt(layer, uv, projCoords.z, 1.0 / uvTexel);
         shadow += 1.0 - lit;
         used += 1;
     }
@@ -160,19 +143,45 @@ vec3 worldToShadowUv(int layer, vec3 worldPos) {
     return proj;
 }
 
-float sampleCascade(int layer, vec3 worldPos, vec3 Normal, vec3 tx, vec3 ty) {
-    // Compared with the receiver's own plane texel by texel (receiverSlope, litAt), the lookup is left where it is but
-    // for a quarter texel along the normal, for a surface that bends within a texel; the residual depth bias, a tenth of
-    // the authored texels (cascade.z), is what rounding leaves. A receiver with no steps (a blade, a leaf) has no plane:
-    // compared flat, by the authored texels whole.
+// The most a surface edge-on to the sun is looked up off itself along its normal, metres (sampleCascade).
+const float kTurnedReachMost = 0.02;
+
+// `card`: a blade or a leaf, drawn into the map from both sides.
+float sampleCascade(int layer, vec3 worldPos, vec3 Normal, bool card, float scatter) {
+    // Compared flat, with the point's own depth: of a closed shape the map keeps only the sides turned from the sun
+    // (CascadedShadowPass culls those facing it), so a side being lit is never in it to shadow itself -- but for a
+    // coarse mesh's triangle just turned from the sun while its smoothed normal still faces it, which the casters' slope
+    // bias (GraphicsSettings::shadowSlopeBias) pushes off past the filter. The lookup is
+    // left where it is but for a quarter texel along the normal, for a surface that bends within a texel; the residual
+    // depth bias, a tenth of the authored texels (cascade.z), is what rounding leaves. A card is in the map itself: by
+    // the authored texels whole. A plane drawn from each triangle's depth, as this compared with before, was that
+    // triangle's alone: over the filter on a finger or a cheek it passed behind the far side, and the shadow there came
+    // in facets, triangle by triangle.
+    // A round thing turning from the sun (a head, an arm, a bottle) meets its own far side in the map within the
+    // filter's reach of its outline, and shadowed itself in a band along the edge the light leaves. Looked up off
+    // itself the more it is turned, by the filter's radius and the texel it reads round each sample, out past its own
+    // outline. Never more than two centimetres, which nothing's shadow shows standing off its foot; a far cascade's
+    // texels are decimetres.
+    // Skin (`scatter`) is lit by the light that went in under it a few millimetres round, shadow and all: its filter
+    // never narrower than that (cascadeExtra.w). A shadow's edge on it is as soft, and its texture as sharp as it was.
+    // A side turned from the sun is what the map keeps (it draws the sides turned away), so compared with itself it came
+    // out lit or shadowed by rounding, triangle by triangle: blotches in the light that wraps on past the sun's edge
+    // (deferred_shading.fs). Its push away from the sun along the normal is taken back, and it is looked up as far
+    // again towards the sun as it is turned away, clear of itself: shadowed only by what stands between it and the sun.
     float worldTexel = cascadedShadow.data[layer].cascade.y;
     float uvTexel = max(cascadedShadow.data[layer].cascade.x, 1.0 / 4096.0);
     float depthRange = max(cascadedShadow.data[layer].cascadeExtra.x, 1e-4);
-    vec3 proj = worldToShadowUv(layer, worldPos + Normal * (0.25 * worldTexel));
-    bool plane = dot(tx, tx) > 0.0;
-    vec2 slope = plane ? receiverSlope(layer, tx, ty, uvTexel, worldTexel, depthRange) : vec2(0.0);
-    float bias = (plane ? 0.1 : 1.0) * cascadedShadow.data[layer].cascade.z * (worldTexel / depthRange + uvTexel * length(slope));
-    return TechniqueVogelCascaded(layer, bias, proj, slope);
+    vec3 sunward = -normalize(cascadedShadow.direction_intensity.xyz);
+    float facing = -dot(Normal, sunward);
+    float turned = sqrt(max(1.0 - facing * facing, 0.0));
+    float least = max(kLeastTexels * worldTexel, scatter * cascadedShadow.data[layer].cascadeExtra.w);
+    float reach = min(least + worldTexel, kTurnedReachMost);
+    float off = 0.25 * worldTexel + reach * turned;
+    vec3 at = worldPos + Normal * off;
+    at += sunward * max(facing, 0.0) * (off + reach);
+    vec3 proj = worldToShadowUv(layer, at);
+    float bias = (card ? 1.0 : 0.1) * cascadedShadow.data[layer].cascade.z * worldTexel / depthRange;
+    return TechniqueVogelCascaded(layer, bias, proj, least / worldTexel * uvTexel);
 }
 
 bool shadowUvOk(vec3 proj) {
@@ -180,7 +189,8 @@ bool shadowUvOk(vec3 proj) {
 }
 
 // The first cascade whose own circle holds this fragment, and how far out in that circle it sits: 0 at
-// the centre, 1 at the rim. Each cascade is fitted to a circle around its slice of the view -- that is
+// the centre, 1 at the rim. Each cascade is fitted to a circle around its slice of the view (the first round the
+// player's body when there is one, RenderData::shadowFocus) -- that is
 // what holds the fit still while the camera turns -- and the square map only circumscribes it, so the
 // circle is the region the cascade was built for. Choosing by distance along the view direction instead,
 // as this did, cuts the ground into slabs across the view, and the step between cascades then runs as a
@@ -205,7 +215,9 @@ int selectCascade(vec3 worldPos, int cc, out float edge) {
     return cc - 1;
 }
 
-float ShadowCascadedCalculation(vec3 fragPosWorldSpace, vec3 Normal, vec3 tx, vec3 ty)
+// `card`: a blade or a leaf (sampleCascade). `scatter`: how much the surface scatters light under it, 0 to 1
+// (sfeScatters).
+float ShadowCascadedCalculation(vec3 fragPosWorldSpace, vec3 Normal, bool card, float scatter)
 {
     int cc = int(cascadedShadow.color_and_misc.w + 0.5);
     if (cc < 1) {
@@ -228,7 +240,7 @@ float ShadowCascadedCalculation(vec3 fragPosWorldSpace, vec3 Normal, vec3 tx, ve
     // Both cascades looked up and mixed. One of the two picked a pixel by a noise turned each frame, for TAA to average,
     // left the ring flickering between a sharp shadow and a soft one; and it went where the view went, so a standing
     // player's breath swept it over the ground.
-    float shadow = sampleCascade(layer, fragPosWorldSpace, Normal, tx, ty);
+    float shadow = sampleCascade(layer, fragPosWorldSpace, Normal, card, scatter);
     if (layer + 1 >= cc) {
         // Nothing past the last cascade to hand over to. Left alone, the shadow stops wherever its square
         // map ends -- four straight lines across the ground, slanted with the light rather than the view.
@@ -236,7 +248,7 @@ float ShadowCascadedCalculation(vec3 fragPosWorldSpace, vec3 Normal, vec3 tx, ve
         return shadow * (1.0 - smoothstep(0.8, 1.0, edge));
     }
 
-    return fade ? mix(shadow, sampleCascade(layer + 1, fragPosWorldSpace, Normal, tx, ty), blend) : shadow;
+    return fade ? mix(shadow, sampleCascade(layer + 1, fragPosWorldSpace, Normal, card, scatter), blend) : shadow;
 }
 
 #endif

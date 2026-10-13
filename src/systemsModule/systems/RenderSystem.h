@@ -112,7 +112,8 @@ namespace SFE::SystemsModule {
 		float rimStrength = 0.7f;
 		float sssWrap = 0.85f;
 		float sssStrength = 0.65f;
-		float sssRadius = 2.8f;
+		// Metres a tap of the light spread under the skin (sss.fs), the red reaching three taps.
+		float sssRadius = 0.003f;
 		float contactStrength = 0.55f;
 		float contactDistance = 8.f;
 		float contactThickness = 0.12f;
@@ -134,6 +135,11 @@ namespace SFE::SystemsModule {
 		// sun's width, as the penumbra's metres a metre from the caster -- up to the widest penumbra, metres.
 		float shadowSunWidth = 0.04f;
 		float shadowPenumbraMost = 0.5f;
+		// The casters' depth pushed off the sun by this many times their own depth's change across a texel, up to the
+		// most, metres (CascadedShadowPass): a triangle of a coarse mesh just turned from the sun is in the map, and lit
+		// beside it compared with itself, it shadowed itself in facets along the edge the light leaves.
+		float shadowSlopeBias = 3.f;
+		float shadowSlopeBiasMost = 0.02f;
 		// The share of the sun a tree's or a plant's leaves let through to what lies under them (cascadeShadowMap.fs).
 		float shadowLeafLight = 0.f;
 		// How many times a second each cascade of the sun's shadow is drawn anew at most, 0 every frame
@@ -195,6 +201,10 @@ namespace SFE::SystemsModule {
 
 		RenderMode mRenderType = RenderMode::DEFAULT;
 		GraphicsSettings graphics;
+		// A sphere the nearest cascade of the sun's shadow is fitted round instead of its slice of the view: xyz its
+		// centre, w its radius, 0 for none. The player's own body, so its shadows on itself -- a chin on the throat, the
+		// hands on what they hold -- are as fine seen from beside it as from its eyes (CascadeShadowComponent).
+		Math::Vec4 shadowFocus = {};
 
 		int taaFrame = 0;
 		float taaJitterX = 0.f;

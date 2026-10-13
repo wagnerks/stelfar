@@ -476,6 +476,8 @@ namespace SFE::Render
 		// False: nothing reaches the colour attachments, only the depth -- a depth pre-pass inside a pass that has them.
 		// A fragment shader with no colour outputs does not leave them as they were: what it writes there is undefined.
 		bool					colorWrite = true;
+		// True: the depth it writes is pushed further off by cmdSetDepthBias, set after binding it (a shadow map's casters).
+		bool					depthBias = false;
 
 		// For openGL backend it can be ignored.
 		// For Vulkan backend: which render pass and subpass this pipeline is compatible with.
@@ -723,6 +725,15 @@ namespace SFE::Render
 			(void)y;
 			(void)width;
 			(void)height;
+		}
+		// For the bound pipeline made with depthBias: its depth pushed off by `constant` of the depth's least steps and
+		// `slope` times the triangle's own steepest change of depth across a pixel, the whole held to `clamp` (depth, 0
+		// none).
+		virtual void cmdSetDepthBias(CommandListHandle cmd, float constant, float slope, float clamp) {
+			(void)cmd;
+			(void)constant;
+			(void)slope;
+			(void)clamp;
 		}
 		virtual void cmdPipelineBarrier(CommandListHandle cmd, const PipelineBarrier& barrier) = 0;
 		// Writes the data at the call, not when the list runs: every draw in the list reads the new

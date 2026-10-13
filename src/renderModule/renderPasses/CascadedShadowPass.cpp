@@ -51,6 +51,9 @@ namespace {
 	// How far the camera goes from where a cascade was drawn, as a share of its half width, before it is drawn anew
 	// whatever the refresh rate: a teleport, a fall. Walking never goes that far between two of its frames.
 	constexpr float kGoneShare = 0.25f;
+	// Texels a metre a cascade has at least for a caster's detail to read in its shadow -- a leaf card's cut-out outline,
+	// the finer of its levels of detail: a centimetre a texel, the cascades about the eye and hands.
+	constexpr float kFineTexelsPerMetre = 100.f;
 }
 
 CascadedShadowPass::CascadedShadowPass() {
@@ -251,6 +254,8 @@ void CascadedShadowPass::initRender() {
 	pipelineDesc.depthStencilState.depthWrite = true;
 	pipelineDesc.depthStencilState.depthCompareOp = CompareOp::Less;
 	pipelineDesc.cullMode = CullMode::Front;
+	// Pushed off the sun by their slope (GraphicsSettings::shadowSlopeBias), set as each is bound.
+	pipelineDesc.depthBias = true;
 	// Plain CCW, like every other pass. toVkFrontFace already inverts the winding to absorb the
 	// un-flipped Vulkan viewport, so branching on the backend here compensated a second time and
 	// left the two backends storing opposite faces: OpenGL the far surface, Vulkan the near one.
@@ -328,7 +333,7 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		return;
 	}
 
-	shadowsComp->calculateLightSpaceMatrices(renderDataHandle.cameraProjection, renderDataHandle.current.view);
+	shadowsComp->calculateLightSpaceMatrices(renderDataHandle.cameraProjection, renderDataHandle.current.view, renderDataHandle.shadowFocus);
 	const auto lightMatrices = shadowsComp->getLightSpaceMatrices();
 
 	updateRenderData(renderDataHandle);
@@ -336,10 +341,11 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	if (!lightMatrices.empty()) {
 		mData.lightSpaceMatrices = lightMatrices;
 	}
-	// The near ones (before kFirstFar) are drawn every frame: the character's own shadow and the leaves swaying over the
-	// ground about it, kept a frame or two, trailed the running feet and stepped while the leaves moved smoothly.
+	// The near ones (reaching no further than kNearReach) are drawn every frame: the character's own shadow and the leaves
+	// swaying over the ground about it, kept a frame or two, trailed the running feet and stepped while the leaves moved
+	// smoothly. However many there are: one fitted round the hands alone, for their own shadows, is near as well.
 	// A far one is drawn no more often than graphics.shadowRefreshRate times a second (0: every frame), and what moves in
-	// it moves in its shadow that much later; kShare of that, a half and a third: each costs
+	// it moves in its shadow that much later; kShare of that, from the first far one on, a half and a third: each costs
 	// about as much to draw as a near one, and what moves past 12 m moves little on the screen. While the camera and the
 	// sun stay put a far cascade's volume does not move (it is fitted to a circle round its slice and snapped to texels,
 	// so turning on the spot keeps it too), and then its map is kept for up to kStaticRefreshFrames: past 60 m nothing
@@ -348,7 +354,12 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	// the rate the frames come, the fractions carried on rather than rounded up: the cost spread over the frames, no more
 	// than kMostBanked saved up for one. One the camera has gone kGoneShare of its half width from is drawn at once,
 	// whatever the rate.
-	constexpr float kShare[] = { 1.f, 1.f, 0.5f, 1.f / 3.f };
+	constexpr float kShare[] = { 0.5f, 1.f / 3.f };
+	const auto& levels = shadowsComp->shadowCascadeLevels;
+	size_t firstFar = 0;
+	while (firstFar + 1 < levels.size() && levels[firstFar + 1] <= kNearReach) {
+		++firstFar;
+	}
 	constexpr float kMostBanked = 2.f;
 	mCascades.resize(lightFbos.size());
 	std::vector<bool> skip(mCascades.size(), false);
@@ -361,8 +372,8 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	for (size_t layer = 0; layer < count; ++layer) {
 		auto& cascade = mCascades[layer];
 		const bool unmoved = cascade.lightSpace == mData.lightSpaceMatrices[layer] && cascade.framesSinceDrawn < kStaticRefreshFrames;
-		const float share = kShare[(std::min)(layer, std::size(kShare) - 1)];
-		const bool everyFrame = layer < kFirstFar;
+		const bool everyFrame = layer < firstFar;
+		const float share = everyFrame ? 1.f : kShare[(std::min)(layer - firstFar, std::size(kShare) - 1)];
 		shares += everyFrame ? 0.f : share;
 		++cascade.framesSinceDrawn;
 		cascade.age += step;
@@ -372,7 +383,7 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		if (everyFrame || !cascade.drawn || Math::length(renderDataHandle.mCameraPos - cascade.drawnFrom) > halfWidth * kGoneShare) {
 			due.emplace_back(kMust, layer);
 		}
-		else if (!(layer >= kFirstFar && unmoved) && (rate <= 0.f || cascade.age * rate * share >= 1.f)) {
+		else if (!(layer >= firstFar && unmoved) && (rate <= 0.f || cascade.age * rate * share >= 1.f)) {
 			due.emplace_back(cascade.age * rate * share, layer);
 		}
 	}
@@ -386,7 +397,7 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	float drawnNow = 0.f;
 	for (size_t i = 0; i < due.size(); ++i) {
 		skip[due[i].second] = i >= perFrame && due[i].first != kMust;
-		drawnNow += skip[due[i].second] || due[i].second < kFirstFar ? 0.f : 1.f;
+		drawnNow += skip[due[i].second] || due[i].second < firstFar ? 0.f : 1.f;
 	}
 	// One drawn at once over the budget is paid back over the next frames, no more than one cascade's worth; the near
 	// ones are outside the budget.
@@ -457,10 +468,11 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		// No occlusion culling: building a depth pyramid of each cascade every frame cost more than the casters it
 		// saved. The cascades redrawn every frame also leave out casters whose shadow falls outside the camera's view;
 		// a kept map may be read after the camera has turned, so those draw everything in their volume.
-		// Past the first cascade a caster's own shading is too far off to show the coarser silhouette.
-		cascade.view.lodBias = layer > 0 ? 1u : 0u;
+		// In a coarse one a caster's own shading is too far off to show the coarser silhouette.
+		const bool fine = texelsPerMetre >= kFineTexelsPerMetre;
+		cascade.view.lodBias = fine ? 0u : 1u;
 		const bool visible = !skip[layer] && layer < shadowsComp->cascades.size()
-			&& scene.cullShadowCasters(cmd, cascade.view, frustum, layer < kFirstFar ? &renderDataHandle.mCamFrustum : nullptr,
+			&& scene.cullShadowCasters(cmd, cascade.view, frustum, layer < firstFar ? &renderDataHandle.mCamFrustum : nullptr,
 				mData.lightDirection, texelsPerMetre);
 
 		if (visible) {
@@ -504,10 +516,10 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 			push.cascadeLayer = static_cast<int>(layer);
 			push.leafLight = renderDataHandle.graphics.shadowLeafLight;
 
-			// Past the first cascade a leaf card's cut-out outline hardly reads in the shadow, only its coverage: drawn solid
+			// In a coarse cascade a leaf card's cut-out outline hardly reads in the shadow, only its coverage: drawn solid
 			// there, without the texture fetch the cut-out takes (cut out to 50 m the floor of a forest looked much the same,
 			// and the pass took 9 ms instead of 4).
-			const bool solidCutouts = layer >= 1;
+			const bool solidCutouts = !fine;
 			PipelineHandle bound{};
 			// Solid casters first, so their depth is there to reject the cut-out ones behind them.
 			for (const bool cutoutPass : { false, true })
@@ -523,6 +535,8 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 					rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 					rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
 					rhi->cmdPushConstants(cmd, pipeline, ShaderStage::Vertex | ShaderStage::Fragment, &push, sizeof(push));
+					rhi->cmdSetDepthBias(cmd, 0.f, renderDataHandle.graphics.shadowSlopeBias,
+						renderDataHandle.graphics.shadowSlopeBiasMost / (std::max)(shadowsComp->cascades[layer].depthRange, 1e-4f));
 				}
 				const DescriptorSetHandle sets[] = { cascade.set, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
 				rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, &matrices.offset, 1);

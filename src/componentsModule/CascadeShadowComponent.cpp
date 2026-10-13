@@ -71,9 +71,9 @@ namespace SFE::ComponentsModule {
 		mDirty = true;
 	}
 
-	void CascadeShadowComponent::calculateLightSpaceMatrices(const MathModule::PerspectiveProjection& projection, const Math::Mat4& view) {
+	void CascadeShadowComponent::calculateLightSpaceMatrices(const MathModule::PerspectiveProjection& projection, const Math::Mat4& view, const Math::Vec4& focus) {
 		updateCascades(projection);
-		updateLightSpaceMatrices(view);
+		updateLightSpaceMatrices(view, focus);
 	}
 
 	const std::vector<Math::Mat4>& CascadeShadowComponent::getLightSpaceMatrices() const {
@@ -124,7 +124,7 @@ namespace SFE::ComponentsModule {
 
 	}
 
-	void CascadeShadowComponent::updateLightSpaceMatrices(const Math::Mat4& cameraView) {
+	void CascadeShadowComponent::updateLightSpaceMatrices(const Math::Mat4& cameraView, const Math::Vec4& focus) {
 		mLightSpaceMatrices.clear();
 		if (cascades.empty()) {
 			return;
@@ -140,8 +140,22 @@ namespace SFE::ComponentsModule {
 		const auto f = Math::normalize(tc->getForward());
 
 		for (auto& shadowCascade : cascades) {
-			const auto fitPts = getFrustumCornersWorldSpace(
-				shadowCascade.viewProjection.getProjectionsMatrix(), cameraView);
+			// The first round the focus, if there is one: the corners of the cube about its sphere, for the map's centre
+			// and the depth it spans, and the sphere's own radius for its width.
+			const bool focused = &shadowCascade == &cascades.front() && focus.w > 0.f;
+			std::vector<Math::Vec4> fitPts;
+			if (focused) {
+				for (const float x : { -focus.w, focus.w }) {
+					for (const float y : { -focus.w, focus.w }) {
+						for (const float z : { -focus.w, focus.w }) {
+							fitPts.emplace_back(focus.x + x, focus.y + y, focus.z + z, 1.f);
+						}
+					}
+				}
+			}
+			else {
+				fitPts = getFrustumCornersWorldSpace(shadowCascade.viewProjection.getProjectionsMatrix(), cameraView);
+			}
 
 			Math::Vec3 center(0.f);
 			for (const auto& p : fitPts) {
@@ -177,7 +191,7 @@ namespace SFE::ComponentsModule {
 			// metres out, it came out a few tenths of a millimetre different whenever the eye drifted; and the grid,
 			// counted from the world's origin some thirty thousand texels away, slid two or three texels under every
 			// shadow every frame.
-			const float radius = sphereRadius(getFrustumCornersWorldSpace(shadowCascade.viewProjection.getProjectionsMatrix()));
+			const float radius = focused ? focus.w : sphereRadius(getFrustumCornersWorldSpace(shadowCascade.viewProjection.getProjectionsMatrix()));
 			Math::Mat4 cullingMatrix;
 			auto projViewMatrix = fitLightSpace(fitPts, lightView, radius, shadowCascade.zMult.x, shadowCascade.zMult.y, resolution.x, &cullingMatrix, &shadowCascade.depthRange, &shadowCascade.worldPerTexel);
 			mLightSpaceMatrices.push_back(projViewMatrix);

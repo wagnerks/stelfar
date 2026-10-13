@@ -607,6 +607,13 @@ namespace SFE::Render
 			glCullFace(gp.cullModeGL);
 		}
 		glFrontFace(gp.frontFaceGL);
+		// Pushed off by cmdSetDepthBias.
+		if (gp.desc.depthBias) {
+			glEnable(GL_POLYGON_OFFSET_FILL);
+		}
+		else {
+			glDisable(GL_POLYGON_OFFSET_FILL);
+		}
 
 		// depth
 		if (gp.depthTestEnabled) {
@@ -956,6 +963,9 @@ namespace SFE::Render
 			}
 			else if constexpr (std::is_same_v<T, CmdSetScissor>) {
 				execSetScissor(recorded.x, recorded.y, recorded.width, recorded.height);
+			}
+			else if constexpr (std::is_same_v<T, CmdSetDepthBias>) {
+				execSetDepthBias(recorded.constant, recorded.slope, recorded.clamp);
 			}
 			else if constexpr (std::is_same_v<T, CmdPipelineBarrier>) {
 				execPipelineBarrier(recorded.barrier);
@@ -2633,6 +2643,18 @@ namespace SFE::Render
 		if (GLCommandList* list = recordingList(cmd)) {
 			list->commands.emplace_back(CmdSetScissor{ x, y, width, height });
 		}
+	}
+
+	void OpenGLRHI::cmdSetDepthBias(CommandListHandle cmd, float constant, float slope, float clamp)
+	{
+		if (GLCommandList* list = recordingList(cmd)) {
+			list->commands.emplace_back(CmdSetDepthBias{ constant, slope, clamp });
+		}
+	}
+
+	void OpenGLRHI::execSetDepthBias(float constant, float slope, float clamp)
+	{
+		glPolygonOffsetClamp(slope, constant, clamp);
 	}
 
 	void OpenGLRHI::execSetScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)

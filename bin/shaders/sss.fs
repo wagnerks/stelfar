@@ -29,12 +29,19 @@ const vec3 kW[7] = vec3[](
     vec3(0.020, 0.002, 0.000)
 );
 
+float scattersAt(vec2 uv) {
+    return sfeScatters(texture(gNormal, uv).xyz, texture(gMaterial, uv).r);
+}
+
+// The light that goes in under the skin comes out again round where it went in, the red furthest: the picture spread
+// over the skin by params.radius metres a tap, so a shadow's edge on it is as soft seen close as from afar. In pixels
+// a tap it was a few millimetres close up, and the edge sharp. Taken only from what scatters too (not the shirt by
+// the neck) and lies on the same surface (not the cheek behind an ear). The sun's shadow on it is spread as far
+// (sfe_sun_shadow.glsl): this spreads the colour, which keeps most of its blue and green where it is.
 void main() {
     vec3 center = texture(sceneHdr, TexCoords).rgb;
     // The mask first: most of a frame does not scatter, and the position costs a matrix product.
-    vec3 nSample = texture(gNormal, TexCoords).xyz;
-    float metallic = texture(gMaterial, TexCoords).r;
-    float mask = dot(nSample, nSample) < 1e-6 ? 0.0 : clamp((1.0 - length(nSample)) * 2.0, 0.0, 1.0) * (1.0 - metallic);
+    float mask = scattersAt(TexCoords);
     if (mask < 0.01 || params.strength < 0.001) {
         FragColor = vec4(center, 1.0);
         return;
@@ -45,8 +52,10 @@ void main() {
         return;
     }
 
-    vec2 texel = params.radius / max(params.resolution, vec2(1.0));
-    float depthScale = max(0.08, length(world) * 0.012);
+    // A tap's metres across the screen here, in UV.
+    float depth = max(abs((matrices.view * vec4(world, 1.0)).z), 1e-3);
+    vec2 texel = params.radius * 0.5 * abs(vec2(matrices.projection[0][0], matrices.projection[1][1])) / depth;
+    float reach = 4.0 * params.radius;
 
     vec3 acc = vec3(0.0);
     vec3 wsum = vec3(0.0);
@@ -55,8 +64,8 @@ void main() {
         vec2 uvV = TexCoords + vec2(0.0, kOff[i]) * texel;
         vec3 pH = sfeScenePosition(sceneDepth, uvH, matrices.invProjection, matrices.invView);
         vec3 pV = sfeScenePosition(sceneDepth, uvV, matrices.invProjection, matrices.invView);
-        float aH = exp(-dot(pH - world, pH - world) / (depthScale * depthScale));
-        float aV = exp(-dot(pV - world, pV - world) / (depthScale * depthScale));
+        float aH = exp(-dot(pH - world, pH - world) / (reach * reach)) * scattersAt(uvH);
+        float aV = exp(-dot(pV - world, pV - world) / (reach * reach)) * scattersAt(uvV);
         vec3 wH = kW[i] * aH;
         vec3 wV = kW[i] * aV;
         acc += texture(sceneHdr, uvH).rgb * wH + texture(sceneHdr, uvV).rgb * wV;

@@ -33,7 +33,8 @@ namespace SFE::ComponentsModule {
 		CascadeShadowComponent(ecss::SectorId id) : ComponentInterface(id) {};
 
 		void updateCascades(const MathModule::PerspectiveProjection& cameraProjection);
-		void updateLightSpaceMatrices(const Math::Mat4& cameraView);
+		// The first cascade round `focus` (xyz its centre, w its radius) when it has one (RenderData::shadowFocus).
+		void updateLightSpaceMatrices(const Math::Mat4& cameraView, const Math::Vec4& focus = {});
 
 		// Returns the matrix the shadow pass renders with; its depth convention follows the
 		// backend. `cullingMatrix`, when given, receives the same volume in the [-1,1] convention
@@ -50,7 +51,7 @@ namespace SFE::ComponentsModule {
 
 
 		void markDirty();
-		void calculateLightSpaceMatrices(const MathModule::PerspectiveProjection& projection, const Math::Mat4& view);
+		void calculateLightSpaceMatrices(const MathModule::PerspectiveProjection& projection, const Math::Mat4& view, const Math::Vec4& focus = {});
 		const std::vector<Math::Mat4>& getLightSpaceMatrices() const;
 
 		float shadowIntensity = 1.f;

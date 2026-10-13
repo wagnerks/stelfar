@@ -206,6 +206,7 @@ namespace SFE::Render
 		void cmdDispatch(CommandListHandle cmd, uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) override;
 		void cmdBlit(CommandListHandle cmd, FramebufferHandle src, FramebufferHandle dst, BlitMask mask = BlitMask::Color, BlitFilter filter = BlitFilter::Nearest) override;
 		void cmdSetScissor(CommandListHandle cmd, int32_t x, int32_t y, uint32_t width, uint32_t height) override;
+		void cmdSetDepthBias(CommandListHandle cmd, float constant, float slope, float clamp) override;
 		void cmdPipelineBarrier(CommandListHandle cmd, const PipelineBarrier& barrier) override;
 		void cmdUpdateBuffer(CommandListHandle cmd, BufferHandle handle, size_t offset, size_t size, const void* data) override;
 		void cmdCopyBuffer(CommandListHandle cmd, BufferHandle src, BufferHandle dst, size_t srcOffset, size_t dstOffset, size_t size) override;
@@ -347,6 +348,7 @@ namespace SFE::Render
 		bool m_samplerAnisotropy = false;
 		float m_maxAnisotropy = 1.f;
 		bool m_fillModeNonSolid = false;
+		bool m_depthBiasClamp = false;
 		bool m_hostQueryReset = false;
 		bool m_negativeOneToOneDepth = false;
 		uint32_t m_currentFrame = 0;

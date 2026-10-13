@@ -272,7 +272,7 @@ void main() {
     // The sun where nothing stands between it and the water, as on the ground: the water a flat plane, its steps across
     // it known exactly. What the sun lights on it -- the water's own colour, the glitter, foam and scum -- by that.
     float sunLit = 1.0 - cascadedShadow.direction_intensity.w
-        * ShadowCascadedCalculation(vWorld, vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0));
+        * ShadowCascadedCalculation(vWorld, vec3(0.0, 1.0, 0.0), false, 0.0);
     vec3 sunHere = sun * sunLit;
     // The area tint: murkier water, of its colour, where the map says.
     float murk = sfeWaterMurk(areaTintMap, water.tintArea, water.tintWater, vWorld.xz);

@@ -218,6 +218,8 @@ void LightingPass::fillCascadedShadows(const SystemsModule::RenderData& renderDa
 		cascadeRenderData.cascadeExtra.x = cascade.depthRange;
 		cascadeRenderData.cascadeExtra.y = renderDataHandle.graphics.shadowSunWidth;
 		cascadeRenderData.cascadeExtra.z = renderDataHandle.graphics.shadowPenumbraMost;
+		// How far the light spreads under the skin, metres: sss.fs's three taps.
+		cascadeRenderData.cascadeExtra.w = 3.f * renderDataHandle.graphics.sssRadius;
 	}
 
 	const auto& levels = csm.shadowCascadeLevels;

@@ -1030,6 +1030,7 @@ void main() {
 		rasterizer.cullMode = toVkCullMode(desc.cullMode);
 		rasterizer.frontFace = toVkFrontFace(desc.frontFace);
 		rasterizer.lineWidth = 1.f;
+		rasterizer.depthBiasEnable = toVkBool(desc.depthBias);
 
 		VkPipelineMultisampleStateCreateInfo multisampling{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
 		multisampling.rasterizationSamples = toVkSampleCount(renderPass->desc.sampleCount);
@@ -1062,7 +1063,10 @@ void main() {
 		colorBlending.attachmentCount = colorAttachmentCount;
 		colorBlending.pAttachments = colorAttachmentCount ? blendAttachments.data() : nullptr;
 
-		const std::array dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+		if (desc.depthBias) {
+			dynamicStates.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
+		}
 		VkPipelineDynamicStateCreateInfo dynamicState{};
 		dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 		dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
@@ -1353,6 +1357,15 @@ void main() {
 		};
 		vkCmdSetViewport(list->cmd, 0, 1, &viewport);
 		vkCmdSetScissor(list->cmd, 0, 1, &scissor);
+	}
+
+	void VulkanRHI::cmdSetDepthBias(const CommandListHandle cmd, const float constant, const float slope, const float clamp) {
+		auto* list = getLive(m_commandLists, cmd.id);
+		if (!list || !list->recording || list->cmd == VK_NULL_HANDLE) {
+			return;
+		}
+		// The clamp only where the device has it; OpenGL 4.6 always does.
+		vkCmdSetDepthBias(list->cmd, constant, m_depthBiasClamp ? clamp : 0.f, slope);
 	}
 
 	void VulkanRHI::cmdSetScissor(const CommandListHandle cmd, const int32_t x, const int32_t y, const uint32_t width, const uint32_t height) {

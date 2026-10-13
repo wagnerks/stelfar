@@ -166,7 +166,7 @@ void main() {
 #ifdef SFE_GBUFFER_STYLE
     // A game's own look over the surface: a shader that defines SFE_GBUFFER_STYLE declares sfeStyleSurface before
     // including this file and defines it after. It gets the colour as read, the normal, and the coat written below with
-    // its last channel (one of sfe.glsl's markers, kSfeCel..., and what that channel says there: sfeGBufferMaterial),
+    // its last channel (one of sfe.glsl's markers, kSfeGlint..., and what that channel says there: sfeGBufferMaterial),
     // and turns them into its look before anything below is worked out from them.
     float coat = pc.clearcoat;
     float coatRough = pc.clearcoatRough;

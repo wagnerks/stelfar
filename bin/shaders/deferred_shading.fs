@@ -53,8 +53,7 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     float rimStrength;
     float taaFrame;  // -1 without TAA
     float cloudCoverage;
-    // How far the picture is pushed from what the light really does towards a painted one: the sun's light in steps
-    // rather than a gradient, no highlight to speak of, and the colour flattened.
+    // How far the picture is pushed towards a painted one: what is far off in the sky's own tone, the colours fuller.
     float stylise;
     float ssaoSun; // the share of the AO the sun's light takes
     float shelterCount;
@@ -288,15 +287,13 @@ void main() {
     float metallic = pbr.x;
     float specFactor = pbr.y;
     float clearcoat = pbr.z;
-    const bool celGlint = abs(clearcoat - kSfeCelGlint) < 0.5 / 255.0;
-    const bool glint = celGlint || abs(clearcoat - kSfeGlint) < 0.5 / 255.0;
-    const bool cel = celGlint || abs(clearcoat - kSfeCel) < 0.5 / 255.0;
+    const bool glint = abs(clearcoat - kSfeGlint) < 0.5 / 255.0;
     const bool ground = abs(clearcoat - kSfeGround) < 0.5 / 255.0;
-    if (glint || cel || ground) {
+    if (glint || ground) {
         clearcoat = 0.0;
     }
     // Leaves and blades let the sun through (see sfeGBufferMaterial).
-    const float translucency = clearcoat < 0.01 && !celGlint ? smoothstep(0.1, 1.0, pbr.w) : 0.0;
+    const float translucency = clearcoat < 0.01 ? smoothstep(0.1, 1.0, pbr.w) : 0.0;
     // The area tint: whatever is a plant's colour (by its colour: hair is cut out as leaves are, and is not to wither)
     // goes where the map says towards its grey times the tint's colour, which keeps its pattern and can darken it.
     const vec3 areaTint = sfeAreaTint(areaTintMap, pc.tintArea, FragPos.xz);
@@ -335,13 +332,10 @@ void main() {
         albedo, F0, roughness, metallic,
         sunColour * PI, f90);
     // A glint mirrors the sun whole, over a spot a few pixels across (a sharper one falls between pixels and TAA takes
-    // it for a firefly); the glare in bloom_extract.fs turns it into a star. As strongly as a drawing that glints says
-    // (kSfeCelGlint, its last channel), and added to the light once the drawn look has flattened that: it would swell
-    // the glint towards the line where the light ends.
+    // it for a firefly); the glare in bloom_extract.fs turns it into a star.
     vec3 flash = vec3(0.0);
     if (glint) {
-        flash = cookTorrance(Normal, V, Lsun, vec3(0.0), vec3(1.0), 0.3, 0.0, sunColour * PI, 1.0)
-            * (celGlint ? pbr.w : 1.0);
+        flash = cookTorrance(Normal, V, Lsun, vec3(0.0), vec3(1.0), 0.3, 0.0, sunColour * PI, 1.0);
     }
 
     // Leaves and blades let the sun through: lit from behind they glow, most where the eye looks towards the sun
@@ -352,11 +346,10 @@ void main() {
         Lo += albedo * sunColour * translucency * (behind * 0.55 + intoSun * 1.1);
     }
 
-    float nDotLSun = max(dot(Normal, Lsun), 0.0);
-    float shadow = 0.0;
-    if (nDotLSun > 0.001 || translucency > 0.0) {
-        shadow = texelFetch(sunShadowMask, ivec2(TexCoords * vec2(textureSize(sunShadowMask, 0))), 0).r;
-    }
+    // Everywhere, turned from the sun or not: what wraps on past where the sun leaves a surface (the light under the
+    // skin, the sheen) is shadowed there as on the side facing it. Read only where the surface faced the sun, the
+    // shadow ended at that edge and the wrapped light came on there at once: a hard, ragged line down a face.
+    const float shadow = texelFetch(sunShadowMask, ivec2(TexCoords * vec2(textureSize(sunShadowMask, 0))), 0).r;
 
     // A point light (a fire, a lantern) is its own: its shadow darkens only its light, never the sun's or the sky's,
     // and the sun's shadow leaves it alone. It dies away before its radius rather than ending there in a ring.
@@ -379,15 +372,6 @@ void main() {
         Lpoint += lit * cookTorrance(Normal, V, Lp, albedo, F0, roughness, metallic, light.Color * attenuation, f90);
     }
 
-    // Cartoon light: a surface is either in the sun or turned from it, with a soft edge between the two rather than
-    // the long falloff real light has -- two tones, the way an animated film paints a round shape. Taken on the light,
-    // so a cloud's shadow or a tree's shade still falls where it did.
-    // A drawing (kSfeCel) has no soft edge at all: flat in the light, a line, flat in the shade.
-    const float litSide = cel ? smoothstep(0.02, 0.08, nDotLSun) : smoothstep(0.0, 0.32, nDotLSun);
-    if (pc.stylise > 0.0) {
-        const float toon = cel ? litSide : litSide * 0.85 + nDotLSun * 0.15;
-        Lo *= mix(1.0, nDotLSun > 0.0001 ? toon / max(nDotLSun, 1e-3) : 1.0, pc.stylise);
-    }
     Lo += flash;
 
     const float shadowFactor = 1.0 - pc.shadowIntensity * shadow;
@@ -399,8 +383,7 @@ void main() {
     // hard black blotches into a sunlit trunk.
     // A side turned away from the sun is as much out of it as one under a cast shadow: the ambient and sheen below
     // dim alike, or the back of a trunk stays brighter than the ground in its shadow. Not where light comes through.
-    const float turnedAway = translucency > 0.0 ? 0.0
-        : 1.0 - mix(smoothstep(-0.35, 0.3, dot(Normal, Lsun)), litSide, cel ? pc.stylise : 0.0);
+    const float turnedAway = translucency > 0.0 ? 0.0 : 1.0 - smoothstep(-0.35, 0.3, dot(Normal, Lsun));
     const float sunVisible = min(shadowFactor, 1.0 - pc.shadowIntensity * turnedAway);
 
     vec3 F = fresnelSchlickRoughness(max(dot(Normal, V), 0.0), F0, roughness);
@@ -427,8 +410,7 @@ void main() {
     specular *= materialAO;
     float ao = mix(1.0, AmbientOcclusion, pc.ssaoAmount);
     ao = mix(ao, 1.0, clearcoat) * materialAO;
-    // A painted surface has no highlight to speak of: the sky lights it flatly and the sun does the shaping.
-    vec3 ambient = kD * diffuse * ao + specular * mix(1.0, 0.15, pc.stylise);
+    vec3 ambient = kD * diffuse * ao + specular;
     ambient *= mix(pc.shadowAmbient, 1.0, sunVisible);
     // Under a roof the sky comes in only so far. Tested a little off the surface, out along its normal: a tent's
     // canvas from outside is under the open sky, the same canvas from inside under the roof.
@@ -539,15 +521,6 @@ void main() {
         vec3 horizon = normalize(vec3(-V.x, 0.08, -V.z));
         fogColor = mix(fogColor, texture(irradianceMap, horizon).rgb * pc.iblStrength * 1.6, pc.stylise);
         fogFactor = max(fogFactor, smoothstep(40.0, 320.0, Depth) * 0.58 * pc.stylise);
-        // Shade is coloured, not dark: the sky fills it with its own blue, and at night the moon lights everything
-        // plainly rather than leaving it black. Most where the sun does not reach, though not so much that the shade
-        // is as bright as the sun. The sky is overhead: what faces up takes all of it, a side or an underside half.
-        float inShade = 1.0 - sunVisible * litSide;
-        const float skyAbove = 0.5 + 0.5 * max(Normal.y, 0.0);
-        lighting += albedo * texture(irradianceMap, Normal).rgb * pc.iblStrength * (0.8 + 1.0 * inShade) * skyAbove * pc.stylise * ao * skyIn;
-        // A bright rim where a shape turns away from the eye: what outlines it against what is behind in a cartoon.
-        float rim = pow(1.0 - max(dot(Normal, V), 0.0), 3.0);
-        lighting += texture(irradianceMap, -V).rgb * pc.iblStrength * rim * 0.9 * pc.stylise * albedo * skyIn;
     }
     vec3 color = mix(lighting, fogColor, fogFactor);
     // The area tint's air: a haze of its colour in the sky's light low towards the horizon, as thick as the air

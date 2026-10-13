@@ -135,7 +135,7 @@ namespace SFE::SystemsModule {
 			changed |= ImGui::Checkbox("SSS", &gfx.sss);
 			changed |= ImGui::SliderFloat("sss wrap", &gfx.sssWrap, 0.f, 3.f, "%.2f");
 			changed |= ImGui::SliderFloat("sss strength", &gfx.sssStrength, 0.f, 2.5f, "%.2f");
-			changed |= ImGui::SliderFloat("sss radius", &gfx.sssRadius, 1.f, 16.f, "%.1f");
+			changed |= ImGui::SliderFloat("sss radius", &gfx.sssRadius, 0.0005f, 0.01f, "%.4f");
 		}
 
 		if (ImGui::CollapsingHeader("Passes")) {

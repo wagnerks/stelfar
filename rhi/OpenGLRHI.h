@@ -119,6 +119,7 @@ namespace SFE::Render
 	struct CmdDispatch { uint32_t groupCountX = 1, groupCountY = 1, groupCountZ = 1; };
 	struct CmdBlit { FramebufferHandle src; FramebufferHandle dst; BlitMask mask = BlitMask::Color; BlitFilter filter = BlitFilter::Nearest; };
 	struct CmdSetScissor { int32_t x = 0, y = 0; uint32_t width = 0, height = 0; };
+	struct CmdSetDepthBias { float constant = 0.f, slope = 0.f, clamp = 0.f; };
 	struct CmdPipelineBarrier { PipelineBarrier barrier; };
 	struct CmdGpuMark { const char* label = nullptr; bool endsPass = false; };
 
@@ -138,6 +139,7 @@ namespace SFE::Render
 		CmdDispatch,
 		CmdBlit,
 		CmdSetScissor,
+		CmdSetDepthBias,
 		CmdPipelineBarrier,
 		CmdGpuMark
 	>;
@@ -337,6 +339,7 @@ namespace SFE::Render
 		void execPushConstants(const void* data, uint32_t size);
 		void execBlit(FramebufferHandle src, FramebufferHandle dst, BlitMask mask, BlitFilter filter);
 		void execSetScissor(int32_t x, int32_t y, uint32_t width, uint32_t height);
+		void execSetDepthBias(float constant, float slope, float clamp);
 		void execBindDescriptorSets(const CmdBindDescriptorSets& bind);
 		void execUpdateBuffer(BufferHandle handle, size_t offset, size_t size, const void* data);
 		void execPipelineBarrier(const PipelineBarrier& barrier);
@@ -370,6 +373,7 @@ namespace SFE::Render
 		void cmdPushConstants(CommandListHandle cmd, PipelineHandle pipeline, ShaderStage stages, const void* data,	uint32_t size) override;
 		void cmdBlit(CommandListHandle cmd, FramebufferHandle src, FramebufferHandle dst, BlitMask mask, BlitFilter filter) override;
 		void cmdSetScissor(CommandListHandle cmd, int32_t x, int32_t y, uint32_t width, uint32_t height) override;
+		void cmdSetDepthBias(CommandListHandle cmd, float constant, float slope, float clamp) override;
 		void cmdPipelineBarrier(CommandListHandle cmd, const PipelineBarrier& barrier) override;
 		void cmdUpdateBuffer(CommandListHandle cmd, BufferHandle handle, size_t offset, size_t size, const void* data) override;
 		void cmdCopyBuffer(CommandListHandle cmd, BufferHandle src, BufferHandle dst, size_t srcOffset, size_t dstOffset, size_t size) override;

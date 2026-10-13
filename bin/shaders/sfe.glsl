@@ -114,8 +114,7 @@ vec2 sfeCosSin(float a) {
 
 // The G-buffer's first target, RGBA8: metallic, specular factor, clearcoat, clearcoat roughness. A surface with no
 // clearcoat has no use for its roughness: there that channel says how much sunlight it lets through, as leaves and
-// blades of grass do (0.04, what everything else writes, is none) -- and on a drawing that glints (kSfeCelGlint), how
-// strongly it does.
+// blades of grass do (0.04, what everything else writes, is none).
 vec4 sfeGBufferMaterial(float metallic, float specFactor, float clearcoat, float clearcoatRough) {
     return clamp(vec4(metallic, specFactor, clearcoat, clearcoatRough), 0.0, 1.0);
 }
@@ -127,14 +126,8 @@ bool sfeIsFoliage(vec4 material) {
 // A clearcoat of exactly this is no coat but a glint: the surface is shaded as it is, and where it mirrors the sun into
 // the eye it flashes, blinding (a bald crown). Too thin for any coat to use.
 const float kSfeGlint = 1.0 / 255.0;
-// A clearcoat of exactly this is no coat either: the surface is a drawing, and in the drawn look it is lit in two
-// flat tones with a line where the light ends, as a cartoon character is -- where the world only softens the edge.
-const float kSfeCel = 2.0 / 255.0;
 // And this, the ground: shaded as it is, and known for what stains it (the area tint).
 const float kSfeGround = 3.0 / 255.0;
-// And this, a drawing that glints: lit in two flat tones as kSfeCel is, flashing as kSfeGlint does where it mirrors the
-// sun into the eye -- a cartoon character's bald crown.
-const float kSfeCelGlint = 4.0 / 255.0;
 
 // The world position of what the scene shows at `uv`, from SceneDepthPass's copy of the depth buffer and the
 // camera's inverse matrices (the jittered ones the G-buffer was drawn with); zero where nothing was drawn. The
@@ -225,6 +218,13 @@ float sfePlantColour(vec3 c) {
 // (sfePieceKey) it has passed: false where that is a leaf, gone; the twigs painted between the leaves stay, dead.
 bool sfeBareKeeps(vec3 linearColour) {
     return sfePlantColour(linearColour) < 0.5;
+}
+
+// How much the surface scatters light under it, 0 to 1, from the G-buffer's normal (shortened by up to half for it) and
+// its metalness (gMaterial.r).
+float sfeScatters(vec3 gNormalSample, float metallic) {
+    return dot(gNormalSample, gNormalSample) < 1e-6 ? 0.0
+        : clamp((1.0 - length(gNormalSample)) * 2.0, 0.0, 1.0) * (1.0 - metallic);
 }
 
 float sfeSkinSss(vec3 albedo, float metallic) {

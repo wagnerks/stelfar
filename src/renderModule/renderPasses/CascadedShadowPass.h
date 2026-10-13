@@ -61,9 +61,9 @@ namespace SFE::Render::RenderPasses {
 			Math::Mat4 lightSpace;
 			ComponentsModule::ShadowCascade settings;
 		};
-		// Cascades from this one out are the far ones: drawn less often, kept while their volume stays put, and their
-		// casters not culled to what the camera sees.
-		static constexpr size_t kFirstFar = 2;
+		// Cascades that reach further than this, metres, are the far ones: drawn less often, kept while their volume stays
+		// put, and their casters not culled to what the camera sees.
+		static constexpr float kNearReach = 12.f;
 		// Metres up-sun past a cascade's near plane that its casters are still drawn from.
 		static constexpr float kCasterReachTowardsSun = 400.f;
 		// Frames a far cascade whose volume has not moved keeps its map at most, so what moved inside it (a fallen
