@@ -58,24 +58,6 @@ float sfeCloudTop(float field) {
     return smoothstep(-0.05, 0.5, field) * kSfeCloudThickness;
 }
 
-// How much of the sun reaches a point on the ground through the clouds, in [0, 1].
-float sfeCloudShadow(sampler2D clouds, vec3 world, vec3 toSun, float coverage, vec2 drift) {
-    if (coverage <= 0.001 || toSun.y <= 0.05) {
-        return 1.0;
-    }
-    // Where the ray to the sun leaves the cloud layer, but no further out than this: with the sun low the true
-    // point is kilometres away, and the same patch of cloud would then shade everything in sight at once.
-    vec2 offset = toSun.xz * ((kSfeCloudHeight - world.y) / toSun.y);
-    float reach = length(offset);
-    if (reach > 1200.0) {
-        offset *= 1200.0 / reach;
-    }
-    // Read finer than the sky reads it: a shadow the size of the cloud that casts it covers the whole forest, and the
-    // dapple of light and shade moving over the trees is the point of it.
-    const float kShrink = 13.0;
-    return 1.0 - 0.72 * sfeCloudDensity(clouds, (world.xz + offset) * kShrink, coverage, drift * kShrink, 0.0);
-}
-
 // The stars, as points on a grid over the sky: one to a cell, where the cell's own number says there is one. The whole
 // field turns with the sun, so the night sky wheels over the night the way the real one does.
 float sfeStars(vec3 dir, vec3 toSun) {

@@ -321,12 +321,7 @@ void main() {
     F0 *= mix(1.0, 0.35, darkDiel);
 
     vec3 Lsun = normalize(-cascadedShadow.direction_intensity.xyz);
-    // The clouds overhead dim the sun, their shadows drifting across the forest with them: under the thickest it is
-    // kCloudShade of the way to what sfeCloudShadow says. Kept apart from the shadows things cast and lighter than
-    // them, the sky's light left as it is, so a tree's shade still falls inside a cloud's.
-    const float kCloudShade = 0.6;
-    const vec3 sunColour = cascadedShadow.color_and_misc.xyz * (1.0 - kCloudShade
-        * (1.0 - sfeCloudShadow(cloudLayer, FragPos, Lsun, pc.cloudCoverage, sfeCloudDrift(matrices.wind, matrices.wind.w))));
+    const vec3 sunColour = cascadedShadow.color_and_misc.xyz;
     vec3 Lo = cookTorrance(
         Normal, V, Lsun,
         albedo, F0, roughness, metallic,

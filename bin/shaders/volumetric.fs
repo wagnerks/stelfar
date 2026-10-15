@@ -98,11 +98,8 @@ void main() {
         cascadeStep[c] = lightSpaceMatrices[c] * vec4(rayDir, 0.0);
     }
 
-    vec2 cloudDrift = sfeCloudDrift(matrices.wind, matrices.wind.w);
     for (int i = 0; i < STEPS; ++i) {
         float vis = sunVisibility(min(t, rayLen));
-        // Under a cloud there is no shaft: the sun is already cut off far above the trees.
-        vis *= sfeCloudShadow(cloudLayer, origin + rayDir * min(t, rayLen), L, params.cloudCoverage, cloudDrift);
         lit += vis;
         inScatter += params.intensity * dens * phase * vis * stepLen * trans;
         trans *= exp(-dens * stepLen);
