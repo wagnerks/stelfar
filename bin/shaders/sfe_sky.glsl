@@ -24,7 +24,7 @@ vec3 sfeSkyRadiance(sampler2D skyLut, vec3 dir) {
 // at the point minus this). Faster up there than on the ground, and faster than real clouds, whose drift a mile up is
 // too slow to see in a few seconds.
 vec2 sfeCloudDrift(vec4 wind, float seconds) {
-    return -wind.xz * (40.0 + 120.0 * wind.y) * seconds;
+    return -wind.xz * (20.0 + 60.0 * wind.y) * seconds;
 }
 
 // The cloud layer's texture (scripts/cloud_texture.py): r where the clouds are, g the lumps they are piled from, b a
