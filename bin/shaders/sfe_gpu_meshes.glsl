@@ -12,9 +12,8 @@ struct GpuMesh {
     vec3 boundsMax;
     uint lodIndex;
     uint lodCount;
+    float lodErrors[6]; // levels 1 on, a share of the mesh's extent
     uint _pad0;
-    uint _pad1;
-    uint _pad2;
 };
 layout(SFE_SET(0, 26), std430) readonly buffer Meshes {
     GpuMesh meshes[];

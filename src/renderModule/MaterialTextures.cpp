@@ -37,6 +37,7 @@ namespace SFE::Render {
 			{ .set = set, .binding = SFE::TRIPLANAR2_ALBEDO, .images{ { white->texture, white->sampler } } },
 			{ .set = set, .binding = SFE::TRIPLANAR2_NORMALS, .images{ { normal->texture, normal->sampler } } },
 			{ .set = set, .binding = SFE::OCCLUSION, .images{ { white->texture, white->sampler } } }, // nothing shut out
+			{ .set = set, .binding = SFE::EMISSIVE, .images{ { white->texture, white->sampler } } }, // all of `emissive`
 		};
 		for (uint8_t i = 0; i < materials.materialsCount; ++i) {
 			const auto& slot = materials.material[i];

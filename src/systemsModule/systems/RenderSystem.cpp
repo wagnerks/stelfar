@@ -162,6 +162,12 @@ namespace SFE::SystemsModule {
 				{ 7, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex | Render::ShaderStage::Fragment },
 				// The area tint map (AreaTintFrame): the terrain's bank goes by it.
 				{ 22, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment },
+				// The marks in the ground (GroundMarksFrame): the terrain is drawn pressed and churned by them, and the ground
+				// near the camera pressed in by them (g_buffer_ground.vs) over the terrain's heights.
+				{ 34, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Vertex | Render::ShaderStage::Fragment },
+				{ 35, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Vertex },
+				// The vehicles' mud maps (MudMapsFrame): what is caked on them where drops struck.
+				{ 36, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment },
 			};
 			frameSetLayout = rhi->createDescriptorSetLayout(frameLayout);
 			mRenderData.frameSetLayout = frameSetLayout;
@@ -376,6 +382,33 @@ namespace SFE::SystemsModule {
 		if (fresh || written->second != map.first.id) {
 			written->second = map.first.id;
 			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 22, .images{ { map.first, map.second } } } });
+		}
+	}
+
+	void RenderSystem::updateGroundMarks() {
+		auto* rhi = Engine::instance()->rhi();
+		const auto* marks = mRenderData.frame.data<Render::GroundMarksFrame>(Render::FrameId::GroundMarks);
+		const Math::Vec4 place[] = { marks ? marks->window : Math::Vec4{}, marks ? marks->size : Math::Vec4{},
+			marks ? marks->look : Math::Vec4{}, marks ? marks->churn : Math::Vec4{}, marks ? marks->grid : Math::Vec4{},
+			marks ? marks->patch : Math::Vec4{} };
+		static_assert(offsetof(RenderMatrices, marksPatch) == offsetof(RenderMatrices, marksWindow) + sizeof(place) - sizeof(Math::Vec4));
+		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, marksWindow), sizeof(place), place);
+		const auto map = Render::Utils::groundMarksMap(mRenderData.frame);
+		const auto heights = Render::Utils::groundHeightsMap(mRenderData.frame);
+		const auto [written, fresh] = mFrameSetMarks.try_emplace(frameSet.id, std::pair{ map.first.id, heights.first.id });
+		if (fresh || written->second != std::pair{ map.first.id, heights.first.id }) {
+			written->second = { map.first.id, heights.first.id };
+			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 34, .images{ { map.first, map.second } } },
+				{ .set = frameSet, .binding = 35, .images{ { heights.first, heights.second } } } });
+		}
+	}
+
+	void RenderSystem::updateMudMaps() {
+		const auto maps = Render::Utils::mudMaps(mRenderData.frame);
+		const auto [written, fresh] = mFrameSetMud.try_emplace(frameSet.id, maps.first.id);
+		if (fresh || written->second != maps.first.id) {
+			written->second = maps.first.id;
+			Engine::instance()->rhi()->updateDescriptorSets({ { .set = frameSet, .binding = 36, .images{ { maps.first, maps.second } } } });
 		}
 	}
 
@@ -904,6 +937,8 @@ namespace SFE::SystemsModule {
 		// After prepare: the game makes the area tint's map in its own, and may have just replaced it.
 		const auto tTint = Clock::now();
 		updateAreaTint();
+		updateGroundMarks();
+		updateMudMaps();
 		const auto tBegin = Clock::now();
 		profile("Area tint", tTint, tBegin);
 		info->prepareMs = ms(tFrame, tBegin);
@@ -918,7 +953,9 @@ namespace SFE::SystemsModule {
 				continue;
 			}
 			const auto tPass = Clock::now();
+			rhi->cmdBeginRegion(cmd, mPassZones[i]);
 			mRenderPasses[i]->render(mRenderData, cmd);
+			rhi->cmdEndRegion(cmd);
 			const auto tPassEnd = Clock::now();
 			profile(mPassZones[i], tPass, tPassEnd);
 			rhi->cmdGpuMark(cmd, mPassZones[i], true);

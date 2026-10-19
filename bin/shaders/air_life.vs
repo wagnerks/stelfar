@@ -39,16 +39,9 @@ float rand01(uint seed) {
     return float(hashU(seed) >> 8u) / 16777216.0;
 }
 
+#include "sfe_sun_visible.glsl"
 float sunVisible(vec3 world) {
-    int cascades = int(air.view.z + 0.5);
-    for (int layer = 0; layer < cascades; ++layer) {
-        vec4 ls = lightSpaceMatrices[layer] * vec4(world, 1.0);
-        vec3 proj = ls.xyz / ls.w * 0.5 + 0.5;
-        if (all(greaterThan(proj, vec3(0.0))) && all(lessThan(proj, vec3(1.0)))) {
-            return texture(shadowMap, vec4(proj.xy, float(layer), proj.z - 0.0005));
-        }
-    }
-    return 1.0;
+    return sfeSunVisible(world, int(air.view.z + 0.5));
 }
 
 // Scattered towards the eye out of the sun's light: strongly forwards, so specks glow looking into the sun.

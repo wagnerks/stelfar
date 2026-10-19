@@ -105,6 +105,25 @@ float sfeForest(sampler2D forestMap, vec2 p) {
     return textureLod(forestMap, p / (side * kSfeForestTexelMetres) + 0.5, 0.0).r;
 }
 
+// How dirty the bank is by the area tint map's value there, `tint` (sfeAreaTint): by the larger of the land's and the
+// water's, from shore.x (clean) to shore.y (all mud) (AreaTintFrame::shore).
+float sfeShoreDirty(vec3 tint, vec4 shore) {
+    return clamp((max(tint.r, tint.g) - shore.x) / max(shore.y - shore.x, 1e-3), 0.0, 1.0);
+}
+
+// How much of the clean bank `height` above the water is stones and sand by the water rather than grass above them,
+// `fine` sfeFbm(p * 0.35, 2) raggedening where the one gives way to the other, 0.25 to 0.6 metres up.
+float sfeShoreByWater(float height, float fine) {
+    return 1.0 - smoothstep(0.25, 0.6, height + 0.4 * (fine - 0.5));
+}
+
+// How much of the ground `height` above the water is in the band along the lake the litter lies in, up to `top`
+// metres over it (AreaTintFrame::shore.z), its upper edge ragged by `fine` (sfeFbm(p * 0.35, 2)). Where the bank is
+// dirty (sfeShoreDirty), all of it is mud. None above `top` + 0.45.
+float sfeShoreBand(float height, float fine, float top) {
+    return 1.0 - smoothstep(top, top + 0.3, height + 0.3 * (fine - 0.5));
+}
+
 // `p` world x/z in metres, `height` above the water line, `slope` 1 - the normal's y.
 // `noise` is sfeTerrainNoise at `p`.
 SfeTerrainLayers sfeTerrainLayers(vec2 p, float height, float slope, float forest, vec4 noise) {

@@ -9,6 +9,7 @@
 #include "assetsModule/modelModule/ModelLoader.h"
 #include "assetsModule/modelModule/Terrain.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/GBuffer.h"
 #include "renderModule/MaterialTextures.h"
 #include "renderModule/Utils.h"
 #include "componentsModule/ArmatureComponent.h"
@@ -59,21 +60,9 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	gbufferSamplerDesc.magFilter = FilterMode::Nearest;
 	mSampler = rhi->createSampler(gbufferSamplerDesc);
 
-	RenderPassDesc geometryPassDesc;
-	geometryPassDesc.colorAttachmentCount = 4;
-	geometryPassDesc.colorAttachments[0] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, {0.f, 0.f, 0.f, 1.f}, TextureFormat::RGBA8 };
-	geometryPassDesc.colorAttachments[1] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, {0.f, 0.f, 0.f, 1.f}, TextureFormat::RGBA16F };
-	geometryPassDesc.colorAttachments[2] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, {0.f, 0.f, 0.f, 1.f}, TextureFormat::RGBA16F };
-	geometryPassDesc.colorAttachments[3] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, {0.f, 0.f, 0.f, 0.f}, TextureFormat::RGBA16F };
-	geometryPassDesc.hasDepthStencil = true;
-	geometryPassDesc.depthAttachment = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, 1.f, 0, false, TextureFormat::DEPTH_COMPONENT24 };
-	geometryPass = rhi->createRenderPass(geometryPassDesc);
+	geometryPass = rhi->createRenderPass(gBufferPassDesc(false));
 	// The second occlusion phase draws over the first one's targets.
-	for (auto& attachment : geometryPassDesc.colorAttachments) {
-		attachment.loadOp = AttachmentLoadOp::Load;
-	}
-	geometryPassDesc.depthAttachment.loadOp = AttachmentLoadOp::Load;
-	mGeometryLoadPass = rhi->createRenderPass(geometryPassDesc);
+	mGeometryLoadPass = rhi->createRenderPass(gBufferPassDesc(true));
 
 	GraphicsPipelineDesc pipelineDesc;
 
@@ -103,17 +92,9 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.shaders.fragment = Engine::instance()->rhi()->loadShader(ShaderStage::Fragment, "shaders/g_buffer.fs");
 
 	Render::DescriptorSetLayoutDesc texLayoutDescGBuf;
-	texLayoutDescGBuf.bindings.emplace_back(1, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(2, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(3, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(4, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(5, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(6, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(7, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(8, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(9, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(10, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDescGBuf.bindings.emplace_back(11, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	for (uint32_t binding = SFE::DIFFUSE; binding <= SFE::EMISSIVE; ++binding) {
+		texLayoutDescGBuf.bindings.emplace_back(binding, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	}
 	gBuffetLayout = rhi->createDescriptorSetLayout(texLayoutDescGBuf);
 	gBuffetLayoutSet = rhi->allocateDescriptorSet(gBuffetLayout);
 	if (frameLayout) {
@@ -209,12 +190,14 @@ void GeometryPass::resize(SystemsModule::RenderData& renderDataHandle) {
 		// Where each pixel was last frame, in UV. TAA reprojects its history by this instead of by the camera alone,
 		// which is what let a skinned character smear a trail of itself.
 		target(slot.velocityBuffer, TextureFormat::RGBA16F, color);
+		// The light the surfaces give off themselves (MaterialComponent::emissive), added once they are lit.
+		target(slot.emissiveBuffer, TextureFormat::RGBA16F, color);
 		target(slot.depthsBuffer, TextureFormat::DEPTH_COMPONENT24, TextureUsage::DepthStencilAttachment | TextureUsage::Sampled);
 		FramebufferDesc mainFboDesc;
 		mainFboDesc.width = screen.renderW;
 		mainFboDesc.height = screen.renderH;
 		mainFboDesc.renderPass = geometryPass;
-		mainFboDesc.colorAttachments = { {slot.materialBuffer}, {slot.normalBuffer}, {slot.albedoBuffer}, {slot.velocityBuffer} };
+		mainFboDesc.colorAttachments = { {slot.materialBuffer}, {slot.normalBuffer}, {slot.albedoBuffer}, {slot.velocityBuffer}, {slot.emissiveBuffer} };
 		mainFboDesc.depthStencilAttachment = FramebufferAttachmentDesc{.texture = slot.depthsBuffer };
 		slot.gFramebuffer = rhi->createFramebuffer(mainFboDesc);
 	}
@@ -240,6 +223,7 @@ void GeometryPass::publish(SystemsModule::RenderData& renderDataHandle) {
 	frame.set(FrameId::GBufferNormal, { .texture = slot.normalBuffer, .sampler = s });
 	frame.set(FrameId::GBufferAlbedo, { .texture = slot.albedoBuffer, .sampler = s });
 	frame.set(FrameId::GBufferVelocity, { .texture = slot.velocityBuffer, .sampler = s });
+	frame.set(FrameId::GBufferEmissive, { .texture = slot.emissiveBuffer, .sampler = s });
 	frame.set(FrameId::GBufferOutlines, { .texture = outlinesBuffer, .sampler = s });
 	frame.set(FrameId::GBufferLights, { .texture = lightsBuffer, .sampler = s });
 	frame.set(FrameId::GBufferDepth, { .texture = slot.depthsBuffer, .sampler = s });
@@ -423,6 +407,7 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 	// which a pre-pass would have to match exactly, so they are drawn as before; and so is wireframe.
 	const bool prepass = renderSystem->getRenderData().graphics.foliagePrepass > 0.5f && fillMode == PolygonFillMode::Fill;
 	enum class Turn { Solid, Prepass, Cutout, Ground };
+	bool patched = false;
 	for (const auto turn : { Turn::Solid, Turn::Prepass, Turn::Cutout, Turn::Ground })
 	for (const auto& group : scene.groups(GpuScene::List::GBuffer)) {
 		const bool laid = prepass && group.cutout && group.vertexShader == ComponentsModule::DefaultGBufferVS
@@ -436,6 +421,28 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 		if (!texturesLive(group.textures)) {
 			continue;
 		}
+		auto& textures = mTextureSets[group.textureKey];
+		if (!textures) {
+			textures = rhi->allocateDescriptorSet(gBuffetLayout);
+			rhi->updateDescriptorSets(materialTextureWrites(textures, group.textures));
+		}
+		const DescriptorSetHandle sets[] = { frameSet, textures };
+		// The ground drawn dense near the camera, with the terrain's textures, once: the terrain's own mesh is put out of
+		// sight under it (sfe_ground_patch.glsl), and drawn after it is rejected there before it is shaded. With the first
+		// phase, so the second's occlusion test has it.
+		if (turn == Turn::Ground && !secondPhase && !patched) {
+			patched = true;
+			const auto* marks = renderSystem->getRenderData().frame.data<GroundMarksFrame>(FrameId::GroundMarks);
+			if (marks && marks->patch.z > 0.f) {
+				if (const auto ground = groundPatchPipeline(fillMode)) {
+					bound = ground;
+					rhi->cmdBindPipeline(cmd, ground);
+					rhi->cmdBindDescriptorSets(cmd, ground, 0, sets, 2);
+					Utils::drawGroundPatch(cmd, marks->patch);
+				}
+			}
+		}
+
 		const auto pipeline = getGBufferPipeline(group.vertexShader,
 			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode);
 		if (pipeline.id != bound.id) {
@@ -445,16 +452,28 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 			rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 			rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
 		}
-
-		auto& textures = mTextureSets[group.textureKey];
-		if (!textures) {
-			textures = rhi->allocateDescriptorSet(gBuffetLayout);
-			rhi->updateDescriptorSets(materialTextureWrites(textures, group.textures));
-		}
-		const DescriptorSetHandle sets[] = { frameSet, textures };
 		rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2);
 		scene.draw(cmd, view, group, secondPhase);
 	}
+}
+
+SFE::Render::PipelineHandle GeometryPass::groundPatchPipeline(const Render::PolygonFillMode fillMode) {
+	auto& pipeline = mGroundPatchPipelines[fillMode == PolygonFillMode::Line ? 1 : 0];
+	if (!pipeline) {
+		auto* rhi = Engine::instance()->rhi();
+		auto desc = mGBufferPipelineDesc;
+		desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer_ground.vs");
+		desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, AssetsModule::kTerrainFS);
+		if (!desc.shaders.vertex || !desc.shaders.fragment) {
+			return {};
+		}
+		// Its vertices are made from their index.
+		desc.layout = {};
+		desc.fillMode = fillMode;
+		desc.cullMode = CullMode::Back;
+		pipeline = rhi->createGraphicsPipeline(desc);
+	}
+	return pipeline;
 }
 
 SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,

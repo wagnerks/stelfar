@@ -15,6 +15,7 @@ layout(SFE_SET(0, 5)) uniform sampler2D gOutlines;
 layout(SFE_SET(0, 7)) uniform sampler2DArrayShadow PointLightShadowMapArray;
 layout(SFE_SET(0, 8)) uniform sampler2DArrayShadow shadowMap;
 layout(SFE_SET(0, 9)) uniform sampler2D gVelocity; // b: what a material's occlusion map shuts out (sfeGBufferVelocity)
+layout(SFE_SET(0, 23)) uniform sampler2D gEmissive; // the light surfaces give off themselves (sfeGBufferEmissive)
 layout(SFE_SET(0, 12)) uniform samplerCube irradianceMap;
 layout(SFE_SET(0, 13)) uniform samplerCube prefilterMap;
 layout(SFE_SET(0, 14)) uniform sampler2D brdfLUT;
@@ -62,7 +63,6 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     vec4 tintArea;
     vec4 tintFoliage;
     vec4 tintAir; // a the haze per metre where the map is full
-    vec4 tintGround;
     // The ShelterComponents, the first four.
     Shelter shelters[4];
 } pc;
@@ -95,8 +95,11 @@ struct PointLight {
     vec3 Color;
     float Linear;
     float Quadratic;
-    int Type; //0 - point, 1 - directional
-    int Layers;
+    int Type; // 0 a point light, 1 a spot
+    int Layers; // its shadow's faces from `offset`: 6 a point light's, 1 a spot's, 0 for none
+    float cosInner; // a spot's cone along Direction: lit fully inside cosInner, none outside cosOuter
+    vec3 Direction;
+    float cosOuter;
 };
 
 const int MAX_POINT_LIGHTS_SIZE = 12;
@@ -295,16 +298,13 @@ void main() {
     // Leaves and blades let the sun through (see sfeGBufferMaterial).
     const float translucency = clearcoat < 0.01 ? smoothstep(0.1, 1.0, pbr.w) : 0.0;
     // The area tint: whatever is a plant's colour (by its colour: hair is cut out as leaves are, and is not to wither)
-    // goes where the map says towards its grey times the tint's colour, which keeps its pattern and can darken it.
+    // goes where the map says towards its grey times the tint's colour, which keeps its pattern and can darken it. Not
+    // the ground: it turns to mud where it is foul (g_buffer_terrain.fs).
     const vec3 areaTint = sfeAreaTint(areaTintMap, pc.tintArea, FragPos.xz);
-    const float green = (1.0 - metallic) * sfePlantColour(albedo);
+    const float green = ground ? 0.0 : (1.0 - metallic) * sfePlantColour(albedo);
     if (green > 0.0 && areaTint.r > 0.0) {
         vec3 tinted = pc.tintFoliage.rgb * dot(albedo, vec3(0.2126, 0.7152, 0.0722));
         albedo = mix(albedo, tinted, clamp(areaTint.r * pc.tintFoliage.a, 0.0, 1.0) * green);
-    }
-    // And the ground goes grimy.
-    if (ground && areaTint.r > 0.0) {
-        albedo *= mix(vec3(1.0), pc.tintGround.rgb, clamp(areaTint.r * pc.tintGround.a, 0.0, 1.0));
     }
     float ccRough = max(pbr.w, 0.04);
     const float AmbientOcclusion = upsampledAO(TexCoords);
@@ -315,6 +315,11 @@ void main() {
     float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
     float darkDiel = (1.0 - metallic) * (1.0 - smoothstep(0.03, 0.22, luma));
     darkDiel *= 1.0 - smoothstep(0.05, 0.25, clearcoat);
+    // Wet ground (its specular raised over the dry 0.08, g_buffer_terrain.fs) is filmed with water, as glossy however
+    // dark the mud under it.
+    if (ground) {
+        darkDiel *= 1.0 - smoothstep(0.15, 0.45, specFactor);
+    }
     roughness = mix(roughness, max(roughness, 0.62), darkDiel);
     vec3 F0 = mix(vec3(0.04 * specFactor), albedo, metallic);
     float f90 = clamp(50.0 * mix(0.04 * specFactor, 1.0, metallic), 0.0, 1.0);
@@ -360,7 +365,12 @@ void main() {
         if (dot(Normal, Lp) <= 0.001) {
             continue;
         }
-        const float lit = 1.0 - PointLightCalculation(light, FragPos, Normal);
+        // A spot lights its cone alone, fading out over the cone's edge.
+        const float cone = light.Type == 1 ? smoothstep(light.cosOuter, light.cosInner, dot(-Lp, light.Direction)) : 1.0;
+        if (cone <= 0.0) {
+            continue;
+        }
+        const float lit = cone * (1.0 - PointLightCalculation(light, FragPos, Normal));
         float window = 1.0 - k * k * k * k;
         window *= window;
         const float attenuation = window / (1.0 + light.Linear * distance + light.Quadratic * distance * distance);
@@ -504,6 +514,9 @@ void main() {
         float rim = pow(1.0 - max(dot(Normal, V), 0.0), 3.0) * pc.rimStrength;
         lighting += vec3(luma) * sheenLight * (wrapL * 0.12 + rim * 0.04) * pc.sheenStrength * fabric * sunVisible;
     }
+
+    // What glows (a lamp's glass) gives off its own light over what falls on it, in no shadow.
+    lighting += texture(gEmissive, TexCoords).rgb;
 
     const float outlines = texture(gOutlines, TexCoords).b;
     vec3 fogColor = pc.ambientColor * 0.15 + vec3(0.08, 0.10, 0.14);

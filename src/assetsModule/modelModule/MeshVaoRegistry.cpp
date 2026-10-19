@@ -186,6 +186,9 @@ namespace SFE {
 			}
 		}
 		entry.lodCount = data.lodCount;
+		for (size_t level = 0; level < mesh->lodErrors.size() && level < GpuMesh::kMaxLodErrors; ++level) {
+			entry.lodErrors[level] = mesh->lodErrors[level];
+		}
 		mMeshTable.push_back(entry);
 
 		// One id per level, consecutive, so a caller holding the full detail id reaches the rest by adding to

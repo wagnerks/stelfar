@@ -551,6 +551,22 @@ namespace AssetsModule {
 		return *heights;
 	}
 
+	SFE::Render::TextureHandle terrainHeightsTexture(const SFE::ComponentsModule::TerrainComponent& t) {
+		const std::string name = "builtin:terrain:heights:" + std::to_string(cacheKey(t));
+		if (auto* texture = AssetsManager::instance()->getAsset<Texture>(name)) {
+			return texture->texture;
+		}
+		const auto& heights = terrainHeights(t);
+		SFE::Render::TextureDesc desc;
+		desc.width = static_cast<uint32_t>(std::lround(std::sqrt(static_cast<double>(heights.size()))));
+		desc.height = desc.width;
+		desc.format = SFE::Render::TextureFormat::R32F;
+		desc.usage = SFE::Render::TextureUsage::Sampled;
+		auto* texture = AssetsManager::instance()->createAsset<Texture>(name);
+		texture->texture = SFE::Engine::instance()->rhi()->createTexture(desc, heights.data());
+		return texture->texture;
+	}
+
 	SFE::Render::TextureHandle terrainNoiseTexture(const SFE::ComponentsModule::TerrainComponent& t) {
 		const std::string name = "builtin:terrain:noise:" + std::to_string(cacheKey(t));
 		if (auto* texture = AssetsManager::instance()->getAsset<Texture>(name)) {
@@ -777,7 +793,8 @@ namespace AssetsModule {
 		}
 		// The vertices are all distinct, so there is nothing to weld. Every chunk's levels together take a while, so
 		// they come from the cache when they can.
-		const auto lodFile = SFE::BinaryCache::path("terrain_chunk_lods", cacheKey(t) ^ static_cast<uint64_t>(chunkCells));
+		// "2": the levels' errors kept with them.
+		const auto lodFile = SFE::BinaryCache::path("terrain_chunk_lods2", cacheKey(t) ^ static_cast<uint64_t>(chunkCells));
 		bool cached = false;
 		if (SFE::BinaryCache::Reader reader(lodFile); reader) {
 			for (auto& chunk : chunkMeshes) {
@@ -787,6 +804,7 @@ namespace AssetsModule {
 				for (auto& level : chunk.mesh.lodIndices) {
 					reader.vector(level);
 				}
+				reader.vector(chunk.mesh.lodErrors);
 			}
 			cached = static_cast<bool>(reader);
 		}
@@ -803,6 +821,7 @@ namespace AssetsModule {
 				for (const auto& level : chunk.mesh.lodIndices) {
 					writer.vector(level);
 				}
+				writer.vector(chunk.mesh.lodErrors);
 			}
 			writer.commit();
 		}

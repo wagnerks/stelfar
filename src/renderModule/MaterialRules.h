@@ -98,6 +98,7 @@ namespace SFE::Render::MaterialRules {
 			case SFE::METALLIC: sel += 16.f; break;
 			case SFE::SUBSURFACE: sel += 32.f; break;
 			case SFE::OCCLUSION: sel += 64.f; break;
+			case SFE::EMISSIVE: sel += 128.f; break;
 			default: break;
 			}
 		}
@@ -139,8 +140,20 @@ namespace SFE::Render::MaterialRules {
 		mix(static_cast<uint64_t>(material.tint.x * 4096.f));
 		mix(static_cast<uint64_t>(material.tint.y * 4096.f));
 		mix(static_cast<uint64_t>(material.tint.z * 4096.f));
+		mix(static_cast<uint64_t>(material.emissive.x * 4096.f));
+		mix(static_cast<uint64_t>(material.emissive.y * 4096.f));
+		mix(static_cast<uint64_t>(material.emissive.z * 4096.f));
 		mix(static_cast<uint64_t>(material.sway));
 		mix(static_cast<uint64_t>(static_cast<int64_t>(material.wetBelow * 4096.f)));
+		for (const auto& wheel : material.mudWheels) {
+			for (size_t i = 0; i < 4; ++i) {
+				mix(static_cast<uint64_t>(static_cast<int64_t>(wheel[i] * 4096.f)));
+			}
+		}
+		for (size_t i = 0; i < 4; ++i) {
+			mix(static_cast<uint64_t>(material.mudTreads[i] * 4096.f));
+			mix(static_cast<uint64_t>(static_cast<int64_t>(material.mudMap[i] * 4096.f)));
+		}
 		mix(static_cast<uint64_t>(material.bare * 4096.f));
 		for (const auto& layer : material.triplanar) {
 			for (const float bound : layer.uv) {

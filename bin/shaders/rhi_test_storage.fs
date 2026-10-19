@@ -4,7 +4,7 @@
 layout(location = 0) out vec4 fragColor;
 
 // std430, which is what every storage buffer in the engine's own shaders uses (g_buffer.vs,
-// cascadeShadowMap.vs, animateBones.cs). It matters here more than in the uniform tests: under
+// pointLightMap.vs, animateBones.cs). It matters here more than in the uniform tests: under
 // std140 an array of float has a stride of 16 bytes, so the same C++ array would be read every
 // fourth element and the values below would come out wrong rather than merely differently packed.
 // An unsized array of plain float rather than vec4 is the case that can tell the two apart.

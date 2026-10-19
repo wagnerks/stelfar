@@ -20,8 +20,10 @@ namespace SFE {
 		TRIPLANAR2_ALBEDO,
 		TRIPLANAR2_NORMALS,
 		// The glTF occlusionTexture: its red channel darkens only the ambient and indirect light, never the sun or the lamps.
-		// Kept last: the material binding loops run DIFFUSE..OCCLUSION.
-		OCCLUSION
+		OCCLUSION,
+		// The glTF emissiveTexture: what the surface gives off by itself, times Material::emissive.
+		// Kept last: the material binding loops run DIFFUSE..EMISSIVE.
+		EMISSIVE
 	};
 
 	struct MaterialTexture {
@@ -62,5 +64,8 @@ namespace SFE {
 		float clearcoatRough = 0.04f;
 		// glTF baseColorFactor: multiplies the albedo texture, or is the albedo where there is none.
 		Math::Vec3 baseColor{ 1.f, 1.f, 1.f };
+		// glTF emissiveFactor times its emissive strength: the light the surface gives off, in the lighting's units, times
+		// the emissive texture where there is one. None by default.
+		Math::Vec3 emissive{ 0.f, 0.f, 0.f };
 	};
 }

@@ -21,7 +21,8 @@
 
 namespace SFE::SystemsModule {
 	// The Jolt world. Static colliders are built from the scene when the system is created (every entity with a
-	// TerrainComponent, from its mesh), and an entity's built again when the scene is read again (replaceStatic); moving
+	// TerrainComponent, from its heights: TerrainCollider), and an entity's built again when the scene is read again
+	// (replaceStatic), each world its own; the terrain's made finer where a game asks (setFineGround); moving
 	// things step at a fixed rate from update(), which runs on the physics tick thread (or stepped from the frame, for a
 	// fixed-step run or a capture). Nothing here touches the ECS after construction but staticShapes, on its caller's
 	// thread.
@@ -61,17 +62,27 @@ namespace SFE::SystemsModule {
 		// The capsules another world was given, for this one too (LoosePhysicsSystem). Before addStaticCapsuleBodies.
 		void shareStaticCapsules(const PhysicsSystem& with) { mCapsuleSources = with.mCapsuleSources; }
 
-		// An entity's static collider as shapes, where `world` puts it: its model's finest level of detail when that has
-		// a collider or is the terrain, else none (an entity gone, too). Built with these, for the scene read again
-		// (PropertiesSystem::reloadScene); one set serves both worlds.
+		// An entity's static collider as shapes, where `world` puts it: the terrain's height field (TerrainCollider),
+		// a model's finest level of detail when that has a collider, else none (an entity gone, too). Built with these,
+		// for the scene read again (PropertiesSystem::reloadScene), a set for each world: the terrain's field is cut into
+		// by that world's finer ground.
 		static std::vector<JPH::ShapeRefC> staticShapes(ecss::EntityId entity, const Math::Mat4& world);
 		// The static bodies made from an entity replaced with bodies of `shapes` -- none: just taken out -- and what
 		// lay on either woken. Main thread; they change over at the start of the next update, between steps.
 		void replaceStatic(ecss::EntityId entity, std::vector<JPH::ShapeRefC> shapes);
+		// The terrain's collider made finer over a square of its cells, `cells` across from cell (x, z) (as
+		// terrainHeights counts its samples, x along x and z along z): the square cut out of the terrain for good and
+		// `field` (TerrainCollider::fine over it) laid there instead. Given again at the same place, it takes the place
+		// of the one before; setFineHeights gives part of it anew. Any thread; they change over at the start of the next
+		// update, between steps, in the order given, and what lies where the ground moved is woken to meet it: within
+		// `lower` (where the field is under the terrain it takes the place of) and where the heights given anew moved.
+		// Gone if the terrain's collider is built anew.
+		void setFineGround(int x, int z, int cells, JPH::ShapeRefC field, const JPH::AABox& lower);
+		void setFineHeights(int x, int z, int u, int v, int width, int height, std::vector<float> heights);
 
 		// Called on the physics thread before every fixed step with its length: the place for anything that moves
-		// through the world with it, such as a character controller. Register before the system starts ticking.
-		void addStepCallback(std::function<void(float)> callback) { mStepCallbacks.push_back(std::move(callback)); }
+		// through the world with it, such as a character controller. Any thread: it joins at the start of the next update.
+		void addStepCallback(std::function<void(float)> callback);
 		// Inside a step callback: the Engine::clockSeconds() time the step brings the world to. Steps that run back to
 		// back in one update still get times a step apart, so what follows them can be eased smoothly.
 		double stepTime() const { return mStepTime; }
@@ -97,19 +108,47 @@ namespace SFE::SystemsModule {
 		void addStaticColliders();
 		// What replaceStatic was given, in place of what stood there. Physics thread, between steps.
 		void swapStatic();
+		// What setFineGround was given, laid in; and whether `shapes`, just made `made` for `entity`, are the terrain's
+		// (its field then the one cut into). Physics thread.
+		void swapFine();
+		void noteTerrain(ecss::EntityId entity, const std::vector<JPH::ShapeRefC>& shapes, const std::vector<JPH::BodyID>& made);
+		void dropFine();
 
 		struct Layers;
 		std::unique_ptr<Layers> mLayers;
 		std::unique_ptr<JPH::TempAllocator> mTempAllocator;
 		std::unique_ptr<JPH::JobSystemThreadPool> mJobs;
 		std::unique_ptr<JPH::PhysicsSystem> mWorld;
-		std::vector<std::function<void(float)>> mStepCallbacks;
+		std::vector<std::function<void(float)>> mStepCallbacks; // the physics thread's
+		// Added since the last update, under the mutex: a system set up while the physics already ticks registers then.
+		std::vector<std::function<void(float)>> mNewStepCallbacks;
+		std::mutex mStepCallbacksMutex;
 		std::vector<std::function<void(std::vector<StaticCapsule>&)>> mCapsuleSources;
 		// The static bodies of the terrain and the props, by the entity each was made from: the physics thread's after
 		// construction. What replaceStatic left for it, under the mutex.
 		std::unordered_map<ecss::EntityId, std::vector<JPH::BodyID>> mStatic;
 		std::mutex mReplacedMutex;
 		std::vector<std::pair<ecss::EntityId, std::vector<JPH::ShapeRefC>>> mReplaced;
+		// The terrain's body and its shape (TerrainCollider), and the finer ground laid on it by place: the physics
+		// thread's. What setFineGround left for it, under the mutex.
+		struct FineGround {
+			int x = 0;
+			int z = 0;
+			int cells = 0;
+			JPH::ShapeRefC field; // laid; none: part of it given anew
+			JPH::AABox lower;
+			int u = 0;
+			int v = 0;
+			int width = 0;
+			int height = 0;
+			std::vector<float> heights;
+		};
+		ecss::EntityId mTerrainEntity = ecss::INVALID_ID;
+		JPH::BodyID mTerrainBody;
+		JPH::ShapeRefC mTerrainShape;
+		std::unordered_map<uint64_t, JPH::BodyID> mFine;
+		std::mutex mFineMutex;
+		std::vector<FineGround> mFineGiven;
 		float mAccumulated = 0.f;
 		std::atomic<float> mStepMs{ 0.f };
 		std::atomic<uint32_t> mBodyCount{ 0 };

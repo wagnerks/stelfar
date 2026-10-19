@@ -11,7 +11,8 @@ namespace SFE {
 	void weldMesh(Mesh<Vertex3D>& mesh);
 
 	struct MeshLodOptions {
-		// Fraction of the mesh's size a vertex may move, per level.
+		// Fraction of the mesh's size a vertex may move in the first level, twice as much in each level on: each is drawn
+		// at about half the size on screen of the one before (gpu_cull.cs), where twice the error shows as much.
 		float errorPerLevel = 0.03f;
 		// The open edges stay where they are: a piece of a larger surface, such as a terrain chunk, then meets its
 		// neighbour at any level of either.

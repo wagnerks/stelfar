@@ -78,18 +78,20 @@ layout(SFE_SET(0, 31), std430) readonly buffer CullView {
     uint groundFirst;
     uint groundEnd;
     float groundLodDistance;
+    // The pixels on screen a coarser level may change, and as many texels in a shadow map.
+    float lodPixels;
 } view;
 
-// Which level of a chain belongs on screen at this size. The bands are in pixels of screen height, so they
-// hold whatever the resolution, the field of view or the model's own scale: a level is dropped once its
-// triangles are near the size of a pixel, which is the point where drawing more of them buys nothing and
-// costs a boiling silhouette.
-uint lodForSize(float pixels, uint lodCount) {
+// The coarsest level of the chain that strays from the full mesh by no more than `allowed`, a share of the mesh's
+// extent (MeshLod's errors, growing down the chain).
+uint lodForError(GpuMesh mesh, float allowed) {
     uint level = 0u;
-    if (pixels < 180.0) { level = 1u; }
-    if (pixels < 70.0)  { level = 2u; }
-    if (pixels < 25.0)  { level = 3u; }
-    return min(level, lodCount - 1u);
+    for (uint l = 1u; l < mesh.lodCount; ++l) {
+        if (mesh.lodErrors[l - 1u] <= allowed) {
+            level = l;
+        }
+    }
+    return level;
 }
 
 // Per instance slot: 1 when it passed the occlusion test last frame. A slot that changed owner can hold
@@ -222,15 +224,18 @@ void main() {
         }
         if (mesh.lodCount > 1u) {
             float distance = max(length(center - view.lodOrigin.xyz), 1e-3);
-            uint level = min(lodForSize(radius * view.lodOrigin.w / distance, mesh.lodCount) + view.lodBias, mesh.lodCount - 1u);
+            // A level is drawn once what it changes is under lodPixels: its error times the mesh's extent on screen, at most
+            // twice the radius. The pixels are the player's; each step of bias doubles them.
+            float allowed = view.lodPixels * float(1u << view.lodBias) / max(2.0 * radius * view.lodOrigin.w / distance, 1e-6);
+            // Never finer than the map's texels show, which in a far cascade is coarser than the camera's pixels ask.
+            if (view.texelsPerMetre > 0.0) {
+                allowed = max(allowed, view.lodPixels / max(2.0 * texels, 1e-6));
+            }
+            uint level = lodForError(mesh, allowed);
             // A far ground chunk is still large on screen, but seen nearly edge on its triangles are slivers a pixel
             // or two high, shaded mostly for nothing: past the distance it keeps about half of them.
             if (b >= view.groundFirst && b < view.groundEnd && distance > view.groundLodDistance) {
                 level = min(level + 1u, mesh.lodCount - 1u);
-            }
-            // Never finer than the map's texels show, which in a far cascade is coarser than the camera's pixels ask.
-            if (view.texelsPerMetre > 0.0) {
-                level = max(level, lodForSize(texels, mesh.lodCount));
             }
             draw = draw && level == mesh.lodIndex;
         }

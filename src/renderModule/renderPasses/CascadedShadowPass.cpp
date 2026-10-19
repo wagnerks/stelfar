@@ -265,7 +265,6 @@ void CascadedShadowPass::initRender() {
 	pipelineDesc.pushConstantSize = 16u;
 	// The vertex shader applies the cascade matrix now, so it needs the push block too.
 	pipelineDesc.pushConstantStages = ShaderStage::Vertex | ShaderStage::Fragment;
-	// Not cascadeShadowMap.vs: that one stays world-space because PointLightPass shares it.
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/cascadeShadowMap_csm.vs");
 	
 	Render::VertexLayoutDesc vaoDesc;

@@ -31,9 +31,12 @@ namespace SFE::Render {
 		float triplanarRotated = 0.f; // bit 1 the first layer's u and v swapped, bit 2 the second's
 		float wetBelow = ComponentsModule::MaterialComponent::kDry;
 		float bare = 0.f;
-		float pad[3]{}; // std430 rounds the struct up to its vec4 alignment
+		float emissive[3]{}; // the light it gives off, times its EMISSIVE texture
+		float mudWheels[4 * ComponentsModule::MaterialComponent::kMudWheels]{};
+		float mudTreads[4]{};
+		float mudMap[4]{};
 	};
-	static_assert(sizeof(GpuMaterial) == 128, "must match the std430 SfeMaterial");
+	static_assert(sizeof(GpuMaterial) == 224, "must match the std430 SfeMaterial");
 
 	// One entry per distinct material, keyed by MaterialRules::materialHash and counted by the instances using it.
 	// An index stays valid while it is held; a released one is reused, so editing a material (a slider drag gives

@@ -88,7 +88,6 @@ namespace SFE::Render::RenderPasses {
 			Math::Vec4 tintArea{};
 			Math::Vec4 tintFoliage{};
 			Math::Vec4 tintAir{};
-			Math::Vec4 tintGround{};
 			// The ShelterComponents in the scene, the first kMostShelters.
 			static constexpr int kMostShelters = 4;
 			struct Shelter {
@@ -124,11 +123,13 @@ namespace SFE::Render::RenderPasses {
 			Math::Vec3 Color;
 			float Linear = 0.f;
 			float Quadratic = 0.f;
-			int Type = 0;
+			int Type = 0; // 0 a point light, 1 a spot
 			int Layers = 0;
-			float pad3 = 0.f;
+			float cosInner = 1.f;
+			Math::Vec3 Direction;
+			float cosOuter = 0.f;
 		};
-		static_assert(sizeof(PointLight) == 80);
+		static_assert(sizeof(PointLight) == 96);
 
 		PointLight pointLight[12];
 
@@ -165,6 +166,7 @@ namespace SFE::Render::RenderPasses {
 			BoundImage gNormal{};
 			BoundImage gAlbedo{};
 			BoundImage gVelocity{};
+			BoundImage gEmissive{};
 			BoundImage ssao{};
 			BoundImage sunShadow{};
 			BoundImage pointShadow{};

@@ -643,18 +643,17 @@ namespace SFE::PropertiesModule {
 			ECSHandler::destroyEntities(doomed);
 		}
 
-		// The static colliders of what moved, took another model, was made or went: one set of shapes for both worlds.
+		// The static colliders of what moved, took another model, was made or went: a set of shapes for each world.
 		std::ranges::sort(reload.colliders);
 		reload.colliders.erase(std::unique(reload.colliders.begin(), reload.colliders.end()), reload.colliders.end());
 		auto* physics = ECSHandler::getSystem<SystemsModule::PhysicsSystem>();
 		auto* loose = ECSHandler::getSystem<SystemsModule::LoosePhysicsSystem>();
 		for (const auto entity : reload.colliders) {
-			auto shapes = SystemsModule::PhysicsSystem::staticShapes(entity, worldOf(entity));
 			if (physics) {
-				physics->replaceStatic(entity, shapes);
+				physics->replaceStatic(entity, SystemsModule::PhysicsSystem::staticShapes(entity, worldOf(entity)));
 			}
 			if (loose) {
-				loose->replaceStatic(entity, std::move(shapes));
+				loose->replaceStatic(entity, SystemsModule::PhysicsSystem::staticShapes(entity, worldOf(entity)));
 			}
 		}
 		scene.read = std::move(kept);

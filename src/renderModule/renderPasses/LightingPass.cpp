@@ -51,6 +51,7 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 	texLayoutDesc.bindings.emplace_back(14, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(21, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(22, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
+	texLayoutDesc.bindings.emplace_back(23, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 
 	mTexSetLayout = rhi->createDescriptorSetLayout(texLayoutDesc);
 
@@ -244,29 +245,30 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	auto& frame = renderDataHandle.frame;
 	const auto* point = frame.data<PointShadowFrame>(FrameId::PointShadow);
 	const auto* csm = frame.data<CsmFrame>(FrameId::Csm);
-	int offsetSum = 0;
 	drawData.pointLightsSize = 0;
 	if (point) {
-		const size_t lightCount = (std::min)(point->shadowEntities.size(), static_cast<size_t>(12));
-		for (size_t i = 0; i < lightCount; i++) {
-			auto tc = ECSHandler::registry().pinComponent<const TransformComponent>(point->shadowEntities[i]);
-			auto lightComp = ECSHandler::registry().pinComponent<const LightSourceComponent>(point->shadowEntities[i]);
-			if (!tc || !lightComp) {
+		const float t = renderDataHandle.current.wind.w;
+		for (const auto& lit : point->lights) {
+			if (drawData.pointLightsSize >= static_cast<int>(std::size(pointLight))) {
+				break;
+			}
+			auto lightComp = ECSHandler::registry().pinComponent<const LightSourceComponent>(lit.entity);
+			if (!lightComp) {
 				continue;
 			}
 
-			auto& light = pointLight[i];
-
-			const float t = renderDataHandle.current.wind.w;
-			light.Position = tc->getPos(true);
-			if (lightComp->mFlicker > 0.f) {
-				light.Position = light.Position + lightComp->flickerShift(t);
-			}
+			auto& light = pointLight[drawData.pointLightsSize++];
+			light.Position = lit.position;
 			light.texelSize = Math::Vec2{ lightComp->getTexelSize().x, lightComp->getTexelSize().y };
 			light.bias = lightComp->getBias();
 			light.samples = (std::clamp)(lightComp->getSamples(), 1, 64);
 			light.radius = lightComp->mRadius;
-			light.offset = offsetSum;
+			light.offset = lit.firstFace;
+			light.Layers = lit.faces;
+			light.Type = lit.spot ? 1 : 0;
+			light.Direction = lit.direction;
+			light.cosInner = lit.cosInner;
+			light.cosOuter = lit.cosOuter;
 
 			light.Color = lightComp->getLightColor() * lightComp->getIntensity();
 			if (lightComp->mFlicker > 0.f) {
@@ -274,19 +276,7 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 			}
 			light.Linear = lightComp->mLinear;
 			light.Quadratic = lightComp->mQuadratic;
-			if (lightComp->getType() == ComponentsModule::eLightType::POINT) {
-				light.Type = 0;
-				light.Layers = 6;
-			}
-			else {
-				light.Type = 1;
-				light.Layers = 1;
-			}
-
-			offsetSum += lightComp->getTypeOffset(lightComp->getType());
 		}
-
-		drawData.pointLightsSize = static_cast<int>(lightCount);
 	}
 
 	if (csm && !csm->shadowCascadeLevels.empty()) {
@@ -327,7 +317,6 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 		drawData.tintArea = tint->area;
 		drawData.tintFoliage = tint->foliage;
 		drawData.tintAir = tint->air;
-		drawData.tintGround = tint->ground;
 	}
 	else {
 		drawData.tintArea = {};
@@ -421,6 +410,7 @@ void LightingPass::updateTextures(SystemsModule::RenderData& renderDataHandle, R
 	addImage(1, frame.texture(FrameId::GBufferNormal), frame.sampler(FrameId::GBufferNormal), slotSets.gNormal);
 	addImage(2, frame.texture(FrameId::GBufferAlbedo), frame.sampler(FrameId::GBufferAlbedo), slotSets.gAlbedo);
 	addImage(9, frame.texture(FrameId::GBufferVelocity), frame.sampler(FrameId::GBufferVelocity), slotSets.gVelocity);
+	addImage(23, frame.texture(FrameId::GBufferEmissive), frame.sampler(FrameId::GBufferEmissive), slotSets.gEmissive);
 
 	{
 		Render::TextureHandle ssaoTex = frame.texture(FrameId::SsaoBlur);

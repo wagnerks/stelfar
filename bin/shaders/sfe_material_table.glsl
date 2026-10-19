@@ -26,6 +26,12 @@ struct SfeMaterial {
     float triplanarRotated; // bit 1 the first layer's u and v swapped, bit 2 the second's
     float wetBelow;         // metres over the model's origin it is soaked below; see MaterialComponent::wetBelow
     float bare;             // 0..1, how far a cut-out surface has gone bare; see MaterialComponent::bare
+    float emissiveR;        // the light it gives off, times its emissive texture; floats, as a vec3 would move it
+    float emissiveG;
+    float emissiveB;
+    vec4 mudWheels[4];      // the wheels that throw mud up over it: hub, radius; see MaterialComponent::mudWheels
+    vec4 mudTreads;         // how caked each one's tread is, 0..1
+    vec4 mudMap;            // its mud map's low corner in the model, its first layer + 1 (0 none); see MudMapsFrame
 };
 
 layout(SFE_SET(0, 7), std430) readonly buffer SfeMaterials {

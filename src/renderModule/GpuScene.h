@@ -74,6 +74,16 @@ namespace SFE::Render {
 			std::array<uint32_t, 16> levelOffsets{};
 			std::vector<DescriptorSetHandle> pyramidSets;
 			std::vector<std::array<uint32_t, 3>> pyramidBoundIds;
+
+			// The commands packed after the cull (gpu_pack.cs): a group's commands with instances at the start of its
+			// range, how many in `counts`, a group's (and phase's) each, which the draw takes its count from.
+			List list = List::GBuffer;
+			BufferHandle counts;
+			uint32_t countCapacity = 0;
+			uint32_t packCapacity = 0; // groups the pack parameters have room for
+			std::vector<BufferHandle> packParams;
+			std::vector<DescriptorSetHandle> packSets;
+			std::vector<std::array<uint32_t, 3>> packBoundIds;
 		};
 
 		void init();
@@ -94,6 +104,9 @@ namespace SFE::Render {
 
 		// Record the culling dispatch into `view`. Outside a render pass. False when there is nothing to draw.
 		bool cullFrustum(CommandListHandle cmd, List list, View& view, const FrustumModule::Frustum& frustum);
+		// Several views each against its own frustum, as cullFrustum each, at once: the culls run side by side, then the
+		// packs, a barrier between and one after, where a view at a time waits twice on the GPU emptying.
+		bool cullFrusta(CommandListHandle cmd, List list, const std::vector<View*>& views, const std::vector<FrustumModule::Frustum>& frusta);
 		// Visible when the bounds touch any sphere (xyz centre, w radius). At most kMaxSpheres.
 		bool cullSpheres(CommandListHandle cmd, List list, View& view, const std::vector<Math::Vec4>& spheres);
 
@@ -241,6 +254,10 @@ namespace SFE::Render {
 		struct CullParams;
 		CullParams frustumParams(const FrustumModule::Frustum& frustum) const;
 		bool cull(CommandListHandle cmd, List list, View& view, CullParams& params);
+		// The cull's dispatch alone, without the pack after it: the slot of its params, or -1 when nothing is drawn.
+		int dispatchCull(CommandListHandle cmd, List list, View& view, CullParams& params);
+		// The cull's commands of one phase packed, a group's live ones first; `slot` the cull's. After a barrier on the cull.
+		void pack(CommandListHandle cmd, const ListData& data, View& view, uint32_t slot, bool secondPhase);
 		// Grows the view's output buffers to `instances` / `commands` entries and writes its parameters. Returns the
 		// index of this frame's (and phase's) params and set.
 		static void fillLodOrigin(CullParams& params);
@@ -269,6 +286,8 @@ namespace SFE::Render {
 
 		DescriptorSetLayoutHandle mCullLayout;
 		PipelineHandle mCullPipeline;
+		DescriptorSetLayoutHandle mPackLayout;
+		PipelineHandle mPackPipeline;
 		DescriptorSetLayoutHandle mHizLayout;
 		PipelineHandle mHizPipeline;
 		BufferHandle mEmptyBuffer; // bound where a cull without occlusion has no buffer

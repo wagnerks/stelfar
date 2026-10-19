@@ -1,6 +1,7 @@
 #include "Window.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 
@@ -280,6 +281,9 @@ namespace SFE::Render {
 			settings.width = json["width"].asInt();
 			settings.height = json["height"].asInt();
 		}
+		if (json["scale"].isNumeric()) {
+			settings.scale = std::clamp(json["scale"].asFloat(), kLeastRenderScale, 1.f);
+		}
 		if (json["frameInfo"].isBool()) {
 			settings.frameInfo = json["frameInfo"].asBool();
 		}
@@ -300,6 +304,7 @@ namespace SFE::Render {
 		json["mode"] = kDisplayModeNames[static_cast<size_t>(settings.mode)];
 		json["width"] = settings.width;
 		json["height"] = settings.height;
+		json["scale"] = settings.scale;
 		json["frameInfo"] = settings.frameInfo;
 		FileSystem::writeJson(displayFile(), json);
 	}
@@ -357,7 +362,7 @@ namespace SFE::Render {
 			settings.height = sizes.front().second;
 		}
 		mDisplayDirty |= !mDisplayOwned || settings.mode != mDisplay.mode || settings.width != mDisplay.width
-			|| settings.height != mDisplay.height;
+			|| settings.height != mDisplay.height || settings.scale != mDisplay.scale;
 		mDisplay = settings;
 		mDisplayOwned = true;
 	}
@@ -394,10 +399,14 @@ namespace SFE::Render {
 			glfwGetWindowFrameSize(mWindow, nullptr, &top, nullptr, nullptr);
 			glfwSetWindowPos(mWindow, x + (std::max)(0, (areaW - w) / 2), y + top + (std::max)(0, (areaH - top - h) / 2));
 		}
-		if (w == data.renderW && h == data.renderH) {
+		const int renderW = (std::max)(1, static_cast<int>(std::lround(static_cast<float>(w) * mDisplay.scale)));
+		const int renderH = (std::max)(1, static_cast<int>(std::lround(static_cast<float>(h) * mDisplay.scale)));
+		if (w == data.width && h == data.height && renderW == data.renderW && renderH == data.renderH) {
 			return false;
 		}
 		data.setSize(w, h);
+		data.renderW = renderW;
+		data.renderH = renderH;
 		return true;
 	}
 

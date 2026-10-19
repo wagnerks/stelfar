@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 
@@ -223,12 +224,21 @@ namespace SFE::Render {
 			return;
 		}
 		vmaFlushAllocation(m_allocator, m_uploadRingAlloc[m_currentFrame], 0, m_uploadRingUsed);
+		// Every texture written turned to be copied into in one barrier, the copies, and every one turned back in another:
+		// a barrier stops the GPU until all before it is done, and the ground's marks alone are a hundred tiles a frame.
+		std::vector<VkTextureResource*> written;
+		for (const auto& op : m_textureUploadOps) {
+			auto* texture = getLive(m_textures, op.dstId);
+			if (texture && texture->image && std::find(written.begin(), written.end(), texture) == written.end()) {
+				written.push_back(texture);
+			}
+		}
+		transitionTextures(cmd, written, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 		for (const auto& op : m_textureUploadOps) {
 			auto* texture = getLive(m_textures, op.dstId);
 			if (!texture || !texture->image) {
 				continue;
 			}
-			ensureTextureLayout(cmd, *texture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			VkBufferImageCopy region{};
 			region.bufferOffset = op.srcOffset;
 			region.imageSubresource.aspectMask = aspectMaskForFormat(texture->format);
@@ -238,8 +248,8 @@ namespace SFE::Render {
 			region.imageOffset = { static_cast<int32_t>(op.x), static_cast<int32_t>(op.y), 0 };
 			region.imageExtent = { op.w, op.h, 1 };
 			vkCmdCopyBufferToImage(cmd, m_uploadRing[m_currentFrame], texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-			ensureTextureLayout(cmd, *texture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 		}
+		transitionTextures(cmd, written, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 		m_textureUploadOps.clear();
 	}
 
@@ -644,27 +654,8 @@ namespace SFE::Render {
 		buffer->mapped = nullptr;
 	}
 
-	void VulkanRHI::transitionImageLayout(const VkCommandBuffer cmd, const VkImage image, const VkFormat format,
-		const VkImageLayout oldLayout, const VkImageLayout newLayout, const uint32_t layerCount, const uint32_t mipLevels)
-	{
-		if (oldLayout == newLayout) {
-			return;
-		}
-
-		VkImageMemoryBarrier barrier{};
-		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		barrier.oldLayout = oldLayout;
-		barrier.newLayout = newLayout;
-		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		barrier.image = image;
-		barrier.subresourceRange.aspectMask = aspectMaskForFormat(format);
-		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = (std::max)(1u, mipLevels);
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount = (std::max)(1u, layerCount);
-
-		auto accessForLayout = [](VkImageLayout layout) -> VkAccessFlags {
+	namespace {
+		VkAccessFlags accessForLayout(const VkImageLayout layout) {
 			switch (layout) {
 			case VK_IMAGE_LAYOUT_UNDEFINED:
 			case VK_IMAGE_LAYOUT_PREINITIALIZED:
@@ -687,9 +678,9 @@ namespace SFE::Render {
 			default:
 				return VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
 			}
-		};
+		}
 
-		auto stagesForLayout = [](VkImageLayout layout, bool) -> VkPipelineStageFlags {
+		VkPipelineStageFlags stagesForLayout(const VkImageLayout layout) {
 			switch (layout) {
 			case VK_IMAGE_LAYOUT_UNDEFINED:
 			case VK_IMAGE_LAYOUT_PREINITIALIZED:
@@ -711,12 +702,32 @@ namespace SFE::Render {
 			default:
 				return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 			}
-		};
+		}
+	}
+
+	void VulkanRHI::transitionImageLayout(const VkCommandBuffer cmd, const VkImage image, const VkFormat format,
+		const VkImageLayout oldLayout, const VkImageLayout newLayout, const uint32_t layerCount, const uint32_t mipLevels)
+	{
+		if (oldLayout == newLayout) {
+			return;
+		}
+
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = newLayout;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = image;
+		barrier.subresourceRange.aspectMask = aspectMaskForFormat(format);
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = (std::max)(1u, mipLevels);
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = (std::max)(1u, layerCount);
 
 		barrier.srcAccessMask = accessForLayout(oldLayout);
 		barrier.dstAccessMask = accessForLayout(newLayout);
-		vkCmdPipelineBarrier(cmd, stagesForLayout(oldLayout, true), stagesForLayout(newLayout, false),
-			0, 0, nullptr, 0, nullptr, 1, &barrier);
+		vkCmdPipelineBarrier(cmd, stagesForLayout(oldLayout), stagesForLayout(newLayout), 0, 0, nullptr, 0, nullptr, 1, &barrier);
 	}
 
 	void VulkanRHI::ensureTextureLayout(VkCommandBuffer cmd, VkTextureResource& texture, const VkImageLayout newLayout) {
@@ -730,6 +741,35 @@ namespace SFE::Render {
 		const uint32_t mips = (std::max)(1u, texture.desc.mipLevels);
 		transitionImageLayout(cmd, texture.image, texture.format, texture.layout, newLayout, layers, mips);
 		texture.layout = newLayout;
+	}
+
+	void VulkanRHI::transitionTextures(const VkCommandBuffer cmd, const std::vector<VkTextureResource*>& textures, const VkImageLayout newLayout) {
+		std::vector<VkImageMemoryBarrier> barriers;
+		VkPipelineStageFlags from = 0;
+		for (auto* texture : textures) {
+			if (!texture->image || texture->layout == newLayout) {
+				continue;
+			}
+			VkImageMemoryBarrier& barrier = barriers.emplace_back();
+			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			barrier.oldLayout = texture->layout;
+			barrier.newLayout = newLayout;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.image = texture->image;
+			barrier.subresourceRange.aspectMask = aspectMaskForFormat(texture->format);
+			barrier.subresourceRange.levelCount = (std::max)(1u, texture->desc.mipLevels);
+			barrier.subresourceRange.layerCount = (texture->desc.dimension == TextureDimension::Cube) ? 6u
+				: (texture->desc.dimension == TextureDimension::Array) ? (std::max)(1u, static_cast<uint32_t>(texture->desc.depth)) : 1u;
+			barrier.srcAccessMask = accessForLayout(texture->layout);
+			barrier.dstAccessMask = accessForLayout(newLayout);
+			from |= stagesForLayout(texture->layout);
+			texture->layout = newLayout;
+		}
+		if (!barriers.empty()) {
+			vkCmdPipelineBarrier(cmd, from, stagesForLayout(newLayout), 0, 0, nullptr, 0, nullptr,
+				static_cast<uint32_t>(barriers.size()), barriers.data());
+		}
 	}
 
 	void VulkanRHI::generateMipmaps(VkCommandBuffer cmd, VkTextureResource& texture) {
@@ -1739,8 +1779,37 @@ namespace SFE::Render {
 		if (!list || m_markPool == VK_NULL_HANDLE || count >= (endsPass ? kMaxGpuMarks : kGpuShaderMarks)) {
 			return;
 		}
+		// SFE_GPU_SERIAL set: what comes after a pass waits for all of it to end, so a pass's span is its own work alone,
+		// not shared with the passes it overlaps or a wait it falls on. The frame is slower so; only its parts are true.
+		static const bool serial = std::getenv("SFE_GPU_SERIAL") != nullptr;
+		if (serial && endsPass && !list->activeFramebuffer) {
+			VkMemoryBarrier all{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+			all.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+			all.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+			vkCmdPipelineBarrier(list->cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &all,
+				0, nullptr, 0, nullptr);
+		}
 		vkCmdWriteTimestamp(list->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_markPool, m_currentFrame * kMaxGpuMarks + count);
 		m_markLabels[m_currentFrame][count] = { label, endsPass };
 		++count;
+	}
+
+	void VulkanRHI::cmdBeginRegion(const CommandListHandle cmd, const char* name) {
+		static const auto begin = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+			vkGetInstanceProcAddr(m_instance, "vkCmdBeginDebugUtilsLabelEXT"));
+		auto* list = getLive(m_commandLists, cmd.id);
+		if (begin && list && name) {
+			VkDebugUtilsLabelEXT label{ VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
+			label.pLabelName = name;
+			begin(list->cmd, &label);
+		}
+	}
+
+	void VulkanRHI::cmdEndRegion(const CommandListHandle cmd) {
+		static const auto end = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+			vkGetInstanceProcAddr(m_instance, "vkCmdEndDebugUtilsLabelEXT"));
+		if (auto* list = getLive(m_commandLists, cmd.id); end && list) {
+			end(list->cmd);
+		}
 	}
 }

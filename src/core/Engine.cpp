@@ -22,6 +22,7 @@
 #include "systemsModule/systems/RenderSystem.h"
 #include "windowsModule/Window.h"
 #include "assetsModule/TextureHandler.h"
+#include "assetsModule/modelModule/MeshVaoRegistry.h"
 #include "assetsModule/modelModule/ModelLoader.h"
 #include "assetsModule/modelModule/SurfaceBake.h"
 #include "core/FileSystem.h"
@@ -158,7 +159,8 @@ namespace SFE {
 			});
 		bridge->addCommand("display",
 			"The display as the Graphics panel sets it, for this run only (display.json is left as it is): {\"mode\": "
-			"\"windowed\" | \"borderless\" | \"fullscreen\", \"width\", \"height\", \"frameInfo\"}, what is left out kept. "
+			"\"windowed\" | \"borderless\" | \"fullscreen\", \"width\", \"height\", \"scale\" (the share of it drawn), \"frameInfo\"}, "
+			"what is left out kept. "
 			"Put on the screen at the start of the next frame.",
 			[this](const Json::Value& args) {
 				const auto& screen = mWindow->getScreenData();
@@ -168,6 +170,7 @@ namespace SFE {
 				settings = *mWindow->display();
 				return std::string(Render::kDisplayModeNames[static_cast<size_t>(settings.mode)]) + " "
 					+ std::to_string(settings.width) + "x" + std::to_string(settings.height)
+					+ " drawn at " + std::to_string(settings.scale)
 					+ (settings.frameInfo ? ", frame info shown" : ", frame info hidden");
 			});
 		bridge->addCommand("screenshot", "The last frame as a PNG: {\"path\": ...}, under the content root unless absolute.",
@@ -201,6 +204,32 @@ namespace SFE {
 					said += (said.empty() ? "" : "; ") + path + (entities < 0 ? " did not read" : ": " + std::to_string(entities) + " entities");
 				}
 				return paths.empty() ? std::string("no model has changed") : said;
+			});
+		bridge->addCommand("meshLods",
+			"A model's meshes as they are drawn, each level of detail's triangles and how far it strays from the full mesh "
+			"(MeshLod, a share of its extent): {\"path\": model}.",
+			[](const Json::Value& args) -> std::string {
+				auto* model = args.isObject() ? AssetsModule::ModelLoader::instance()->load(args["path"].asString()) : nullptr;
+				if (!model || model->getLODs()->empty()) {
+					return "give {\"path\": a model}";
+				}
+				std::string said;
+				auto* meshes = MeshVaoRegistry::instance();
+				for (auto* meshObject : model->getLODs()->front().meshes) {
+					const auto& data = meshes->get(&meshObject->mesh);
+					const auto table = meshes->meshTable(data.meshId);
+					said += said.empty() ? "" : "; ";
+					for (uint32_t level = 0; level < data.lodCount && level < table.size(); ++level) {
+						char line[48];
+						std::snprintf(line, sizeof(line), "%s%u", level ? " " : "", table[level].indexCount / 3);
+						said += line;
+						if (level) {
+							std::snprintf(line, sizeof(line), "@%.4f", table[0].lodErrors[level - 1]);
+							said += line;
+						}
+					}
+				}
+				return said;
 			});
 		bridge->addCommand("reloadScene",
 			"The scene file read again, and what changed in it taken up: an entity moved, turned or scaled, a model "

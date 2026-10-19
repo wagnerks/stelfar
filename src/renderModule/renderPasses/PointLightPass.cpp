@@ -1,6 +1,7 @@
 ﻿#include "PointLightPass.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
@@ -35,9 +36,23 @@ namespace {
 		}
 	}
 
-	// Caster opacity and cutoff come from the material table.
+	// A spot's one face: from `pos` down the entity's -Z, its cone wide, the entity's scale left out.
+	void appendSpotMatrix(std::vector<SFE::Math::Mat4>& out, const SFE::Math::Mat4& world, SFE::Math::Vec3 pos, float outer, float nearP, float radius) {
+		SFE::MathModule::PerspectiveProjection proj(2.f * outer, 1.f, nearP, radius);
+		SFE::Math::Mat4 eye(1.f);
+		for (int axis = 0; axis < 3; ++axis) {
+			eye[axis] = SFE::Math::Vec4(SFE::Math::normalize(SFE::Math::Vec3(world[axis])), 0.f);
+		}
+		eye[3] = SFE::Math::Vec4(pos, 1.f);
+		out.push_back(proj.getProjectionsMatrix() * SFE::Math::inverseAffine(eye));
+	}
+
+	// The widest a spot's cone goes, half its angle in degrees: one face's projection runs out towards 90.
+	constexpr float kMaxSpotOuter = 80.f;
+
+	// The face drawn (pointLightMap.vs). Caster opacity and cutoff come from the material table.
 	struct PointShadowPush {
-		int light = 0;
+		int face = 0;
 		float pad[3]{};
 	};
 }
@@ -47,23 +62,28 @@ namespace SFE::Render::RenderPasses {
 PointLightPass::PointLightPass() {
 }
 
-void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, float time, std::vector<Math::Mat4>& matrices, std::vector<Math::Vec4>& spheres, std::vector<ecss::SectorId>& entities) {
+void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, float time, std::vector<Math::Mat4>& matrices, std::vector<Data::Light>& lights) {
 	matrices.clear();
-	spheres.clear();
-	entities.clear();
+	lights.clear();
 
 	struct Candidate {
-		ecss::SectorId id;
-		Math::Vec3 pos;
+		Data::Light light;
+		Math::Mat4 world;
 		float nearP = 0.1f;
 		float radius = 1.f;
+		float outer = 0.f; // a spot's cone, half its angle in degrees
+		bool shadows = true;
 		float dist2 = 0.f;
 	};
 	std::vector<Candidate> candidates;
 	candidates.reserve(32);
 
 	for (const auto& [entity, lightSource, transform] : ECSHandler::registry().view<LightSourceComponent, TransformComponent>()) {
-		if (!lightSource || !transform || lightSource->getType() != ComponentsModule::eLightType::POINT) {
+		if (!lightSource || !transform) {
+			continue;
+		}
+		const bool spot = lightSource->getType() == ComponentsModule::eLightType::SPOT;
+		if (!spot && lightSource->getType() != ComponentsModule::eLightType::POINT) {
 			continue;
 		}
 		auto pos = transform->getPos(true);
@@ -74,7 +94,22 @@ void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, con
 			continue;
 		}
 		const auto d = pos - cameraPos;
-		candidates.push_back({ entity, pos, lightSource->mNear, lightSource->mRadius, Math::dot(d, d) });
+		Candidate c;
+		c.light.entity = entity;
+		c.light.position = pos;
+		c.light.spot = spot;
+		c.world = transform->copyTransform();
+		c.nearP = lightSource->mNear;
+		c.radius = lightSource->mRadius;
+		c.shadows = lightSource->mWithShadows;
+		c.dist2 = Math::dot(d, d);
+		if (spot) {
+			c.outer = (std::clamp)(lightSource->mSpotOuter, 1.f, kMaxSpotOuter);
+			c.light.direction = Math::normalize(-Math::Vec3(c.world[2]));
+			c.light.cosOuter = std::cos(Math::radians(c.outer));
+			c.light.cosInner = (std::max)(std::cos(Math::radians((std::clamp)(lightSource->mSpotInner, 0.f, c.outer))), c.light.cosOuter + 1e-4f);
+		}
+		candidates.push_back(c);
 	}
 
 	std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
@@ -84,12 +119,18 @@ void PointLightPass::collectLights(const FrustumModule::Frustum& camFrustum, con
 		candidates.resize(static_cast<size_t>(maxLights));
 	}
 
-	for (const auto& c : candidates) {
-		entities.push_back(c.id);
-		appendFaceMatrices(matrices, c.pos, c.nearP, c.radius);
-		// The six faces reach the corners of a cube round the light, but its light ends at its radius
-		// (deferred_shading.fs), and anything between it and what it lights is nearer than that: the rest is not drawn.
-		spheres.push_back({ c.pos.x, c.pos.y, c.pos.z, c.radius });
+	for (auto& c : candidates) {
+		c.light.firstFace = static_cast<int>(matrices.size());
+		if (c.shadows) {
+			if (c.light.spot) {
+				appendSpotMatrix(matrices, c.world, c.light.position, c.outer, c.nearP, c.radius);
+			}
+			else {
+				appendFaceMatrices(matrices, c.light.position, c.nearP, c.radius);
+			}
+		}
+		c.light.faces = static_cast<int>(matrices.size()) - c.light.firstFace;
+		lights.push_back(c.light);
 	}
 }
 
@@ -144,13 +185,12 @@ void PointLightPass::ensureGpu(SystemsModule::RenderData&) {
 
 	// Set 0: buffers. Set 1: the caster's mask texture.
 	Render::DescriptorSetLayoutDesc layoutDesc;
-	layoutDesc.bindings.emplace_back(11, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Geometry);
+	layoutDesc.bindings.emplace_back(11, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Vertex);
 	layoutDesc.bindings.emplace_back(1, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex);
 	layoutDesc.bindings.emplace_back(2, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex);
 	layoutDesc.bindings.emplace_back(3, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex);
 	layoutDesc.bindings.emplace_back(7, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Fragment);
 	mBufferLayout = rhi->createDescriptorSetLayout(layoutDesc);
-	mSet = rhi->allocateDescriptorSet(mBufferLayout);
 
 	Render::DescriptorSetLayoutDesc textureLayoutDesc;
 	textureLayoutDesc.bindings.emplace_back(4, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
@@ -167,9 +207,8 @@ void PointLightPass::ensureGpu(SystemsModule::RenderData&) {
 	pipelineDesc.renderPass = renderPass;
 	pipelineDesc.descriptorSetLayouts = { mBufferLayout, mTextureLayout };
 	pipelineDesc.pushConstantSize = sizeof(PointShadowPush);
-	pipelineDesc.pushConstantStages = ShaderStage::Geometry | ShaderStage::Fragment;
-	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/cascadeShadowMap.vs");
-	pipelineDesc.shaders.geometry = rhi->loadShader(ShaderStage::Geometry, "shaders/pointLightMap.gs");
+	pipelineDesc.pushConstantStages = ShaderStage::Vertex;
+	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/pointLightMap.vs");
 	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/pointLightMap.fs");
 
 	Render::VertexLayoutDesc vaoDesc;
@@ -201,8 +240,7 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 	FUNCTION_BENCHMARK;
 
 	auto& matrices = data.matrices;
-	auto& spheres = mSpheres;
-	collectLights(renderDataHandle.mCamFrustum, renderDataHandle.mCameraPos, renderDataHandle.current.wind.w, matrices, spheres, data.shadowEntities);
+	collectLights(renderDataHandle.mCamFrustum, renderDataHandle.mCameraPos, renderDataHandle.current.wind.w, matrices, data.lights);
 	if (matrices.empty()) {
 		publish(renderDataHandle);
 		return;
@@ -213,24 +251,40 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 
 	auto* rhi = Engine::instance()->rhi();
 	const auto matricesBlock = Utils::allocMatrices(matrices, maxShadowFaces);
-	if (matricesBlock.buffer.id != mMatricesId) {
-		mMatricesId = matricesBlock.buffer.id;
-		rhi->updateDescriptorSets({ { .set = mSet, .binding = 11, .buffers{ { matricesBlock.buffer, 0, sizeof(Math::Mat4) * maxShadowFaces } } } });
-	}
 
 	auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
 	auto& scene = renderSystem->scene();
 	const auto materials = renderSystem->materials().upload();
-	const bool visible = scene.cullSpheres(cmd, GpuScene::List::Shadow, mView, spheres);
-	if (visible) {
-		const uint32_t ids[4] = { renderDataHandle.transformsSSBO.id, renderDataHandle.bonesSSBO.id, mView.visible.id, materials.id };
-		if (!std::equal(std::begin(ids), std::end(ids), std::begin(mBoundIds))) {
-			std::copy(std::begin(ids), std::end(ids), std::begin(mBoundIds));
+	// Each face's casters culled against its own frustum, the light's radius its far end: a caster beside a light goes
+	// only to the one or two faces it shows in, not to all six.
+	const size_t faces = (std::min)(matrices.size(), mViews.size());
+	mFaceViews.clear();
+	mFaceFrusta.clear();
+	for (size_t face = 0; face < faces; ++face) {
+		mFaceViews.push_back(&mViews[face].view);
+		mFaceFrusta.push_back(FrustumModule::createFrustum(matrices[face]));
+	}
+	rhi->cmdBeginRegion(cmd, "PointCull");
+	const bool culled = scene.cullFrusta(cmd, GpuScene::List::Shadow, mFaceViews, mFaceFrusta);
+	rhi->cmdEndRegion(cmd);
+	// Nothing culled leaves nothing to draw, but the pass still runs: the maps are cleared, and on Vulkan they reach
+	// SHADER_READ_ONLY only through it.
+	const size_t drawn = culled ? faces : 0;
+	for (size_t face = 0; face < drawn; ++face) {
+		auto& faceView = mViews[face];
+		if (!faceView.set) {
+			faceView.set = rhi->allocateDescriptorSet(mBufferLayout);
+		}
+		const uint32_t ids[5] = { renderDataHandle.transformsSSBO.id, renderDataHandle.bonesSSBO.id, faceView.view.visible.id, materials.id,
+			matricesBlock.buffer.id };
+		if (!std::equal(std::begin(ids), std::end(ids), std::begin(faceView.boundIds))) {
+			std::copy(std::begin(ids), std::end(ids), std::begin(faceView.boundIds));
 			rhi->updateDescriptorSets({
-				{ .set = mSet, .binding = 1, .buffers{ { renderDataHandle.transformsSSBO } } },
-				{ .set = mSet, .binding = 2, .buffers{ { renderDataHandle.bonesSSBO } } },
-				{ .set = mSet, .binding = 3, .buffers{ { mView.visible } } },
-				{ .set = mSet, .binding = 7, .buffers{ { materials } } },
+				{ .set = faceView.set, .binding = 1, .buffers{ { renderDataHandle.transformsSSBO } } },
+				{ .set = faceView.set, .binding = 2, .buffers{ { renderDataHandle.bonesSSBO } } },
+				{ .set = faceView.set, .binding = 3, .buffers{ { faceView.view.visible } } },
+				{ .set = faceView.set, .binding = 7, .buffers{ { materials } } },
+				{ .set = faceView.set, .binding = 11, .buffers{ { matricesBlock.buffer, 0, sizeof(Math::Mat4) * maxShadowFaces } } },
 			});
 		}
 	}
@@ -244,15 +298,13 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 	begin.height = shadowResolution;
 
 	rhi->cmdBeginRenderPass(cmd, begin);
-	if (visible) {
+	{
 		const auto* meshes = SFE::MeshVaoRegistry::instance();
-		// The casters drawn again for each light, its six faces at once (pointLightMap.gs): a geometry shader that may
-		// write the vertices of every light's faces is slow however few it writes, the lights' faces in one draw took
-		// more than twice as long for a single light. The opaque ones first, depth only, so their depth is there to
-		// reject the cut-out ones behind them.
+		// The casters drawn again for each face, its layer picked in the vertex shader. The opaque ones first, depth only,
+		// so their depth is there to reject the cut-out ones behind them.
 		PointShadowPush push;
-		for (size_t light = 0; light < data.shadowEntities.size(); ++light) {
-			push.light = static_cast<int>(light);
+		for (size_t face = 0; face < drawn; ++face) {
+			push.face = static_cast<int>(face);
 			PipelineHandle bound{};
 			for (const bool cutoutPass : { false, true })
 			for (const auto& group : scene.groups(GpuScene::List::Shadow)) {
@@ -267,11 +319,11 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 					// After the pipeline: OpenGL keeps the vertex and index buffers on the pipeline's VAO.
 					rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 					rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
-					rhi->cmdPushConstants(cmd, drawn, ShaderStage::Geometry | ShaderStage::Fragment, &push, sizeof(push));
+					rhi->cmdPushConstants(cmd, drawn, ShaderStage::Vertex, &push, sizeof(push));
 				}
-				const DescriptorSetHandle sets[] = { mSet, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
+				const DescriptorSetHandle sets[] = { mViews[face].set, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
 				rhi->cmdBindDescriptorSets(cmd, drawn, 0, sets, 2, &matricesBlock.offset, 1);
-				scene.draw(cmd, mView, group);
+				scene.draw(cmd, mViews[face].view, group);
 			}
 		}
 	}

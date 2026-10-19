@@ -10,6 +10,7 @@
 namespace SFE {
 	// One entry per meshId, as the GPU culling reads it (std430 GpuMesh in shaders/gpu_cull.cs).
 	struct GpuMesh {
+		static constexpr size_t kMaxLodErrors = 6;
 		uint32_t firstIndex = 0;
 		uint32_t indexCount = 0;
 		uint32_t firstVertex = 0;
@@ -19,7 +20,10 @@ namespace SFE {
 		float boundsMax[3]{};
 		uint32_t lodIndex = 0;  // 0 is the full detail mesh
 		uint32_t lodCount = 1;  // levels in this mesh's chain, the same in every entry of it
-		uint32_t pad[3]{};
+		// Levels 1 on: how far each strays from the full mesh, a share of its extent (Mesh::lodErrors). The same in every
+		// entry of the chain.
+		float lodErrors[kMaxLodErrors]{};
+		uint32_t pad = 0;
 	};
 
 	// Every mesh shares one vertex buffer and one index buffer, so a draw differs from the next only in

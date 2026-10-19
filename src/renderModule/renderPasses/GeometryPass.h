@@ -25,6 +25,7 @@ namespace SFE::Render::RenderPasses {
 			TextureHandle normalBuffer;
 			TextureHandle albedoBuffer;
 			TextureHandle velocityBuffer;
+			TextureHandle emissiveBuffer;
 			TextureHandle depthsBuffer;
 		};
 
@@ -67,6 +68,9 @@ namespace SFE::Render::RenderPasses {
 		// RHI has no dynamic polygon mode -- Vulkan bakes it into the PSO and cannot override it.
 		Render::PipelineHandle getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,
 			Render::PolygonFillMode fillMode = Render::PolygonFillMode::Fill);
+		// The ground drawn dense near the camera (GroundMarksFrame::patch): g_buffer_ground.vs with the terrain's own
+		// fragment shader, no vertex input. None if its shaders are missing.
+		Render::PipelineHandle groundPatchPipeline(Render::PolygonFillMode fillMode);
 		void initGrid(Render::DescriptorSetLayoutHandle frameLayout);
 		void drawGrid(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd);
 
@@ -92,6 +96,7 @@ namespace SFE::Render::RenderPasses {
 
 		GraphicsPipelineDesc mGBufferPipelineDesc;
 		std::unordered_map<std::string, PipelineHandle> mGBufferPipelines;
+		PipelineHandle mGroundPatchPipelines[2]{}; // filled, wireframe
 
 		PipelineHandle mGridPipeline;
 		BufferHandle mGridVBO;

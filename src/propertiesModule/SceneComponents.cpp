@@ -23,7 +23,7 @@ namespace SFE::PropertiesModule {
 			{ "none",		 eLightType::NONE },
 			{ "directional", eLightType::DIRECTIONAL },
 			{ "point",		 eLightType::POINT },
-			{ "perspective", eLightType::PERSPECTIVE },
+			{ "spot",		 eLightType::SPOT },
 			{ "world",		 eLightType::WORLD },
 		};
 
@@ -131,6 +131,8 @@ namespace SFE::PropertiesModule {
 		data["linear"] = component.mLinear;
 		data["quadratic"] = component.mQuadratic;
 		data["with_shadows"] = component.mWithShadows;
+		data["spot_inner"] = component.mSpotInner;
+		data["spot_outer"] = component.mSpotOuter;
 		data["flicker"] = component.mFlicker;
 
 		data["bias"] = component.getBias();
@@ -169,6 +171,12 @@ namespace SFE::PropertiesModule {
 		}
 		if (data.isMember("with_shadows")) {
 			component->mWithShadows = data["with_shadows"].asBool();
+		}
+		if (data.isMember("spot_inner")) {
+			component->mSpotInner = data["spot_inner"].asFloat();
+		}
+		if (data.isMember("spot_outer")) {
+			component->mSpotOuter = data["spot_outer"].asFloat();
 		}
 		if (data.isMember("flicker")) {
 			component->mFlicker = data["flicker"].asFloat();

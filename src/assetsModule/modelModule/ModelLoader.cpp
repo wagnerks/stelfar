@@ -474,6 +474,9 @@ void ModelLoader::finishMeshes(Loaded& loaded) {
 	}
 	std::for_each(std::execution::par, parts.begin(), parts.end(), [](SFE::MeshObject3D* part) {
 		auto& mesh = *part;
+		// Welded before the tangents: MikkTSpace gives each copy of a corner its own, a little apart, and no weld after
+		// joins those again.
+		SFE::weldMesh(mesh.mesh);
 		int tangentUv = 0;
 		if (const auto* normals = mesh.material.tryGetTexture(SFE::NORMALS)) {
 			tangentUv = normals->uvSet;
@@ -493,7 +496,6 @@ void ModelLoader::finishMeshes(Loaded& loaded) {
 		mesh.aabb = SFE::FrustumModule::AABB(minAABB, maxAABB);
 
 		// Model::bindMeshes keeps levels a mesh already has.
-		SFE::weldMesh(mesh.mesh);
 		SFE::buildMeshLods(mesh.mesh);
 	});
 }
@@ -943,6 +945,14 @@ void ModelLoader::readMaterialData(SFE::Material& material, aiMaterial* assimpMa
 		if (assimpMaterial->Get(AI_MATKEY_BASE_COLOR, baseColor) == AI_SUCCESS) {
 			material.baseColor = { baseColor.r, baseColor.g, baseColor.b };
 		}
+		// emissiveFactor times KHR_materials_emissive_strength, which Blender writes for a strength past 1.
+		aiColor4D emissive;
+		if (assimpMaterial->Get(AI_MATKEY_COLOR_EMISSIVE, emissive) == AI_SUCCESS) {
+			float strength = 1.f;
+			assimpMaterial->Get(AI_MATKEY_EMISSIVE_INTENSITY, strength);
+			material.emissive = SFE::Math::Vec3{ emissive.r, emissive.g, emissive.b } * strength;
+		}
+		bindFirst(SFE::EMISSIVE, loadMaterialTextures(assimpMaterial, aiTextureType_EMISSIVE, directory), aiTextureType_EMISSIVE);
 		material.transparent = am == "BLEND";
 		material.alphaCutout = am == "MASK";
 		material.alphaFromMaps = false;

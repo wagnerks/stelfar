@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "assetsModule/modelModule/Terrain.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
 #include "logsModule/logger.h"
@@ -19,6 +20,8 @@ namespace SFE::Render {
 			m.mapMask = MaterialRules::gBufferMapMask(src.materials, src.alphaFromMaps);
 			// How it moves in the wind, for the vertex shaders: bit 32 a tree, bit 64 a plant.
 			m.mapMask += src.sway == ComponentsModule::Sway::Tree ? 32.f : src.sway == ComponentsModule::Sway::Plant ? 64.f : 0.f;
+			// Bit 128 the ground, whose mesh is put out of sight where it is drawn dense (sfeGroundUnderPatch).
+			m.mapMask += src.fragmentShader == AssetsModule::kTerrainFS ? 128.f : 0.f;
 			m.alphaCutoff = src.alphaDither ? 1.78f : cutoff;
 			m.uvSel = MaterialRules::gBufferUvSel(src.materials);
 			m.specFactor = src.specFactor;
@@ -38,7 +41,19 @@ namespace SFE::Render {
 				m.triplanarRotated += src.triplanar[i].rotated ? static_cast<float>(1u << i) : 0.f;
 			}
 			m.wetBelow = src.wetBelow;
+			for (size_t w = 0; w < ComponentsModule::MaterialComponent::kMudWheels; ++w) {
+				for (size_t i = 0; i < 4; ++i) {
+					m.mudWheels[4 * w + i] = src.mudWheels[w][i];
+				}
+			}
+			for (size_t i = 0; i < 4; ++i) {
+				m.mudTreads[i] = src.mudTreads[i];
+				m.mudMap[i] = src.mudMap[i];
+			}
 			m.bare = src.bare;
+			m.emissive[0] = src.emissive.x;
+			m.emissive[1] = src.emissive.y;
+			m.emissive[2] = src.emissive.z;
 			return m;
 		}
 	}

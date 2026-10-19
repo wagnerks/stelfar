@@ -4,9 +4,7 @@
 #include "sfe_scene.glsl"
 #include "sfe_material_table.glsl"
 #include "sfe_wind.glsl"
-// Cascade casters only. cascadeShadowMap.vs stays world-space because the point light pass shares
-// it and applies its own cube-face matrices in a geometry shader; this one applies the cascade
-// matrix here, which is what let the cascade geometry shader go away.
+// Cascade casters only: the cascade matrix applied here, which is what let the cascade geometry shader go away.
 layout(location = 0) in vec3 aPos;
 layout(location = 2) in vec2 aTexCoords;
 layout(location = 5) in ivec4 aBoneIds;

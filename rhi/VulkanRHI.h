@@ -214,6 +214,8 @@ namespace SFE::Render
 		void present() override;
 		double lastGpuMs() const override { return mLastGpuMs; }
 		void writeGpuMark(CommandListHandle cmd, const char* label, bool endsPass) override;
+		void cmdBeginRegion(CommandListHandle cmd, const char* name) override;
+		void cmdEndRegion(CommandListHandle cmd) override;
 		const char* deviceName() const override { return m_deviceName.c_str(); }
 		void updateTexture(TextureHandle tex, uint32_t x, uint32_t y, uint32_t w, uint32_t h, TextureFormat fmt, const void* data, uint32_t mip, uint32_t layer) override;
 		void updateCubeFace(TextureHandle tex, uint32_t face, uint32_t mip, const void* data) override;
@@ -282,6 +284,8 @@ namespace SFE::Render
 		void destroyTextureInternal(VkTextureResource& texture);
 		void transitionImageLayout(VkCommandBuffer cmd, VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t layerCount = 1, uint32_t mipLevels = 1);
 		void ensureTextureLayout(VkCommandBuffer cmd, VkTextureResource& texture, VkImageLayout newLayout);
+		// Several at once, in one barrier.
+		void transitionTextures(VkCommandBuffer cmd, const std::vector<VkTextureResource*>& textures, VkImageLayout newLayout);
 		void generateMipmaps(VkCommandBuffer cmd, VkTextureResource& texture);
 		void copyBufferToImage(VkCommandBuffer cmd, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t layer = 0, uint32_t mip = 0);
 		void blitTextureToTexture(VkCommandBuffer cmd, VkTextureResource& src, VkTextureResource& dst);

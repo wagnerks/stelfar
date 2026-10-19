@@ -124,14 +124,17 @@ namespace SFE::Render {
 	enum class DisplayMode : uint8_t { Windowed, Borderless, Fullscreen };
 	inline constexpr const char* kDisplayModeNames[] = { "windowed", "borderless", "fullscreen" };
 
-	// The player's choice, set in the Graphics panel: the mode, the size the picture is drawn at (the monitor's own
-	// when borderless), and whether the frame's timings show in its corner.
+	// The player's choice, set in the Graphics panel: the mode, the window's size (the monitor's own when borderless),
+	// the share of it along each side the picture is drawn at (stretched to the window as it goes on the screen), and
+	// whether the frame's timings show in its corner.
 	struct DisplaySettings {
 		DisplayMode mode = DisplayMode::Windowed;
 		int width = 2560;
 		int height = 1440;
+		float scale = 1.f;
 		bool frameInfo = true;
 	};
+	inline constexpr float kLeastRenderScale = 0.25f;
 	// display.json in the folder the game runs from, next to imgui.ini: what it lacks is DisplaySettings' own.
 	DisplaySettings loadDisplaySettings();
 	void saveDisplaySettings(const DisplaySettings& settings);

@@ -252,6 +252,15 @@ vec4 sfeGBufferVelocity(vec4 clipNow, vec4 clipBefore, float occlusion) {
     return vec4(sfeVelocity(clipNow, clipBefore), clamp(occlusion, 0.0, 1.0), 0.0);
 }
 
+// The emissive target: rgb the light a surface gives off itself, its material's `emissive` times its emissive texture
+// (sRGB, as the albedo's), added once the surface is lit (deferred_shading.fs); a unused. None for a material without.
+vec4 sfeGBufferEmissive(vec3 emissive, sampler2D map, vec2 uv) {
+    if (max(emissive.r, max(emissive.g, emissive.b)) <= 0.0) {
+        return vec4(0.0);
+    }
+    return vec4(emissive * pow(texture(map, uv).rgb, vec3(2.2)), 0.0);
+}
+
 // The area tint map (AreaTintFrame) at a world place: how far its foliage (r), water (g) and air (b) have gone towards
 // their tint colours. `area` is the map's min x, min z and 1 / size along each; outside it, or with no map (a zero
 // size), nothing.
@@ -280,4 +289,10 @@ vec3 sfeAreaTint(sampler2D map, vec4 area, vec2 xz) {
     mat4 invView; \
     vec4 style;      /* x the drawn look, GraphicsSettings::stylise */ \
     vec4 tintArea;   /* the area tint map's place, for sfeAreaTint; the map is SFE_SET(0, 22) */ \
-    vec4 tintShore;  /* xy: the map value where the lake's bank starts to turn to mud, and where it is all mud */
+    vec4 tintShore;  /* xy: the map value where the lake's bank starts to turn to mud, and where it is all mud; z: metres over the water the litter lies up to */ \
+    vec4 marksWindow; /* the ground's marks (sfe_marks.glsl): xy the fine window's least x and z, zw the coarse one's */ \
+    vec4 marksSize;   /* x the fine window's span, y the coarse one's, z the deepest pressed, w how deep grass lies flat; a zero span, no marks */ \
+    vec4 marksLook;   /* x the rims' height of the depth pressed aside within y metres, z how wet churn looks, w ruts' darkening per metre */ \
+    vec4 marksChurn;  /* xy the churn the soil starts and wholly shows at, zw the churn grass starts going and is all gone at */ \
+    vec4 marksGrid;   /* the terrain mesh's vertices: xy the first one's world x and z, z their spacing, w the terrain's height */ \
+    vec4 marksPatch;  /* the ground drawn dense: xy its least x and z, z its side, w its spacing; a zero side, none */

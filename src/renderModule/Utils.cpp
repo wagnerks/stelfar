@@ -1,4 +1,8 @@
 ﻿#include "Utils.h"
+
+#include <algorithm>
+#include <cmath>
+
 #include "mathModule/Utils.h"
 
 #include "assetsModule/modelModule/Mesh.h"
@@ -18,6 +22,99 @@ std::pair<TextureHandle, SamplerHandle> Utils::areaTintMap(const FrameBlackboard
 	}
 	const auto* white = AssetsModule::TextureHandler::instance()->loadTexture("white.png");
 	return { white->texture, white->sampler };
+}
+
+std::pair<TextureHandle, SamplerHandle> Utils::groundMarksMap(const FrameBlackboard& frame) {
+	if (const auto* marks = frame.data<GroundMarksFrame>(FrameId::GroundMarks)) {
+		return { marks->map, marks->sampler };
+	}
+	static const std::pair<TextureHandle, SamplerHandle> unmarked = [] {
+		auto* rhi = Engine::instance()->rhi();
+		TextureDesc desc;
+		desc.width = 1;
+		desc.height = 1;
+		desc.dimension = TextureDimension::Array;
+		desc.format = TextureFormat::RG8;
+		desc.usage = TextureUsage::Sampled | TextureUsage::TransferDst;
+		const auto texture = rhi->createTexture(desc);
+		const uint8_t level[2] = { 0, 0 };
+		rhi->updateTexture(texture, 0, 0, 1, 1, TextureFormat::RG8, level);
+		return std::pair{ texture, rhi->createSampler(SamplerDesc{}) };
+	}();
+	return unmarked;
+}
+
+std::pair<TextureHandle, SamplerHandle> Utils::mudMaps(const FrameBlackboard& frame) {
+	if (const auto* mud = frame.data<MudMapsFrame>(FrameId::MudMaps)) {
+		return { mud->map, mud->sampler };
+	}
+	static const std::pair<TextureHandle, SamplerHandle> clean = [] {
+		auto* rhi = Engine::instance()->rhi();
+		TextureDesc desc;
+		desc.width = 1;
+		desc.height = 1;
+		desc.dimension = TextureDimension::Array;
+		desc.format = TextureFormat::R8;
+		desc.usage = TextureUsage::Sampled | TextureUsage::TransferDst;
+		const auto texture = rhi->createTexture(desc);
+		const uint8_t none = 0;
+		rhi->updateTexture(texture, 0, 0, 1, 1, TextureFormat::R8, &none);
+		return std::pair{ texture, rhi->createSampler(SamplerDesc{}) };
+	}();
+	return clean;
+}
+
+std::pair<TextureHandle, SamplerHandle> Utils::groundHeightsMap(const FrameBlackboard& frame) {
+	static const SamplerHandle nearest = [] {
+		SamplerDesc desc;
+		desc.minFilter = FilterMode::Nearest;
+		desc.magFilter = FilterMode::Nearest;
+		return Engine::instance()->rhi()->createSampler(desc);
+	}();
+	if (const auto* marks = frame.data<GroundMarksFrame>(FrameId::GroundMarks); marks && marks->heights) {
+		return { marks->heights, nearest };
+	}
+	static const TextureHandle flat = [] {
+		TextureDesc desc;
+		desc.width = 1;
+		desc.height = 1;
+		desc.format = TextureFormat::R32F;
+		desc.usage = TextureUsage::Sampled;
+		const float height = 0.f;
+		return Engine::instance()->rhi()->createTexture(desc, &height);
+	}();
+	return { flat, nearest };
+}
+
+void Utils::drawGroundPatch(const CommandListHandle cmd, const Math::Vec4& patch) {
+	constexpr uint32_t kMostColumns = 2048;
+	auto* rhi = Engine::instance()->rhi();
+	static const BufferHandle indices = [rhi] {
+		// A column's vertices are 2 * column on the row's near side and the next up on its far side; each quad (a, c, b),
+		// (b, c, d), wound and split as the terrain's own cells are.
+		std::vector<uint32_t> row;
+		row.reserve(static_cast<size_t>(kMostColumns) * 6);
+		for (uint32_t column = 0; column < kMostColumns; ++column) {
+			const uint32_t a = 2 * column;
+			const uint32_t c = a + 1;
+			const uint32_t b = a + 2;
+			const uint32_t d = a + 3;
+			for (const uint32_t index : { a, c, b, b, c, d }) {
+				row.push_back(index);
+			}
+		}
+		BufferDesc desc;
+		desc.size = row.size() * sizeof(uint32_t);
+		desc.usage = BufferUsage::Index;
+		desc.cpuAccess = CpuAccess::None;
+		return rhi->createBuffer(desc, row.data());
+	}();
+	const auto columns = (std::min)(static_cast<uint32_t>(std::lround(patch.z / (std::max)(patch.w, 1e-3f))), kMostColumns);
+	if (columns == 0) {
+		return;
+	}
+	rhi->cmdBindIndexBuffer(cmd, indices, IndexType::Uint32, 0);
+	rhi->cmdDrawIndexed(cmd, columns * 6, columns);
 }
 
 // A LineStrip batch is never merged with an existing one: appending vertices to a strip joins the

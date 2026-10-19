@@ -649,11 +649,12 @@ namespace SFE::Render {
 			RhiLog::fatal("VulkanRHI: VK_EXT_depth_clip_control required so shaders keep OpenGL clip Z [-1, 1]");
 		}
 		// GPU-driven rendering: compute writes the draw count, shaders read gl_DrawID / gl_BaseInstance.
-		// Glass picks its albedo out of a sampler array by an index that is constant within each draw.
-		if (!supported12.drawIndirectCount || !supported11.shaderDrawParameters
+		// Glass picks its albedo out of a sampler array by an index that is constant within each draw. A point light's
+		// shadow faces pick their layer in the vertex shader.
+		if (!supported12.drawIndirectCount || !supported12.shaderOutputLayer || !supported11.shaderDrawParameters
 			|| !supportedFeatures.multiDrawIndirect || !supportedFeatures.drawIndirectFirstInstance
 			|| !supportedFeatures.shaderSampledImageArrayDynamicIndexing) {
-			RhiLog::fatal("VulkanRHI: drawIndirectCount, shaderDrawParameters, multiDrawIndirect, drawIndirectFirstInstance and shaderSampledImageArrayDynamicIndexing are required");
+			RhiLog::fatal("VulkanRHI: drawIndirectCount, shaderOutputLayer, shaderDrawParameters, multiDrawIndirect, drawIndirectFirstInstance and shaderSampledImageArrayDynamicIndexing are required");
 		}
 		deviceFeatures.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
 
@@ -680,6 +681,7 @@ namespace SFE::Render {
 		enabled12.hostQueryReset = supported12.hostQueryReset;
 		enabled12.samplerMirrorClampToEdge = supported12.samplerMirrorClampToEdge;
 		enabled12.drawIndirectCount = VK_TRUE;
+		enabled12.shaderOutputLayer = VK_TRUE;
 		m_hostQueryReset = supported12.hostQueryReset == VK_TRUE;
 		VkPhysicalDeviceVulkan11Features enabled11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
 		enabled11.shaderDrawParameters = VK_TRUE;

@@ -10,14 +10,15 @@ namespace SFE::ComponentsModule {
 		NONE = 0,
 		DIRECTIONAL,
 		POINT,
-		PERSPECTIVE,
+		// A cone of light down the entity's -Z (glTF's way), as a lamp's beam: mSpotInner, mSpotOuter. Its shadow is one
+		// face, a point light's six.
+		SPOT,
 		WORLD
 	};
 	
 	class LightSourceComponent : public ecss::ComponentInterface {
 	public:
 		LightSourceComponent(ecss::SectorId id , eLightType type);
-		static int getTypeOffset(eLightType type);
 		eLightType getType() const;
 		void setType(eLightType type);
 
@@ -41,6 +42,10 @@ namespace SFE::ComponentsModule {
 		float mRadius = 100.f;
 		float mNear = 0.1f;
 		bool mWithShadows = true;
+		// A spot's cone, half its angle in degrees: lit fully inside mSpotInner, fading out to nothing at mSpotOuter
+		// (at most PointLightPass kMaxSpotOuter).
+		float mSpotInner = 20.f;
+		float mSpotOuter = 30.f;
 		// How much a flame's light wavers, 0 steady: its brightness goes up and down by up to this share, and the light's
 		// centre wanders round the entity (LightSourceComponent.cpp kFlickerSway), so the shadows it throws tremble.
 		float mFlicker = 0.f;

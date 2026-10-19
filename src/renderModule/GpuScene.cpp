@@ -23,7 +23,7 @@ namespace SFE::Render {
 		uint32_t mode = 0; // 0: planes, 1: spheres
 		uint32_t shapeCount = 0;
 		uint32_t batchCount = 0;
-		// Levels coarser than the size on screen calls for. 1 for the shadow views: a silhouette cast on the
+		// Each step doubles the error on screen a level may have. 1 for the shadow views: a silhouette cast on the
 		// floor hides what the simplifier changed, and the cascades draw the whole scene four more times.
 		uint32_t lodBias = 0;
 		float shapes[GpuScene::kMaxSpheres * 4]{};
@@ -46,12 +46,14 @@ namespace SFE::Render {
 		uint32_t groundFirst = 0;
 		uint32_t groundEnd = 0;
 		float groundLodDistance = 0.f;
+		// The pixels on screen a coarser level may change (GraphicsSettings::lodPixels), and as many texels in a shadow map.
+		float lodPixels = 2.f;
 	};
 
 	namespace {
 		using SceneInstance = GpuScene::InstanceRecord;
 		using Batch = GpuScene::BatchRecord;
-		static_assert(sizeof(GpuMesh) == 64 && sizeof(SceneInstance) == 16 && sizeof(Batch) == 16);
+		static_assert(sizeof(GpuMesh) == 80 && sizeof(SceneInstance) == 16 && sizeof(Batch) == 16);
 
 		struct HizStep {
 			uint32_t srcOffset = 0;
@@ -116,7 +118,18 @@ namespace SFE::Render {
 		desc.compute = rhi->loadShader(ShaderStage::Compute, "shaders/gpu_cull.cs");
 		desc.descriptorSetLayouts = { mCullLayout };
 		mCullPipeline = rhi->createComputePipeline(desc);
-		mEmptyBuffer = createBuffer(16, BufferUsage::Storage, CpuAccess::None, nullptr, "GpuScene empty");
+		DescriptorSetLayoutDesc packLayout;
+		packLayout.bindings = {
+			{ 30, DescriptorType::StorageBuffer, ShaderStage::Compute },
+			{ 34, DescriptorType::StorageBuffer, ShaderStage::Compute },
+			{ 35, DescriptorType::StorageBuffer, ShaderStage::Compute },
+		};
+		mPackLayout = rhi->createDescriptorSetLayout(packLayout);
+		ComputePipelineDesc packDesc;
+		packDesc.compute = rhi->loadShader(ShaderStage::Compute, "shaders/gpu_pack.cs");
+		packDesc.descriptorSetLayouts = { mPackLayout };
+		mPackPipeline = rhi->createComputePipeline(packDesc);
+		mEmptyBuffer =createBuffer(16, BufferUsage::Storage, CpuAccess::None, nullptr, "GpuScene empty");
 
 		DescriptorSetLayoutDesc hizLayout;
 		hizLayout.bindings = {
@@ -888,14 +901,13 @@ namespace SFE::Render {
 		params.lodOrigin[0] = data.mCameraPos.x;
 		params.lodOrigin[1] = data.mCameraPos.y;
 		params.lodOrigin[2] = data.mCameraPos.z;
-		// projection[1][1] is 1 / tan(fovY / 2). The detail setting rides on the size a model reports: at 2 every
-		// level is kept to twice the distance, which is the same as moving the shader's bands out.
-		params.lodOrigin[3] = static_cast<float>(screen.renderH) * 0.5f * data.current.projection[1][1]
-			* (std::max)(data.graphics.lodDetail, 0.05f);
+		// projection[1][1] is 1 / tan(fovY / 2).
+		params.lodOrigin[3] = static_cast<float>(screen.renderH) * 0.5f * data.current.projection[1][1];
+		params.lodPixels = (std::max)(data.graphics.lodPixels, 0.01f);
 	}
 
 	uint32_t GpuScene::prepareView(View& view, const uint32_t instances, const uint32_t commands, const CullParams& params) {
-		static_assert(sizeof(CullParams) == 452);
+		static_assert(sizeof(CullParams) == 456);
 		auto* rhi = Engine::instance()->rhi();
 		if (!view.visible || view.visibleCapacity < instances) {
 			retire(view.visible);
@@ -921,13 +933,58 @@ namespace SFE::Render {
 		return slot;
 	}
 
+	bool GpuScene::cullFrusta(const CommandListHandle cmd, const List list, const std::vector<View*>& views,
+		const std::vector<FrustumModule::Frustum>& frusta) {
+		const size_t count = (std::min)(views.size(), frusta.size());
+		std::vector<int> slots(count);
+		for (size_t i = 0; i < count; ++i) {
+			auto params = frustumParams(frusta[i]);
+			slots[i] = dispatchCull(cmd, list, *views[i], params);
+			if (slots[i] < 0) {
+				return false;
+			}
+		}
+		if (count == 0) {
+			return false;
+		}
+		auto* rhi = Engine::instance()->rhi();
+		rhi->cmdPipelineBarrier(cmd, { PipelineStage::Compute, PipelineStage::Compute, AccessMask::ShaderWrite, AccessMask::ShaderRead | AccessMask::ShaderWrite });
+		for (size_t i = 0; i < count; ++i) {
+			pack(cmd, mLists[static_cast<size_t>(list)], *views[i], static_cast<uint32_t>(slots[i]), false);
+		}
+		rhi->cmdPipelineBarrier(cmd, {
+			PipelineStage::Compute,
+			PipelineStage::DrawIndirect | PipelineStage::VertexShader,
+			AccessMask::ShaderWrite,
+			AccessMask::IndirectCommandRead | AccessMask::ShaderRead,
+		});
+		return true;
+	}
+
 	bool GpuScene::cull(const CommandListHandle cmd, const List list, View& view, CullParams& params) {
+		const int slot = dispatchCull(cmd, list, view, params);
+		if (slot < 0) {
+			return false;
+		}
+		auto* rhi = Engine::instance()->rhi();
+		rhi->cmdPipelineBarrier(cmd, { PipelineStage::Compute, PipelineStage::Compute, AccessMask::ShaderWrite, AccessMask::ShaderRead | AccessMask::ShaderWrite });
+		pack(cmd, mLists[static_cast<size_t>(list)], view, static_cast<uint32_t>(slot), params.occlusion == 2);
+		rhi->cmdPipelineBarrier(cmd, {
+			PipelineStage::Compute,
+			PipelineStage::DrawIndirect | PipelineStage::VertexShader,
+			AccessMask::ShaderWrite,
+			AccessMask::IndirectCommandRead | AccessMask::ShaderRead,
+		});
+		return true;
+	}
+
+	int GpuScene::dispatchCull(const CommandListHandle cmd, const List list, View& view, CullParams& params) {
 		const auto& data = mLists[static_cast<size_t>(list)];
 		auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
 		const auto transforms = renderSystem ? renderSystem->transformsBuffer() : BufferHandle{};
 		const auto bones = renderSystem ? renderSystem->bonesBuffer() : BufferHandle{};
 		if (data.batchCount == 0 || !mCullPipeline || !mMeshes || !transforms || !bones) {
-			return false;
+			return -1;
 		}
 		auto* rhi = Engine::instance()->rhi();
 		params.batchCount = data.batchCount;
@@ -981,13 +1038,57 @@ namespace SFE::Render {
 		rhi->cmdBindPipeline(cmd, mCullPipeline);
 		rhi->cmdBindDescriptorSets(cmd, mCullPipeline, 0, &view.sets[slot], 1);
 		rhi->cmdDispatch(cmd, (data.batchCount + kLocalSize - 1) / kLocalSize, 1, 1);
-		rhi->cmdPipelineBarrier(cmd, {
-			PipelineStage::Compute,
-			PipelineStage::DrawIndirect | PipelineStage::VertexShader,
-			AccessMask::ShaderWrite,
-			AccessMask::IndirectCommandRead | AccessMask::ShaderRead,
-		});
-		return true;
+		view.list = list;
+		return static_cast<int>(slot);
+	}
+
+	void GpuScene::pack(const CommandListHandle cmd, const ListData& data, View& view, const uint32_t slot, const bool secondPhase) {
+		auto* rhi = Engine::instance()->rhi();
+		const auto groups = static_cast<uint32_t>(data.groups.size());
+		if (!view.counts || view.countCapacity < groups * 2) {
+			retire(view.counts);
+			view.countCapacity = groups * 2 + 32;
+			view.counts = createBuffer(view.countCapacity * sizeof(uint32_t), BufferUsage::Storage | BufferUsage::Indirect, CpuAccess::None, nullptr, "GpuScene counts");
+		}
+		if (view.packCapacity < groups) {
+			for (auto& params : view.packParams) {
+				retire(params);
+				params = {};
+			}
+			view.packCapacity = groups + 16;
+		}
+		if (view.packParams.size() < view.params.size()) {
+			view.packParams.resize(view.params.size());
+			view.packSets.resize(view.params.size());
+			view.packBoundIds.resize(view.params.size());
+		}
+		if (!view.packParams[slot]) {
+			view.packParams[slot] = createBuffer((4 + view.packCapacity * 2) * sizeof(uint32_t), BufferUsage::Storage, CpuAccess::Write, nullptr, "GpuScene pack");
+		}
+		std::vector<uint32_t> words(4 + groups * 2);
+		words[0] = groups;
+		words[1] = secondPhase ? view.secondPhaseOffset : 0u;
+		words[2] = secondPhase ? groups : 0u;
+		for (uint32_t g = 0; g < groups; ++g) {
+			words[4 + g * 2] = data.groups[g].firstBatch;
+			words[5 + g * 2] = data.groups[g].batchCount;
+		}
+		rhi->updateBuffer(view.packParams[slot], 0, words.size() * sizeof(uint32_t), words.data());
+		if (!view.packSets[slot]) {
+			view.packSets[slot] = rhi->allocateDescriptorSet(mPackLayout);
+		}
+		const std::array<uint32_t, 3> ids = { view.commands.id, view.counts.id, view.packParams[slot].id };
+		if (ids != view.packBoundIds[slot]) {
+			view.packBoundIds[slot] = ids;
+			rhi->updateDescriptorSets({
+				{ .set = view.packSets[slot], .binding = 30, .buffers{ { view.commands } } },
+				{ .set = view.packSets[slot], .binding = 34, .buffers{ { view.counts } } },
+				{ .set = view.packSets[slot], .binding = 35, .buffers{ { view.packParams[slot] } } },
+			});
+		}
+		rhi->cmdBindPipeline(cmd, mPackPipeline);
+		rhi->cmdBindDescriptorSets(cmd, mPackPipeline, 0, &view.packSets[slot], 1);
+		rhi->cmdDispatch(cmd, groups, 1, 1);
 	}
 
 	bool GpuScene::sortGlass(const CommandListHandle cmd, View& view, const uint32_t group, const FrustumModule::Frustum& frustum,
@@ -1108,7 +1209,15 @@ namespace SFE::Render {
 			return;
 		}
 		const auto first = group.firstBatch + (secondPhase ? view.secondPhaseOffset : 0u);
-		Engine::instance()->rhi()->cmdDrawIndexedIndirect(cmd, view.commands, first * kCommandStride, group.batchCount, kCommandStride);
+		const auto& groups = mLists[static_cast<size_t>(view.list)].groups;
+		const auto index = static_cast<size_t>(&group - groups.data());
+		if (view.counts && index < groups.size()) {
+			Engine::instance()->rhi()->cmdDrawIndexedIndirectCount(cmd, view.commands, first * kCommandStride, view.counts,
+				(index + (secondPhase ? groups.size() : 0)) * sizeof(uint32_t), group.batchCount, kCommandStride);
+		}
+		else {
+			Engine::instance()->rhi()->cmdDrawIndexedIndirect(cmd, view.commands, first * kCommandStride, group.batchCount, kCommandStride);
+		}
 		SystemsModule::RenderDebugInfo::instance()->drawCalls++;
 	}
 }

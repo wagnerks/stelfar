@@ -20,6 +20,8 @@ namespace AssetsModule {
 	// size / (resolution - 1) apart, from -size/2 to +size/2 on both axes, in the terrain's local space.
 	// Computed once per distinct terrain and kept, on disk too.
 	const std::vector<float>& terrainHeights(const SFE::ComponentsModule::TerrainComponent& terrain);
+	// terrainHeights on the GPU, R32F, a texel a sample, made once per distinct terrain.
+	SFE::Render::TextureHandle terrainHeightsTexture(const SFE::ComponentsModule::TerrainComponent& terrain);
 	// A hash of everything the terrain is built from, its footpaths and patches too, for caches of what is built on top
 	// of it.
 	uint64_t terrainCacheKey(const SFE::ComponentsModule::TerrainComponent& terrain);

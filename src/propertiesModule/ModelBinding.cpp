@@ -74,6 +74,7 @@ namespace SFE::PropertiesModule::ModelBinding {
 			keep(given.clearcoat, changed.clearcoat, fresh.clearcoat);
 			keep(given.clearcoatRough, changed.clearcoatRough, fresh.clearcoatRough);
 			keep(given.tint, changed.tint, fresh.tint);
+			keep(given.emissive, changed.emissive, fresh.emissive);
 			keep(given.sway, changed.sway, fresh.sway);
 			keep(given.hidden, changed.hidden, fresh.hidden);
 			keep(given.shadowOnly, changed.shadowOnly, fresh.shadowOnly);

@@ -14,11 +14,13 @@ layout(location = 7) in vec4 vClip;
 layout(location = 8) in vec4 vPrevClip;
 layout(location = 9) in vec3 vSurface;
 layout(location = 12) flat in float vPiece;
+layout(location = 14) in vec3 vRest;
 
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
 layout(location = 2) out vec4 gAlbedoSpec;
 layout(location = 3) out vec4 gVelocity;
+layout(location = 4) out vec4 gEmissive;
 
 layout(SFE_SET(1, 1)) uniform sampler2D texture_diffuse1;
 layout(SFE_SET(1, 2)) uniform sampler2D normalMap;
@@ -31,6 +33,9 @@ layout(SFE_SET(1, 8)) uniform sampler2D triplanarNormals;
 layout(SFE_SET(1, 9)) uniform sampler2D triplanarAlbedo2;
 layout(SFE_SET(1, 10)) uniform sampler2D triplanarNormals2;
 layout(SFE_SET(1, 11)) uniform sampler2D texture_occlusion;
+layout(SFE_SET(1, 12)) uniform sampler2D texture_emissive;
+// The vehicles' mud maps (MudMapsFrame), a material's by its mudMap.
+layout(SFE_SET(0, 36)) uniform sampler2DArray sfeMudMaps;
 
 #define pc sfeMaterials[vMaterial]
 
@@ -71,6 +76,94 @@ void sfeTriplanar(sampler2D albedo, sampler2D normals, float repeat, bool rotate
     tY = vec3(tY.xy + n.xz, abs(tY.z) * n.y);
     tZ = vec3(tZ.xy + n.xy, abs(tZ.z) * n.z);
     Nw = normalize(tX.zyx * w.x + tY.xzy * w.y + tZ.xyz * w.z);
+}
+
+// Mud thrown up off the ground by the model's wheels (MaterialComponent::mudWheels), caked on it: on a wheel's tyre
+// round all of it from its tread inward, kSfeMudInward of its radius in once the tread is wholly caked (mudTreads); on
+// the rest where the drops it threw struck it, as its mud map has it (mudMap), in patches and drops where little
+// struck. The surface's own crevices (its occlusion map: a tyre's tread, the seams) fill first. All of it laid on the
+// model as it rests (vRest), so it stays where it struck as the model moves and its parts turn: a wheel's mud goes
+// round with it, a door's swings with it.
+const float kSfeMudInward = 0.75;
+const float kSfeMudGrain = 6.0;                      // splashes a metre, and drops kSfeMudGrain * 4
+const float kSfeMudClods = 10.0;                     // clods a metre in the cake, and lumps on them kSfeMudLumps
+const float kSfeMudLumps = 30.0;
+const float kSfeMudDepth = 0.015;                    // metres the cake stands out at its thickest, for its relief
+const vec3 kSfeMud = vec3(0.085, 0.064, 0.042);     // wet mud's colour, linear: a brown, lighter than a tyre
+const vec3 kSfeMudDry = vec3(0.16, 0.13, 0.095);     // dried out where it is thin, lighter and greyer
+// A mud map's cells: as MudMapsFrame::kCell and kCells.
+const float kSfeMudCell = 0.05;
+const vec3 kSfeMudCells = vec3(56.0, 60.0, 128.0);
+
+// Noise over the model's rest space at `scale` a metre, three planes of it taken together: 0..1 round a half.
+float sfeMudNoise(float scale, int octaves) {
+    vec3 q = vRest * scale;
+    float n = (sfeFbm(q.xy, octaves) + sfeFbm(q.yz + 17.0, octaves) + sfeFbm(q.zx + 31.0, octaves)) / 3.0;
+    // Spread out again from the middle that taking three of them brings it to.
+    return clamp((n - 0.5) * 2.5 + 0.5, 0.0, 1.0);
+}
+
+// How caked the model is here by the drops that struck it, as its mud map has it (mudMap), 0 none to 1 wholly: the
+// map's cells taken smoothly, across and down within a layer by the sampler, from layer to layer here.
+float sfeMudStruck() {
+    vec3 c = (vRest - pc.mudMap.xyz) / kSfeMudCell;
+    if (pc.mudMap.w <= 0.0 || any(lessThan(c, vec3(0.0))) || any(greaterThan(c, kSfeMudCells))) {
+        return 0.0;
+    }
+    float height = clamp(c.y - 0.5, 0.0, kSfeMudCells.y - 1.0);
+    float below = floor(height);
+    vec2 uv = c.xz / kSfeMudCells.xz;
+    float first = pc.mudMap.w - 1.0;
+    float low = texture(sfeMudMaps, vec3(uv, first + below)).r;
+    float high = texture(sfeMudMaps, vec3(uv, first + min(below + 1.0, kSfeMudCells.y - 1.0))).r;
+    return mix(low, high, height - below);
+}
+
+// How much mud is caked here, 0 none to 1 wholly: on a tyre (and what turns with it, within its radius round its
+// axle, the model's x, and a little more than half a radius aside) by how caked its tread is, from the tread in; on
+// the rest as the drops that struck it caked it.
+float sfeMudThrown() {
+    for (int w = 0; w < 4; ++w) {
+        vec4 wheel = pc.mudWheels[w];
+        if (wheel.w <= 0.0) {
+            continue;
+        }
+        vec3 off = vRest - wheel.xyz;
+        float across = length(off.yz) / wheel.w;
+        if (across <= 1.02 && abs(off.x) < 0.6 * wheel.w) {
+            float tread = pc.mudTreads[w];
+            return tread > 0.0 ? smoothstep(-0.12, 0.12, across - 1.0 + kSfeMudInward * tread) : 0.0;
+        }
+    }
+    return sfeMudStruck();
+}
+
+// The mud here: x how much of the surface it hides (0..1, a sharp edge), y how thick it is caked (0 at its edge, 1 a
+// full cake), z how high it stands, metres (its lumps). `crevice` how sunk the surface is there, 0..1. Where little was
+// thrown, only the highest of its splashes and drops show.
+vec3 sfeMud(float crevice) {
+    float thrown = sfeMudThrown();
+    if (thrown <= 0.0) {
+        return vec3(0.0);
+    }
+    float splash = 0.65 * sfeMudNoise(kSfeMudGrain, 3) + 0.35 * sfeMudNoise(kSfeMudGrain * 4.0, 2);
+    float caked = splash + 1.3 * thrown - 0.75 + 0.3 * crevice * min(4.0 * thrown, 1.0);
+    float cover = smoothstep(0.47, 0.53, caked);
+    float thick = smoothstep(0.5, 0.9, caked);
+    float lumps = 0.6 * sfeMudNoise(kSfeMudClods, 2) + 0.4 * sfeMudNoise(kSfeMudLumps, 2);
+    return vec3(cover, thick, cover * kSfeMudDepth * (0.3 + 0.7 * thick) * (0.4 + 1.2 * lumps));
+}
+
+// `N` tilted up the slope of a height `h` (metres) over the surface: bump mapping from the screen's derivatives
+// (Mikkelsen's surface gradient), no tangents needed.
+vec3 sfeBumped(vec3 N, float h) {
+    vec3 dpx = dFdx(FragPos);
+    vec3 dpy = dFdy(FragPos);
+    vec3 r1 = cross(dpy, N);
+    vec3 r2 = cross(N, dpx);
+    float det = dot(dpx, r1);
+    vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+    return normalize(abs(det) * N - grad);
 }
 
 vec2 uvOf(uint bit) {
@@ -180,6 +273,20 @@ void main() {
     // little deeper in colour.
     float soaked = 1.0 - smoothstep(pc.wetBelow - 0.03, pc.wetBelow + 0.03, vSurface.y);
     linAlb = mix(linAlb, pow(linAlb, vec3(1.15)) * 0.4, soaked);
+    // Mud caked over it: wet and dark where it is thick, dried lighter at its thin edges and on its lumps' tops; standing
+    // out in lumps over the surface, whose own relief (its normal map) it buries. Worked out over the whole material once
+    // it is muddy at all, as the relief takes the neighbouring pixels' heights.
+    vec3 mud = vec3(0.0);
+    if (pc.mudMap.w > 0.0) {
+        mud = sfeMud(1.0 - texture(texture_occlusion, uvOf(64u)).r);
+        vec3 buried = normalize(mix(Nw, normalize(TBN[2]), mud.y));
+        Nw = normalize(mix(Nw, sfeBumped(buried, mud.z), mud.x));
+        // How high it stands over its edge, its tallest lumps about 1.6: darker down between them.
+        float high = mud.z / kSfeMudDepth;
+        float dry = clamp(0.45 * (1.0 - mud.y) + 0.3 * (high - 1.0), 0.0, 1.0);
+        linAlb = mix(linAlb, mix(kSfeMud, kSfeMudDry, dry) * mix(0.7, 1.1, clamp(high, 0.0, 1.0)), mud.x);
+    }
+    float muddy = mud.x;
     // A plant going bare (SfeMaterial::bare): its bark greys with it, and a leaf past its point is gone (sfeBareKeeps).
     float dead = pc.alphaCutoff > 0.0 ? 0.0 : pc.bare;
 #ifdef SFE_GBUFFER_CUTOUT
@@ -222,6 +329,8 @@ void main() {
     if (pc.clearcoat > 0.5) {
         roughness = 0.48;
     }
+    // Wet mud: a soft sheen, over the paint's coat; dull where it dried thin.
+    roughness = mix(roughness, mix(0.6, 0.2, mud.y), muddy);
     float metallic = pc.matMetallic;
     if ((maps & 2u) != 0u) {
         metallic = texture(texture_metallic, uvMetal).b;
@@ -230,6 +339,7 @@ void main() {
     if ((maps & 8u) != 0u || cutout) {
         metallic = 0.0;
     }
+    metallic *= 1.0 - muddy;
 
     float specF = pc.specFactor;
     if ((maps & 1u) != 0u && (maps & 4u) != 0u) {
@@ -243,8 +353,10 @@ void main() {
     gAlbedoSpec.a = clamp(sfeFilteredRoughness(Nw, roughness, normalLen), 0.04, 1.0);
     // Cut-out surfaces are leaves, needles and grass: they let the sun through.
     float lastChannel = cutout && pc.clearcoat < 0.01 ? kSfeTranslucentFoliage : clamp(coatRough, 0.04, 1.0);
-    gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(coat, 0.0, 1.0), lastChannel);
+    specF = mix(specF, 0.5, muddy);
+    gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(coat * (1.0 - muddy), 0.0, 1.0), lastChannel);
     gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 1.0 - texture(texture_occlusion, uvAo).r);
+    gEmissive = sfeGBufferEmissive(vec3(pc.emissiveR, pc.emissiveG, pc.emissiveB), texture_emissive, uvOf(128u));
 }
 
 #endif

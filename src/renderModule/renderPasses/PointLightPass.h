@@ -17,10 +17,9 @@ namespace SFE::Render::RenderPasses {
 
 	private:
 		void publish(SystemsModule::RenderData& renderDataHandle);
-		void collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, float time, std::vector<Math::Mat4>& matrices, std::vector<Math::Vec4>& spheres, std::vector<ecss::SectorId>& entities);
+		void collectLights(const FrustumModule::Frustum& camFrustum, const Math::Vec3& cameraPos, float time, std::vector<Math::Mat4>& matrices, std::vector<Data::Light>& lights);
 		void ensureGpu(SystemsModule::RenderData& renderDataHandle);
 
-		std::vector<Math::Vec4> mSpheres; // this frame's light spheres, kept so they do not allocate every frame
 		FramebufferHandle lightFramebuffer;
 		TextureHandle mLightDepthMaps;
 		SamplerHandle mLightDepthMapsSampler;
@@ -30,10 +29,6 @@ namespace SFE::Render::RenderPasses {
 		PipelineHandle pipelineOpaque;
 		Render::DescriptorSetLayoutHandle mBufferLayout{};
 		Render::DescriptorSetLayoutHandle mTextureLayout{};
-		Render::DescriptorSetHandle mSet{};
-		uint32_t mBoundIds[4]{};
-		uint32_t mMatricesId = UINT32_MAX; // transient buffer binding 11 was last written with
-		GpuScene::View mView;
 		SingleTextureSets mMaskSets;
 
 		bool mInited = false;
@@ -45,5 +40,16 @@ namespace SFE::Render::RenderPasses {
 		static constexpr int facesPerLight = 6;
 		static constexpr int maxShadowFaces = maxLights * facesPerLight;
 		static_assert(maxShadowFaces == Data::kMaxShadowFaces);
+
+		// A face's own casters, culled against its frustum alone: a caster goes only to the faces it shows in.
+		struct FaceView {
+			GpuScene::View view;
+			Render::DescriptorSetHandle set{};
+			uint32_t boundIds[5]{}; // transforms, bones, visible, materials, the transient matrices of binding 11
+		};
+		std::array<FaceView, maxShadowFaces> mViews;
+		// This frame's faces to cull, kept so they do not allocate every frame.
+		std::vector<GpuScene::View*> mFaceViews;
+		std::vector<FrustumModule::Frustum> mFaceFrusta;
 	};
 }

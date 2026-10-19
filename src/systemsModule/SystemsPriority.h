@@ -8,6 +8,7 @@
 #include "renderModule/renderPasses/GeometryPass.h"
 #include "renderModule/renderPasses/GUIPass.h"
 #include "renderModule/renderPasses/LightingPass.h"
+#include "renderModule/renderPasses/ParticlePass.h"
 #include "renderModule/renderPasses/SceneDepthPass.h"
 #include "renderModule/renderPasses/PointLightPass.h"
 #include "renderModule/renderPasses/RenderPass.h"
@@ -39,6 +40,7 @@ namespace SFE::SystemsModule {
 		{ "CascadedShadow", true,  &createRenderPass<Render::RenderPasses::CascadedShadowPass> },
 		{ "PointLight",     true,  &createRenderPass<Render::RenderPasses::PointLightPass> },
 		{ "Geometry",       true,  &createRenderPass<Render::RenderPasses::GeometryPass> },
+		{ "Particles",      true,  &createRenderPass<Render::RenderPasses::ParticlePass> },
 		{ "SceneDepth",     true,  &createRenderPass<Render::RenderPasses::SceneDepthPass> },
 		{ "SSAO",           true,  &createRenderPass<Render::RenderPasses::SSAOPass> },
 		{ "SunShadow",      true,  &createRenderPass<Render::RenderPasses::SunShadowPass> },
@@ -53,6 +55,7 @@ namespace SFE::SystemsModule {
 		{ "Volumetric",     true,  &createRenderPass<Render::RenderPasses::VolumetricPass> },
 		{ "Underwater",     true,  &createRenderPass<Render::RenderPasses::UnderwaterPass> },
 		{ "TAA",            true,  &createRenderPass<Render::RenderPasses::TAAPass> },
+		{ "ParticleSprites", true, &createRenderPass<Render::RenderPasses::ParticleSpritePass> },
 		{ "AirLife",        true,  &createRenderPass<Render::RenderPasses::AirLifePass> },
 		{ "DoF",            true,  &createRenderPass<Render::RenderPasses::DoFPass> },
 		{ "Final",          true,  &createRenderPass<Render::RenderPasses::FinalPass> },

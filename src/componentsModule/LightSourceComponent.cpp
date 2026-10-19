@@ -26,29 +26,6 @@ SFE::Math::Vec3 LightSourceComponent::flickerShift(float t) const {
 		reach * (0.6f * std::sin(8.9f * t + 1.7f) + 0.4f * std::sin(19.1f * t + 0.9f))
 	};
 }
-//offset - frustums count for light source, this offset used in light shader
-int LightSourceComponent::getTypeOffset(eLightType type) {
-	switch (type) {
-	case eLightType::NONE: return 0;
-		break;
-	case eLightType::DIRECTIONAL:
-		return 1;
-		break;
-	case eLightType::POINT:
-		return 6;
-		break;
-	case eLightType::PERSPECTIVE:
-		return 1;
-		break;
-	case eLightType::WORLD:
-		return -1;
-		break;
-	default: return -1;;
-	}
-
-	return -1;
-}
-
 SFE::ComponentsModule::eLightType LightSourceComponent::getType() const {
 	return mType;
 }

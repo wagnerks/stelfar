@@ -55,6 +55,15 @@ namespace SFE::SystemsModule {
 		// the map itself is binding 22 of the frame set. A zero area, no map.
 		Math::Vec4 tintArea = {};
 		Math::Vec4 tintShore = {};
+		// The marks in the ground (GroundMarksFrame): its windows, sizes and look, as the frame's passes left them; the
+		// map itself is binding 34 of the frame set. A zero size, no marks.
+		Math::Vec4 marksWindow = {};
+		Math::Vec4 marksSize = {};
+		Math::Vec4 marksLook = {};
+		Math::Vec4 marksChurn = {};
+		// The ground drawn dense near the camera (GroundMarksFrame::grid, patch); its heights are binding 35.
+		Math::Vec4 marksGrid = {};
+		Math::Vec4 marksPatch = {};
 	};
 
 	struct GraphicsSettings {
@@ -149,9 +158,11 @@ namespace SFE::SystemsModule {
 		// The grass clumps: how many to a square metre against the default, and metres out to which they grow.
 		float grassDensity = 1.f;
 		float grassDistance = 90.f;
-		// How far the models keep their full detail: 1 drops a level as its triangles reach a pixel, 2 holds each
-		// level to twice the distance.
+		// How far the vegetation's layers reach, against their own distances.
 		float lodDetail = 1.8f;
+		// The pixels on screen a coarser level of a model may change from the full one (its simplifier's error, a share of
+		// its extent, times the extent in pixels) for it to be drawn: smaller keeps the detail further.
+		float lodPixels = 2.f;
 		// Metres from the eye to a chunk of the ground past which it is drawn a level coarser (about half its triangles):
 		// far off its triangles are a few pixels and shading wastes most of each 2x2 quad; past the view, never.
 		float terrainLodDistance = 200.f;
@@ -413,6 +424,8 @@ namespace SFE::SystemsModule {
 		void bindGpuFrame();
 		// The area tint the passes' prepare left on the blackboard, into this frame's camera block and frame set.
 		void updateAreaTint();
+		void updateGroundMarks();
+		void updateMudMaps();
 		void createGpuFrameResources(uint32_t slot);
 		void createSceneBuffers(size_t capacity);
 		// `previousToo` also as last frame's, for an entity that has no last frame: no motion on its first one.
@@ -443,6 +456,8 @@ namespace SFE::SystemsModule {
 		std::vector<Render::BufferHandle> mCameraUbo;
 		std::vector<Render::DescriptorSetHandle> mFrameSet;
 		std::unordered_map<uint32_t, uint32_t> mFrameSetTint; // frame set id -> the tint map written to it
+		std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> mFrameSetMarks; // frame set id -> the marks map and heights written to it
+		std::unordered_map<uint32_t, uint32_t> mFrameSetMud; // frame set id -> the mud maps written to it
 
 		// Scene data lives on the GPU in one buffer each, indexed by entity id. Only entities that changed
 		// since the last frame are uploaded, through the backend's queued upload path.

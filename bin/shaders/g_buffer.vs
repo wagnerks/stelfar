@@ -30,6 +30,8 @@ layout(location = 8) out vec4 vPrevClip;
 layout(location = 9) out vec3 vSurface;
 // When this triangle of a cut-out surface is gone as the plant goes bare (sfePieceKey).
 layout(location = 12) flat out float vPiece;
+// Where this is on the model at rest, in its own metres: what stays put on it as it moves, such as mud thrown on it.
+layout(location = 14) out vec3 vRest;
 
 layout(SFE_SET(0, 1), std430) readonly buffer modelMatrices {
     mat4 model[];
@@ -54,6 +56,8 @@ layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
     SFE_SHARED_MATRICES
 } matrices;
 
+#include "sfe_marks.glsl"
+
 void main() {
     SfeInstance instance = sfeInstances[SFE_INSTANCE_ID];
     uint index = instance.entity;
@@ -77,8 +81,10 @@ void main() {
     newPos /= newPos.w;
     precise vec4 worldPos = model[index] * newPos;
     vSurface = worldPos.xyz - model[index][3].xyz;
+    vRest = aPos;
     vPiece = sfePieceKey(uint(SFE_VERTEX_ID), model[index][3].xyz);
     worldPos.xyz += sfeWindSway(worldPos.xyz, model[index][3].xyz, instance.material, matrices.wind);
+    worldPos.xyz = sfeGroundUnderPatch(worldPos.xyz, instance.material);
 
     FragPos = worldPos.xyz;
     TexCoords = aTexCoords;
@@ -108,6 +114,7 @@ void main() {
     vClip = matrices.PVNoJitter * worldPos;
     vec4 prevWorld = prevModel[index] * prevPos;
     prevWorld.xyz += sfeWindSway(prevWorld.xyz, prevModel[index][3].xyz, instance.material, matrices.windBefore);
+    prevWorld.xyz = sfeGroundUnderPatch(prevWorld.xyz, instance.material);
     vPrevClip = matrices.prevPVNoJitter * prevWorld;
 
     precise vec4 clipPos = matrices.PV * worldPos;

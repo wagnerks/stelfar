@@ -7,6 +7,7 @@
 #include "systemsModule/systems/AudioSystem.h"
 #include "windowsModule/Window.h"
 
+#include <cstdio>
 #include <json/reader.h>
 #include <json/value.h>
 #include <json/writer.h>
@@ -65,6 +66,21 @@ namespace SFE::SystemsModule {
 			ImGui::EndCombo();
 		}
 		ImGui::EndDisabled();
+		// A few steps, not a slider: each is every pass's targets made again.
+		static constexpr float kScales[] = { 1.f, 0.85f, 0.75f, 0.67f, 0.5f };
+		char shown[16];
+		std::snprintf(shown, sizeof(shown), "%.2f", settings.scale);
+		if (ImGui::BeginCombo("render scale", shown)) {
+			for (const float scale : kScales) {
+				std::snprintf(shown, sizeof(shown), "%.2f", scale);
+				if (ImGui::Selectable(shown, scale == settings.scale)) {
+					settings.scale = scale;
+					changed = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SetItemTooltip("The share of the window's size the picture is drawn at, stretched to it: less is faster and softer.");
 		changed |= ImGui::Checkbox("frame info", &settings.frameInfo);
 		ImGui::SetItemTooltip("The frame's timings and memory in the corner of the screen.");
 		if (changed) {
@@ -89,6 +105,7 @@ namespace SFE::SystemsModule {
 		if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
 			changed |= ImGui::SliderFloat("view distance", &gfx.viewDistance, 100.f, 5000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
 			changed |= ImGui::SliderFloat("lod detail", &gfx.lodDetail, 0.3f, 4.f, "%.2f");
+			changed |= ImGui::SliderFloat("lod pixels", &gfx.lodPixels, 0.25f, 8.f, "%.2f");
 			changed |= ImGui::SliderFloat("stylise", &gfx.stylise, 0.f, 1.f, "%.2f");
 			changed |= environmentSliders(gfx);
 		}
@@ -230,6 +247,7 @@ namespace SFE::SystemsModule {
 		root["grassDensity"] = gfx.grassDensity;
 		root["grassDistance"] = gfx.grassDistance;
 		root["lodDetail"] = gfx.lodDetail;
+		root["lodPixels"] = gfx.lodPixels;
 		root["stylise"] = gfx.stylise;
 		root["timeGrade"] = gfx.timeGrade;
 		root["sunRays"] = gfx.sunRays;
@@ -300,6 +318,7 @@ namespace SFE::SystemsModule {
 		f("grassDensity", gfx.grassDensity);
 		f("grassDistance", gfx.grassDistance);
 		f("lodDetail", gfx.lodDetail);
+		f("lodPixels", gfx.lodPixels);
 		f("stylise", gfx.stylise);
 		f("timeGrade", gfx.timeGrade);
 		f("sunRays", gfx.sunRays);

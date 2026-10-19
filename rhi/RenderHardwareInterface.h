@@ -766,6 +766,10 @@ namespace SFE::Render
 		// Marks by pipeline cost the GPU a timestamp at each change of one and OpenGL the CPU a read of each; off, a frame
 		// has a mark a pass.
 		std::atomic<bool> gpuShaderMarks{ false };
+		// A named stretch of a command list, for a frame capture or a GPU profiler (RenderDoc, Nsight) to tell its work
+		// by; each begun ends in the same list. Nothing where the backend has no such names.
+		virtual void cmdBeginRegion(CommandListHandle, const char* /*name*/) {}
+		virtual void cmdEndRegion(CommandListHandle) {}
 		// The GPU this backend picked, as the driver names it. Empty before the device exists.
 		virtual const char* deviceName() const { return ""; }
 		// Exact readback of one colour texture -- full resolution, no rescale, converted to RGBA8

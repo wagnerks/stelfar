@@ -10,7 +10,7 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::ComponentsModule {
-	constexpr int MaxMaterialTexturesCount = 11;
+	constexpr int MaxMaterialTexturesCount = 12;
 	inline constexpr const char* DefaultGBufferVS = "shaders/g_buffer.vs";
 	inline constexpr const char* DefaultGBufferFS = "shaders/g_buffer.fs";
 	inline constexpr const char* DefaultGBufferMaskedFS = "shaders/g_buffer_masked.fs";
@@ -59,6 +59,9 @@ namespace SFE::ComponentsModule {
 		float clearcoatRough = 0.04f;
 		// Multiplies the albedo; glass takes it as the colour it filters light through.
 		Math::Vec3 tint{ 1.f, 1.f, 1.f };
+		// The light it gives off by itself (a lamp's glass, a lit screen), times its EMISSIVE texture: added to the lit
+		// colour, never shadowed. None by default.
+		Math::Vec3 emissive{ 0.f, 0.f, 0.f };
 		Sway sway = Sway::None;
 		// Not drawn at all: a part of a model switched off, such as a hairstyle nobody wears.
 		bool hidden = false;
@@ -70,6 +73,14 @@ namespace SFE::ComponentsModule {
 		// them. kDry, far below any model, when dry.
 		static constexpr float kDry = -1000.f;
 		float wetBelow = kDry;
+		// Caked with mud, in the model as it rests: up to kMudWheels wheels' tyres, each one's hub (xyz) and radius (w, 0
+		// for none) and how caked its tread is (mudTreads, 0 clean to 1 wholly), from the tread inward, turning with it;
+		// the rest as its mud map has it (MudMapsFrame), the drops that struck it: the map's low corner in the model (xyz)
+		// and its first layer + 1 (w, 0 for none).
+		static constexpr size_t kMudWheels = 4;
+		Math::Vec4 mudWheels[kMudWheels]{};
+		Math::Vec4 mudTreads{};
+		Math::Vec4 mudMap{};
 		// How far a plant has gone bare, 0 not at all to 1 dead: each triangle of a cut-out surface (a leaf) is gone
 		// from its own point on the way (sfePieceKey), and the rest of it, the bark, greys.
 		float bare = 0.f;
@@ -101,6 +112,7 @@ namespace SFE::ComponentsModule {
 		out.clearcoat = src.clearcoat;
 		out.clearcoatRough = src.clearcoatRough;
 		out.tint = src.baseColor;
+		out.emissive = src.emissive;
 		if (src.alphaCutout) {
 			out.fragmentShader = DefaultGBufferMaskedFS;
 		}

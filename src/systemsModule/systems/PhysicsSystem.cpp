@@ -16,12 +16,15 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
+#include "debugModule/Profiler.h"
 #include "assetsModule/modelModule/Model.h"
+#include "assetsModule/modelModule/Terrain.h"
 #include "componentsModule/ModelComponent.h"
 #include "componentsModule/TerrainComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "systemsModule/TerrainCollider.h"
 #include "logsModule/logger.h"
 
 namespace SFE::SystemsModule {
@@ -174,6 +177,21 @@ namespace SFE::SystemsModule {
 			std::erase_if(shapes, [](const JPH::ShapeRefC& shape) { return !shape; });
 			return shapes;
 		}
+
+		// An entity's static collider: the terrain's heights as a field (TerrainCollider; it stands unturned and
+		// unscaled, as a terrain is put), a prop's mesh.
+		std::vector<JPH::ShapeRefC> colliderShapes(const ecss::EntityId entity, const ModelComponent& model, const Math::Mat4& world) {
+			if (const auto terrain = ECSHandler::registry().pinComponent<const ComponentsModule::TerrainComponent>(entity)) {
+				const int n = std::clamp(terrain->resolution, 2, 2049);
+				const float half = terrain->size * 0.5f;
+				const Math::Vec3 corner{ world[3][0] - half, world[3][1], world[3][2] - half };
+				if (auto shape = TerrainCollider::shape(AssetsModule::terrainHeights(*terrain.get()), n, terrain->size / static_cast<float>(n - 1), corner)) {
+					return { shape };
+				}
+				LogsModule::Logger::LOG_ERROR("terrain collider: no height field, its mesh instead");
+			}
+			return meshShapes(model, world);
+		}
 	}
 
 	struct PhysicsSystem::Layers {
@@ -214,6 +232,10 @@ namespace SFE::SystemsModule {
 		mWorld = std::make_unique<JPH::PhysicsSystem>();
 		mWorld->Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContacts, mLayers->broadPhase, mLayers->objectVsBroadPhase, mLayers->objectPairs);
 		mWorld->SetGravity({ 0.f, -9.81f, 0.f });
+		// Each step listener (a vehicle: its wheels met) a job of its own, so the vehicles go side by side.
+		auto settings = mWorld->GetPhysicsSettings();
+		settings.mStepListenersBatchSize = 1;
+		mWorld->SetPhysicsSettings(settings);
 		addStaticColliders();
 		mWorld->OptimizeBroadPhase();
 	}
@@ -231,8 +253,27 @@ namespace SFE::SystemsModule {
 		return mLayers->objectPairs;
 	}
 
+	void PhysicsSystem::addStepCallback(std::function<void(float)> callback) {
+		std::lock_guard lock(mStepCallbacksMutex);
+		mNewStepCallbacks.push_back(std::move(callback));
+	}
+
 	void PhysicsSystem::update(float dt) {
-		swapStatic();
+		{
+			SFE_PROFILE_ZONE("Physics swap static");
+			swapStatic();
+		}
+		{
+			SFE_PROFILE_ZONE("Physics swap fine");
+			swapFine();
+		}
+		{
+			std::lock_guard lock(mStepCallbacksMutex);
+			for (auto& callback : mNewStepCallbacks) {
+				mStepCallbacks.push_back(std::move(callback));
+			}
+			mNewStepCallbacks.clear();
+		}
 		// A long frame (a hitch, a breakpoint) is not replayed in full: the world just runs slow for a moment.
 		mAccumulated = (std::min)(mAccumulated + dt, kStep * 4.f);
 		const double now = Engine::clockSeconds();
@@ -243,7 +284,10 @@ namespace SFE::SystemsModule {
 			for (const auto& callback : mStepCallbacks) {
 				callback(kStep);
 			}
-			mWorld->Update(kStep, 1, mTempAllocator.get(), mJobs.get());
+			{
+				SFE_PROFILE_ZONE("Jolt step");
+				mWorld->Update(kStep, 1, mTempAllocator.get(), mJobs.get());
+			}
 			mAccumulated -= kStep;
 			const float ms = static_cast<float>((Engine::clockSeconds() - started) * 1000.0);
 			mStepMs.store(mStepMs.load(std::memory_order_relaxed) * 0.95f + ms * 0.05f, std::memory_order_relaxed);
@@ -269,10 +313,12 @@ namespace SFE::SystemsModule {
 			if (!model || !matrix || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
 				continue;
 			}
-			for (const auto& shape : meshShapes(*model, matrix->mTransform)) {
+			const auto shapes = colliderShapes(id, *model, matrix->mTransform);
+			for (const auto& shape : shapes) {
 				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
 				mStatic[id].push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
 			}
+			noteTerrain(id, shapes, mStatic[id]);
 		}
 	}
 
@@ -282,7 +328,100 @@ namespace SFE::SystemsModule {
 		if (!model || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(entity))) {
 			return {};
 		}
-		return meshShapes(*model.get(), world);
+		return colliderShapes(entity, *model.get(), world);
+	}
+
+	void PhysicsSystem::setFineGround(const int x, const int z, const int cells, JPH::ShapeRefC field, const JPH::AABox& lower) {
+		std::lock_guard lock(mFineMutex);
+		mFineGiven.push_back({ x, z, cells, std::move(field), lower });
+	}
+
+	void PhysicsSystem::setFineHeights(const int x, const int z, const int u, const int v, const int width, const int height, std::vector<float> heights) {
+		std::lock_guard lock(mFineMutex);
+		mFineGiven.push_back({ x, z, 0, nullptr, {}, u, v, width, height, std::move(heights) });
+	}
+
+	void PhysicsSystem::noteTerrain(const ecss::EntityId entity, const std::vector<JPH::ShapeRefC>& shapes, const std::vector<JPH::BodyID>& made) {
+		if (entity == mTerrainEntity) {
+			// Built anew, or gone: its finer ground lay on what stood there before.
+			dropFine();
+			mTerrainEntity = ecss::INVALID_ID;
+			mTerrainBody = {};
+			mTerrainShape = nullptr;
+		}
+		for (size_t k = 0; k < shapes.size() && k < made.size(); ++k) {
+			if (TerrainCollider::field(*shapes[k])) {
+				mTerrainEntity = entity;
+				mTerrainBody = made[k];
+				mTerrainShape = shapes[k];
+			}
+		}
+	}
+
+	void PhysicsSystem::dropFine() {
+		auto& bodies = mWorld->GetBodyInterface();
+		for (const auto& [place, id] : mFine) {
+			bodies.RemoveBody(id);
+			bodies.DestroyBody(id);
+		}
+		mFine.clear();
+	}
+
+	void PhysicsSystem::swapFine() {
+		std::vector<FineGround> given;
+		{
+			std::lock_guard lock(mFineMutex);
+			given.swap(mFineGiven);
+		}
+		auto* field = mTerrainShape ? TerrainCollider::field(*mTerrainShape) : nullptr;
+		if (given.empty() || !field) {
+			return;
+		}
+		const auto grid = TerrainCollider::gridOf(*mTerrainShape);
+		auto& bodies = mWorld->GetBodyInterface();
+		// What lay on ground that moved is woken, round each place on its own: one box round all would take in all
+		// between them.
+		const auto wake = [&bodies](JPH::AABox box) {
+			box.ExpandBy(JPH::Vec3::sReplicate(kWake));
+			bodies.ActivateBodiesInAABox(box, JPH::BroadPhaseLayerFilter{}, JPH::ObjectLayerFilter{});
+		};
+		bool cut = false;
+		for (const auto& ground : given) {
+			const uint64_t place = static_cast<uint64_t>(static_cast<uint32_t>(ground.x)) << 32 | static_cast<uint32_t>(ground.z);
+			JPH::BodyID id;
+			if (ground.field) {
+				const auto [found, fresh] = mFine.try_emplace(place);
+				if (fresh) {
+					JPH::BodyCreationSettings body(ground.field, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
+					found->second = bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate);
+					TerrainCollider::cut(*field, grid, ground.x, ground.z, ground.cells, *mTempAllocator);
+					cut = true;
+				}
+				else {
+					bodies.SetShape(found->second, ground.field, false, JPH::EActivation::DontActivate);
+				}
+				id = found->second;
+				if (ground.lower.IsValid()) {
+					wake(ground.lower);
+				}
+			}
+			else if (const auto found = mFine.find(place); found != mFine.end()) {
+				const auto moved = TerrainCollider::setHeights(*bodies.GetShape(found->second), ground.u, ground.v, ground.width, ground.height,
+					ground.heights, *mTempAllocator);
+				bodies.NotifyShapeChanged(found->second, JPH::Vec3::sZero(), false, JPH::EActivation::DontActivate);
+				if (moved.IsValid()) {
+					id = found->second;
+					wake(moved);
+				}
+			}
+			// What rests there meets it anew, not as it met what was there before.
+			if (!id.IsInvalid()) {
+				bodies.InvalidateContactCache(id);
+			}
+		}
+		if (cut) {
+			bodies.InvalidateContactCache(mTerrainBody);
+		}
 	}
 
 	void PhysicsSystem::replaceStatic(ecss::EntityId entity, std::vector<JPH::ShapeRefC> shapes) {
@@ -317,6 +456,7 @@ namespace SFE::SystemsModule {
 				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
 				made.push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
 			}
+			noteTerrain(entity, shapes, made);
 			if (made.empty()) {
 				mStatic.erase(entity);
 			}
