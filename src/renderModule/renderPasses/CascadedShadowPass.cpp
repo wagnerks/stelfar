@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "componentsModule/FrustumComponent.h"
 #include "componentsModule/ModelComponent.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -370,6 +371,10 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	float shares = 0.f;
 	for (size_t layer = 0; layer < count; ++layer) {
 		auto& cascade = mCascades[layer];
+		// The pictures start again (a hold of the animation clock): every cascade drawn anew, at the held time.
+		if (SFE::Clocks::restarting()) {
+			cascade.drawn = false;
+		}
 		const bool unmoved = cascade.lightSpace == mData.lightSpaceMatrices[layer] && cascade.framesSinceDrawn < kStaticRefreshFrames;
 		const bool everyFrame = layer < firstFar;
 		const float share = everyFrame ? 1.f : kShare[(std::min)(layer - firstFar, std::size(kShare) - 1)];

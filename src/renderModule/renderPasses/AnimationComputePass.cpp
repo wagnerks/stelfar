@@ -317,8 +317,10 @@ void AnimationComputePass::prepare(SystemsModule::RenderData&) {
 	}
 	auto dirty = renderSystem->takeDirtyAnimations();
 	const double clock = Engine::instance()->animationClock();
-	if (clock - mEpoch > kRebaseSeconds) {
-		mEpoch = clock;
+	// On whole multiples of kRebaseSeconds, a function of the clock alone: the poses round alike whatever the clock was
+	// on the frames before (a held clock among them).
+	if (const double epoch = std::floor(clock / kRebaseSeconds) * kRebaseSeconds; epoch != mEpoch) {
+		mEpoch = epoch;
 		dirty.insert(dirty.end(), mRecordEntities.begin(), mRecordEntities.end());
 	}
 	for (const auto entity : dirty) {

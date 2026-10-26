@@ -83,8 +83,9 @@ namespace SFE::SystemsModule {
 		// Called on the physics thread before every fixed step with its length: the place for anything that moves
 		// through the world with it, such as a character controller. Any thread: it joins at the start of the next update.
 		void addStepCallback(std::function<void(float)> callback);
-		// Inside a step callback: the Engine::clockSeconds() time the step brings the world to. Steps that run back to
-		// back in one update still get times a step apart, so what follows them can be eased smoothly.
+		// Inside a step callback: the time the step brings the world to, on the simulation's clock (Clocks::simulation;
+		// the wall clock while the world runs in real time). Steps that run back to back in one update still get times a
+		// step apart, so what follows them can be eased smoothly.
 		double stepTime() const { return mStepTime; }
 		// What a step costs, eased over the last second or so: milliseconds for the step callbacks and the world's
 		// update, and the bodies in the world, awake and all.

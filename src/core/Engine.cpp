@@ -9,6 +9,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include "Clocks.h"
 #include "Core.h"
 #include "InputHandler.h"
 #include "assetsModule/shaderModule/ShaderBase.h"
@@ -456,10 +457,10 @@ namespace SFE {
 			}
 		}
 
-		// A capture holds the pose still, unless it runs at a fixed step: then a clip plays the same way on every run.
-		if (!mCapturingFrame || mFixedDeltaTime > 0.f) {
-			mAnimationClock += mDeltaTime;
-		}
+		// A capture holds the pose still, unless it runs at a fixed step: then a clip plays the same way on every run. A
+		// hold (Clocks::hold) stands it still at its own time whatever the step.
+		const bool stepped = mFixedDeltaTime > 0.f || mCapturingFrame;
+		mAnimationClock = Clocks::beginFrame(stepped ? mLastFrame : -1.0, !mCapturingFrame || mFixedDeltaTime > 0.f ? mDeltaTime : 0.f);
 
 		mFramesCounter++;
 		mFramesTimer += mDeltaTime;

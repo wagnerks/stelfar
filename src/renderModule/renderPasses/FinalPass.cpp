@@ -5,6 +5,7 @@
 
 #include "assetsModule/shaderModule/ShaderBase.h"
 #include "assetsModule/modelModule/Vertex.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "debugModule/ProcessMemory.h"
 #include "rhi/GraphicsBackend.h"
@@ -369,12 +370,9 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	mPostParams.contrast = gfx.contrast;
 	mPostParams.aspect = static_cast<float>((std::max)(1, screen.renderW)) / static_cast<float>((std::max)(1, screen.renderH));
 	mPostParams.adaptSpeed = gfx.adaptationSpeed;
-	{
-		const double now = Engine::clockSeconds();
-		// A capture adapts at once, so the same frame comes out the same whatever ran before it.
-		mPostParams.adaptSeconds = !mAdaptedValid || Engine::instance()->capturingFrame() ? 1e6f : static_cast<float>((std::min)(now - mLastFrameAt, 1.0));
-		mLastFrameAt = now;
-	}
+	// By the frame's step, so the same frames adapt alike. A still picture adapts at once, so the same frame comes out the
+	// same whatever ran before it.
+	mPostParams.adaptSeconds = !mAdaptedValid || SFE::Clocks::stillPicture() ? 1e6f : (std::min)(Engine::instance()->getDeltaTime(), 1.f);
 	// Where the sun is on screen, and how bright, for the flare.
 	mPostParams.sunInFront = 0.f;
 	mPostParams.sunColor[0] = mPostParams.sunColor[1] = mPostParams.sunColor[2] = 0.f;
@@ -411,7 +409,7 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		mPostParams.exposure = 1.f;
 		mPostParams.ca = 0.f;
 	}
-	gFrame = (gFrame + 1) % kGlareFrames;
+	gFrame = SFE::Clocks::restarting() ? 0 : (gFrame + 1) % kGlareFrames;
 	mPostParams.extra[3] = static_cast<float>(gFrame);
 	const auto post = rhi->allocTransient(mPostParams);
 	adapt(renderDataHandle, cmd, src, post);
@@ -514,7 +512,7 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		Utils::renderQuad(cmd);
 		// Unless the player turned the frame's timings off (Window::display).
 		const auto* display = Engine::instance()->getWindow()->display();
-		if (mOverlayFont && !Engine::instance()->capturingFrame() && (!display || display->frameInfo)) {
+		if (mOverlayFont && !SFE::Clocks::stillPicture() && (!display || display->frameInfo)) {
 			drawOverlay(cmd, screen.renderW, screen.renderH);
 		}
 		rhi->cmdEndRenderPass(cmd);

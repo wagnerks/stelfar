@@ -6,6 +6,7 @@
 
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/Vertex.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Atmosphere.h"
@@ -130,11 +131,22 @@ void ParticlePass::init(SystemsModule::RenderData&) {
 
 void ParticlePass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
-	const double now = Engine::clockSeconds();
-	const float dt = mLast < 0.0 ? 0.f : static_cast<float>(std::clamp(now - mLast, 0.0, 0.1));
-	mLast = now;
-	const auto spawned = Particles::take(now);
+	// They only move on screen, so by the animation clock's steps: still while it is held, and nothing let go into the
+	// held frames. When the pictures start again (the first frame of a hold) none of what flew before is kept.
+	const double now = Engine::instance()->animationClock();
+	const float dt = (std::min)(SFE::Clocks::step(), 0.1f);
+	auto spawned = Particles::take(now);
+	if (SFE::Clocks::held()) {
+		spawned.clear();
+	}
 	auto* rhi = Engine::instance()->rhi();
+	if (SFE::Clocks::restarting()) {
+		mHead = 0;
+		if (const auto particles = Particles::buffer()) {
+			static const std::vector<GpuParticle> none(kCapacity);
+			rhi->updateBuffer(particles, 0, sizeof(GpuParticle) * kCapacity, none.data());
+		}
+	}
 	const auto slot = rhi->frameInFlight() % mStepSets.size();
 	// What this slot's last step caught, done with now that the slot comes round again: told on.
 	if (const auto* head = static_cast<const uint32_t*>(rhi->mapBuffer(mCaught[slot], MapMode::Read))) {
@@ -285,7 +297,7 @@ void ParticleSpritePass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	FUNCTION_BENCHMARK;
 	const auto particles = Particles::buffer();
 	SpriteParams params;
-	if (!mPipeline || !particles || !Particles::alive(Engine::clockSeconds()) || !Atmosphere::skyParams(renderDataHandle, params.sky)) {
+	if (!mPipeline || !particles || !Particles::alive(Engine::instance()->animationClock()) || !Atmosphere::skyParams(renderDataHandle, params.sky)) {
 		return;
 	}
 	auto& frame = renderDataHandle.frame;
@@ -466,7 +478,7 @@ void ParticleLiquidPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	const auto particles = Particles::buffer();
 	const auto depth = frame.texture(FrameId::GBufferDepth);
 	const auto gBuffer = frame.framebuffer(FrameId::GBufferFbo);
-	if (!mField || !mOpaque || !particles || !depth || !gBuffer || !Particles::liquid(Engine::clockSeconds())) {
+	if (!mField || !mOpaque || !particles || !depth || !gBuffer || !Particles::liquid(Engine::instance()->animationClock())) {
 		return;
 	}
 	auto* rhi = Engine::instance()->rhi();

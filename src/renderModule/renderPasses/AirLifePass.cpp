@@ -179,8 +179,8 @@ void AirLifePass::render(SystemsModule::RenderData& renderDataHandle, Render::Co
 		return;
 	}
 
-	// A capture's specks in the same places every run.
-	const double seconds = Engine::instance()->capturingFrame() ? 40.0 : std::fmod(Engine::clockSeconds(), 3600.0);
+	// By the animation clock: the specks stand still while it is held, in the same places every run.
+	const double seconds = std::fmod(Engine::instance()->animationClock(), 3600.0);
 	params.life[1] = static_cast<float>(seconds);
 	params.life[2] = kMoteBox;
 	params.life[3] = graphics.airLifeAmount;

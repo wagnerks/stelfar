@@ -2,6 +2,7 @@
 
 #include "assetsModule/modelModule/Vertex.h"
 #include "assetsModule/shaderModule/ShaderBase.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Utils.h"
@@ -74,8 +75,11 @@ void TAAPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Render::C
 	const auto src = frame.texture(SFE::Render::FrameId::Final);
 	const auto pos = frame.texture(SFE::Render::FrameId::SceneDepth);
 	const auto velocity = frame.texture(SFE::Render::FrameId::GBufferVelocity);
-	if (!renderDataHandle.graphics.taa) {
+	// Off, or the pictures start again (a hold of the animation clock): nothing kept from before.
+	if (!renderDataHandle.graphics.taa || SFE::Clocks::restarting()) {
 		mHasHistory = false;
+	}
+	if (!renderDataHandle.graphics.taa) {
 		return;
 	}
 	if (!src || !pos || !velocity || !mPipeline) {

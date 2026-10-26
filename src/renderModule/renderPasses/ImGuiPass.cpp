@@ -2,6 +2,7 @@
 #include "core/GameModule.h"
 
 #include "backends/imgui_impl_glfw.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "debugModule/imguiDecorator.h"
 #include "debugModule/Profiler.h"
@@ -118,9 +119,9 @@ namespace SFE::Render::RenderPasses {
 		ImGui::Render();
 
 		// The frame is built either way, since windows elsewhere call into ImGui every frame and would find no
-		// frame open; it just stays out of a capture, which has to come out the same on both backends and on
+		// frame open; it just stays out of a still picture, which has to come out the same on both backends and on
 		// every run, and these windows show live frame times.
-		if (!Engine::instance()->capturingFrame()) {
+		if (!Clocks::stillPicture()) {
 			const auto fb = renderDataHandle.frame.framebuffer(FrameId::Final);
 			const auto& screen = Engine::instance()->getWindow()->getScreenData();
 			mRenderer.render(cmd, ImGui::GetDrawData(), fb, screen.renderW, screen.renderH);

@@ -84,7 +84,6 @@ namespace SFE::Render::RenderPasses {
 		Target mAdapted[2];
 		uint32_t mAdaptedCurrent = 0;
 		bool mAdaptedValid = false;
-		double mLastFrameAt = 0.0;
 		PipelineHandle mLuminanceLogPipeline{};
 		PipelineHandle mLuminanceDownPipeline{};
 		PipelineHandle mAdaptPipeline{};

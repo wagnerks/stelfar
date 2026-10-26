@@ -22,6 +22,7 @@
 #include "componentsModule/ModelComponent.h"
 #include "componentsModule/TerrainComponent.h"
 #include "componentsModule/TransformComponent.h"
+#include "core/Clocks.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
 #include "systemsModule/TerrainCollider.h"
@@ -276,7 +277,7 @@ namespace SFE::SystemsModule {
 		}
 		// A long frame (a hitch, a breakpoint) is not replayed in full: the world just runs slow for a moment.
 		mAccumulated = (std::min)(mAccumulated + dt, kStep * 4.f);
-		const double now = Engine::clockSeconds();
+		const double now = Clocks::simulation();
 		while (mAccumulated >= kStep) {
 			// What is left over after this step is time the world has not reached yet.
 			mStepTime = now - (mAccumulated - kStep);

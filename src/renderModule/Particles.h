@@ -113,7 +113,8 @@ namespace SFE::Render::Particles {
 
 	// `burst`'s particles appended to `out`, drawn with `random`.
 	void spawn(const Burst& burst, std::mt19937& random, std::vector<GpuParticle>& out);
-	// What was let go since last asked, at most kMaxSpawn, taken at `now` (Engine::clockSeconds).
+	// What was let go since last asked, at most kMaxSpawn, taken at `now` (Engine::animationClock: particles only move on
+	// screen, and stand still while it is held).
 	std::vector<GpuParticle> take(double now);
 	// Whether any of what was taken may still live at `now`: nothing to move or draw otherwise.
 	bool alive(double now);

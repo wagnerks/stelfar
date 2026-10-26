@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "core/Clocks.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/FrameCapture.h"
 
@@ -229,8 +230,8 @@ namespace SFE::SystemsModule {
 
 		auto* rhi = Engine::instance()->rhi();
 		// Systems that ran earlier this frame may have queued asynchronous work (AABB, octree) that the
-		// culling below reads; a capture lets it finish so what is drawn does not depend on scheduling.
-		if (Engine::instance()->capturingFrame()) {
+		// culling below reads; a still picture lets it finish so what is drawn does not depend on scheduling.
+		if (Clocks::stillPicture()) {
 			ThreadPool::instance()->waitIdle();
 		}
 		// The frame slot was waited for in Engine::update, before the frame's time was taken.
@@ -275,7 +276,9 @@ namespace SFE::SystemsModule {
 			const auto wind = Render::Atmosphere::sceneWind();
 			const auto along = wind ? wind->blowing() : Math::Vec2{ 1.f, 0.f };
 			mRenderData.current.wind = { along.x, wind ? wind->strength : 0.f, along.y, seconds };
-			mRenderData.current.windBefore = windBefore.w != 0.f ? windBefore : mRenderData.current.wind;
+			// Nothing moved from the last frame when the pictures start again: the clock was set, not run.
+			const bool fresh = windBefore.w == 0.f || Clocks::restarting();
+			mRenderData.current.windBefore = fresh ? mRenderData.current.wind : windBefore;
 		}
 		mRenderData.cameraProjection = mRenderData.nextCameraProjection;
 
@@ -283,7 +286,8 @@ namespace SFE::SystemsModule {
 		mRenderData.mViewDir = mRenderData.mNextViewDir;
 		mRenderData.mCamFrustum = mRenderData.mNextCamFrustum;
 
-		++mRenderData.taaFrame;
+		// Counted from the frame the pictures start again, so a still picture lands on the same jitter every run.
+		mRenderData.taaFrame = Clocks::restarting() ? 0 : mRenderData.taaFrame + 1;
 		mRenderData.taaJitterX = 0.f;
 		mRenderData.taaJitterY = 0.f;
 

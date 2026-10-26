@@ -34,7 +34,6 @@ namespace SFE::Render::RenderPasses {
 		std::array<uint64_t, Particles::kCatchers> mShapeVersions{};
 		std::vector<BufferHandle> mCaught;
 		std::vector<uint32_t> mCaughtRead;
-		double mLast = -1.0;
 	};
 
 	// The drops, in flight and at rest, drawn as the liquid they are (Particles::Look::Drop). Each drop lays a soft ball
