@@ -76,17 +76,13 @@ namespace SFE {
 			glfwMakeContextCurrent(mWindow->getWindow());
 		}
 		if (mRHI) {
-			reproTrace("initThread rhi");
 			LoadTrace::Step step("graphics device");
 			mRHI->init();
-			reproTrace("initThread rhi ok");
 		}
-		reproTrace("initThread core");
 		{
 			LoadTrace::Step step("systems");
 			mCore.init();
 		}
-		reproTrace("initThread core ok");
 
 		onKeyEvent = [this](CoreModule::InputKey key, CoreModule::InputEventType type) {
 			if (type != CoreModule::InputEventType::PRESS) {
@@ -305,7 +301,8 @@ namespace SFE {
 				for (const auto& [key, pixels] : { std::pair{ "colour", &baked.colour }, std::pair{ "normal", &baked.normal } }) {
 					if (args.isMember(key)) {
 						const auto path = args[key].asString();
-						written += (Render::writePng(FileSystem::resolve(path).string(), *pixels, baked.width, baked.height) ? " " : " NOT ") + path;
+						// Under the application's root, as every write is, never over one of the engine's own pictures.
+						written += (Render::writePng((FileSystem::root() / path).lexically_normal().string(), *pixels, baked.width, baked.height) ? " " : " NOT ") + path;
 					}
 				}
 				char said[256];
@@ -579,8 +576,11 @@ namespace SFE {
 		return ShaderModule::ShaderBase::loadShaderCode(path);
 	}
 
+	// Compiled SPIR-V is a cache like any other the application's runs make, kept under its root with them and never in
+	// the engine's shaders: the engine's assets stay as shipped, and two applications on one engine do not overwrite each
+	// other's binaries of a shader both have by name.
 	std::filesystem::path Engine::RhiHostAdapter::shaderCacheDir() const {
-		return FileSystem::resolve("shaders/vulkan");
+		return (FileSystem::root() / "cache" / "spirv").lexically_normal();
 	}
 
 	// Log only. Retitling the window from here ran inside a frame, where the resulting window message

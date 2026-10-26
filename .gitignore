@@ -9,8 +9,9 @@ bin/imgui.ini
 imgui.ini
 Microsoft.DTfW.DHL.manifest
 .*/
-# SPIR-V is compiled from the GLSL sources at run time and cached here; a tracked copy goes stale and the
-# cache, trusting its .hash sidecar, serves it.
+# rhi_tests' SPIR-V cache, shaders/vulkan under where it runs (RhiTestFixture.h): the engine itself keeps its compiled
+# SPIR-V with the application's other caches, in cache/spirv under its root. A tracked copy goes stale and the cache,
+# trusting its .hash sidecar, serves it.
 bin/shaders/vulkan/*.spv
 bin/shaders/vulkan/*.spv.hash
 # The same cache, written by rhi_tests when run from the repository's root: its cache is shaders/vulkan under where
@@ -20,7 +21,7 @@ bin/shaders/vulkan/*.spv.hash
 # compare-backends.ps1 output: rewritten by every run.
 bin/compare/
 
-# BinaryCache: terrain and vegetation built from the scene, rebuilt when missing.
+# The caches of a run whose root is bin/ -- the engine's own tests: BinaryCache and compiled SPIR-V, rebuilt when missing.
 bin/cache/
 
 # compare-rooms output and the perf runs' scratch files: written by the test runs.
@@ -28,6 +29,5 @@ bin/compare_rooms/
 bin/p*.txt
 bin/perf_*.txt
 
-# What the runs write as they go: crash, fatal and repro logs, the hang trace.
+# What the runs write as they go: crash, fatal and repro logs.
 bin/*.log
-bin/hang.trace

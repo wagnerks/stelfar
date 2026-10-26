@@ -2,15 +2,20 @@
 #include "core/Engine.h"
 
 #include "systemsModule/SystemBase.h"
+#include "core/FileSystem.h"
 #include "debugModule/Benchmark.h"
 #include "debugModule/Profiler.h"
+#include "logsModule/logger.h"
+#include "propertiesModule/SceneEvents.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -54,6 +59,30 @@ namespace ecss {
 			double mVariance = 0.0;
 			double mNapEstimate = 0.002;
 		};
+
+		// "A, B, C": the systems by their plain class names.
+		std::string namesOf(const std::vector<System*>& systems) {
+			std::string names;
+			for (const auto* system : systems) {
+				names += (names.empty() ? "" : ", ") + SFE::LoadTrace::plainName(typeid(*system).name());
+			}
+			return names.empty() ? std::string("none") : names;
+		}
+
+		// The systems as the first update finds them, for one start to be put beside another's: to the log, and to
+		// load_times.log beside the executable, where they follow that start's load (LoadTrace::report).
+		void writeOrder(const std::vector<std::string>& lines) {
+			std::string text;
+			for (const auto& line : lines) {
+				SFE::LogsModule::Logger::LOG_INFO("%s", line.c_str());
+				text += line + "\n";
+			}
+			if (FILE* file = std::fopen((SFE::FileSystem::executableDir() / "load_times.log").string().c_str(), "a")) {
+				std::fputs(text.c_str(), file);
+				std::fputc('\n', file);
+				std::fclose(file);
+			}
+		}
 	}
 
 	// One thread keeps the time for every tick system; each system runs on a thread of its own that sleeps on a
@@ -63,8 +92,13 @@ namespace ecss {
 	// The schedule is absolute: a tick is due one period after the one before, whenever that one ran, so the rate holds
 	// on average whatever the waits overrun, and every update gets exactly one period as its step. A system that falls
 	// behind runs the ticks it owes back to back, up to a few, and lets the rest go rather than spiral.
+	//
+	// Made at the first update, which settles for good how the tick systems run: stepped from the frame on the main
+	// thread (`stepped`), or each on a thread of its own as above.
 	class SystemManager::TickScheduler {
 	public:
+		explicit TickScheduler(bool stepped) : mStepped(stepped) {}
+
 		~TickScheduler() {
 			mAlive.store(false);
 			if (mThread.joinable()) {
@@ -80,7 +114,7 @@ namespace ecss {
 			}
 		}
 
-		// Main thread, while systems are being set up.
+		// Main thread: at the first update, for those queued until then, and for each added after it.
 		void add(System* system) {
 			auto worker = std::make_unique<Worker>();
 			worker->system = system;
@@ -100,6 +134,8 @@ namespace ecss {
 				mThread = std::thread([this] { schedule(); });
 			}
 		}
+
+		bool stepped() const { return mStepped; }
 
 	private:
 		static constexpr int kMaxCatchUp = 4;
@@ -168,6 +204,7 @@ namespace ecss {
 			}
 		}
 
+		const bool mStepped;
 		std::atomic<bool> mAlive{ true };
 		std::mutex mWorkersMutex;
 		std::vector<std::unique_ptr<Worker>> mWorkers;
@@ -180,11 +217,11 @@ namespace ecss {
 		mTickScheduler.reset();
 
 		// Every system's async work must be over before the first one is deleted: a pool task still running
-		// updateAsync on a deleted system crashed on exit, and a destructor may still notify the other systems.
-		for (const auto system : mSystemsMap) {
-			if (system) {
-				system->stopAsync();
-			}
+		// updateAsync on a deleted system crashed on exit, and a destructor may still notify the other systems. Nor is
+		// any told of a scene from here on (SceneEvents.h). In the order they were made, as everything here goes.
+		for (const auto system : mMade) {
+			system->stopAsync();
+			SFE::PropertiesModule::forgetSceneListenersOf(system);
 		}
 
 		for (auto system = mMade.rbegin(); system != mMade.rend(); ++system) {
@@ -194,10 +231,10 @@ namespace ecss {
 
 	void SystemManager::addTickSystem(System* system, float ticks) {
 		system->setTick(ticks);
-		if (!mStepTickSystems) {
-			if (!mTickScheduler) {
-				mTickScheduler = std::make_unique<TickScheduler>();
-			}
+		// Queued until the first update settles how tick systems run, so one added before setStepTickSystems -- a game's,
+		// made before the engine sets the mode -- runs as the engine's do; one added after runs as settled. Until then
+		// mSteppedTickSystems is that queue.
+		if (mTickScheduler && !mTickScheduler->stepped()) {
 			mTickScheduler->add(system);
 			return;
 		}
@@ -206,6 +243,30 @@ namespace ecss {
 
 	void SystemManager::update(float_t dt) {
 		FUNCTION_BENCHMARK;
+
+		// The first update settles how the tick systems run, whenever each was added (addTickSystem), and says once what
+		// runs and in what order.
+		if (!mTickScheduler) {
+			mTickScheduler = std::make_unique<TickScheduler>(mStepTickSystems);
+			std::string ticking;
+			for (const auto& queued : mSteppedTickSystems) {
+				char rate[32];
+				std::snprintf(rate, sizeof(rate), " %g/s", static_cast<double>(queued.system->getTicks()));
+				ticking += (ticking.empty() ? "" : ", ") + SFE::LoadTrace::plainName(typeid(*queued.system).name()) + rate;
+			}
+			writeOrder({
+				"systems made, in order: " + namesOf(mMade),
+				"systems on the main thread, in order: " + namesOf(mMainThreadSystems),
+				std::string(mTickScheduler->stepped() ? "tick systems, stepped from the frame: " : "tick systems, each on a thread of its own: ")
+					+ (ticking.empty() ? std::string("none") : ticking),
+			});
+			if (!mTickScheduler->stepped()) {
+				for (const auto& queued : mSteppedTickSystems) {
+					mTickScheduler->add(queued.system);
+				}
+				mSteppedTickSystems.clear();
+			}
+		}
 
 		for (auto& ticked : mSteppedTickSystems) {
 			const float step = 1.f / ticked.system->getTicks();
@@ -223,10 +284,10 @@ namespace ecss {
 		}
 
 		SFE_PROFILE_ZONE("Debug updates");
-		for (auto system : mSystemsMap) {
-			if (system) { // slots are type-indexed, so gaps are normal
-				system->debugUpdate(dt);
-			}
+		// In the order the systems were made: a slot of mSystemsMap goes by type id, which the first getSystem of a type
+		// claims, however long before the system is made.
+		for (const auto system : mMade) {
+			system->debugUpdate(dt);
 		}
 	}
 }

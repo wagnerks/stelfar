@@ -76,7 +76,9 @@ void Logger::logMessage(const eLogLevel level, const char* msg) {
 	OutputDebugString(to_wstring_utf8(oss.str()).c_str());
 #endif
 	if (level == eLogLevel::FATAL || level == eLogLevel::ERROR_) {
-		if (FILE* logFile = fopen(SFE::FileSystem::resolve("sfe_fatal.log").string().c_str(), "a")) {
+		// Under the application's root, as every write is: never into the engine's folder, where a run of the engine's own
+		// tests leaves a log of this name.
+		if (FILE* logFile = fopen((SFE::FileSystem::root() / "sfe_fatal.log").string().c_str(), "a")) {
 			fputs(oss.str().c_str(), logFile);
 			fclose(logFile);
 		}

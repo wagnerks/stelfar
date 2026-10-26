@@ -37,6 +37,7 @@
 #include "renderModule/renderPasses/SSAOPass.h"
 #include "renderModule/renderPasses/DebugPass.h"
 #include "renderModule/renderPasses/PointLightPass.h"
+#include "propertiesModule/SceneEvents.h"
 #include "runtimeBridge/RuntimeBridge.h"
 
 #include "componentsModule/TransformComponent.h"
@@ -184,20 +185,18 @@ namespace SFE::SystemsModule {
 		}
 		bindGpuFrame();
 
-		SFE::Engine::reproTrace("RenderSystem passes");
 		const auto& passes = GameModule::passes();
 		mRenderPasses.reserve(passes.size());
 		for (const auto& entry : passes) {
 			if (!entry.enabled || !entry.create) {
 				continue;
 			}
-			SFE::Engine::reproTrace(entry.name);
 			addRenderPass(entry.name, std::unique_ptr<Render::RenderPass>(entry.create()));
 		}
-		SFE::Engine::reproTrace("RenderSystem passes ok");
 
-		// ChunksSystem seeds before this ctor; ARMATURE_UPDATED never reached us. Transforms are refreshed on
-		// the first frame, and GpuScene starts dirty.
+		// What is in the world already -- a scene loaded before this ctor -- never reached us through ARMATURE_UPDATED
+		// or ANIMATION_UPDATED, so its bones and clips are taken up here. Transforms are refreshed on the first frame,
+		// and GpuScene starts dirty.
 		auto& live = ECSHandler::registry();
 		for (auto id : live.getAllEntities()) {
 			if (live.hasComponent<ComponentsModule::ArmatureBonesComponent>(id)) {
@@ -857,6 +856,8 @@ namespace SFE::SystemsModule {
 			return false;
 		}
 		const auto index = it - mPassNames.begin();
+		// Told of no scene once it is gone (SceneEvents.h).
+		PropertiesModule::forgetSceneListenersOf(mRenderPasses[static_cast<size_t>(index)].get());
 		mRenderPasses.erase(mRenderPasses.begin() + index);
 		mPassZones.erase(mPassZones.begin() + index);
 		mPassNames.erase(it);
@@ -1101,5 +1102,10 @@ namespace SFE::SystemsModule {
 		return 0.f;
 	}
 
-	RenderSystem::~RenderSystem() = default;
+	RenderSystem::~RenderSystem() {
+		// A pass is told of no scene once it is going (SceneEvents.h); the passes themselves go with the members.
+		for (const auto& pass : mRenderPasses) {
+			PropertiesModule::forgetSceneListenersOf(pass.get());
+		}
+	}
 }

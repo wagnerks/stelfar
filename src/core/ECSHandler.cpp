@@ -15,7 +15,9 @@
 #include "componentsModule/OcTreeComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "core/Engine.h"
+#include "core/LoadTrace.h"
 #include "debugModule/Benchmark.h"
+#include "logsModule/logger.h"
 #include "propertiesModule/PropertiesSystem.h"
 
 #include "systemsModule/SystemManager.h"
@@ -26,7 +28,6 @@
 #include "systemsModule/systems/AudioSystem.h"
 #include "networkModule/NetworkSystem.h"
 #include "systemsModule/systems/CameraSystem.h"
-#include "systemsModule/systems/ChunksSystem.h"
 #include "systemsModule/systems/LODSystem.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/PhysicsSystem.h"
@@ -38,6 +39,22 @@
 namespace SectorsArrayTest
 {
 	struct Trivial;
+}
+
+namespace {
+	// The scene the engine was given (Engine::scenePath), loaded whole: its entities, their components and the render
+	// copies of their transforms. Without one the world starts empty. The engine loads it here until the application
+	// puts the engine together and loads its scene itself.
+	void loadStartScene() {
+		const auto& path = SFE::Engine::instance()->scenePath();
+		if (path.empty()) {
+			return;
+		}
+		SFE::LoadTrace::Step step("scene");
+		if (!SFE::PropertiesModule::PropertiesSystem::loadScene(path)) {
+			SFE::LogsModule::Logger::LOG_ERROR("scene not loaded: %s", path.c_str());
+		}
+	}
 }
 
 void ECSHandler::initSystems() {
@@ -60,19 +77,14 @@ void ECSHandler::initSystems() {
 	//mDrawRegistry[1].registerArray<SFE::ComponentsModule::TransformMatComp, MeshComponent, SFE::ComponentsModule::ArmatureBonesComponent>();
 
 	mSystemManager.createSystem<SFE::SystemsModule::LODSystem>();
-	SFE::Engine::reproTrace("init Transform");
 	mSystemManager.createSystem<SFE::SystemsModule::TransformSystem>();
-	SFE::Engine::reproTrace("init OcTree");
 	mSystemManager.createSystem<SFE::SystemsModule::OcTreeSystem>();
-	SFE::Engine::reproTrace("init AABB");
 	mSystemManager.createSystem<SFE::SystemsModule::AABBSystem>();
-	SFE::Engine::reproTrace("init Camera");
 	mSystemManager.createSystem<SFE::SystemsModule::CameraSystem>();
-	SFE::Engine::reproTrace("init Chunks");
-	mSystemManager.createSystem<SFE::SystemsModule::ChunksSystem>();
-	SFE::Engine::reproTrace("init Render");
+	// The world before what draws it and what collides with it: RenderSystem, and PhysicsSystem below, take up what
+	// is in it as they are made.
+	loadStartScene();
 	mSystemManager.createSystem<SFE::SystemsModule::RenderSystem>();
-	SFE::Engine::reproTrace("init Render ok");
 
 	//mSystemManager.createSystem<SFE::SystemsModule::Physics>();
 	//mSystemManager.createSystem<SFE::SystemsModule::ActionSystem>();
@@ -102,6 +114,7 @@ void ECSHandler::initSystems() {
 		}
 	}
 	const bool capturing = SFE::Engine::instance()->capturingFrame();
+	// Settled at the first update, for every tick system whenever it was added: a game's, made above, runs as these do.
 	mSystemManager.setStepTickSystems(capturing || SFE::Engine::instance()->fixedDeltaTime() > 0.f);
 	mSystemManager.addTickSystems<SFE::SystemsModule::PhysicsSystem, SFE::SystemsModule::LoosePhysicsSystem>(60);
 	if (!capturing) {
@@ -115,12 +128,4 @@ void ECSHandler::initSystems() {
 	// The camera flies (when nothing else holds it), what it hears follows it, then the frame is drawn from where it
 	// ended up. A game adds its own ahead of these, in GameModule::addSystems.
 	mSystemManager.addRootSystems<SFE::SystemsModule::CameraSystem, SFE::SystemsModule::AudioSystem, SFE::SystemsModule::RenderSystem>();
-
-	if (auto chunks = mSystemManager.getSystem<SFE::SystemsModule::ChunksSystem>()) {
-		if (auto cam = mSystemManager.getSystem<SFE::SystemsModule::CameraSystem>()) {
-			SFE::Engine::reproTrace("init chunks load");
-			chunks->updateAsync({ cam->getCurrentCamera() });
-			SFE::Engine::reproTrace("init chunks load ok");
-		}
-	}
 }

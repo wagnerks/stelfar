@@ -4,6 +4,7 @@
 #include "EngineTestFixture.h"
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/Animation.h"
+#include "assetsModule/modelModule/ModelLoader.h"
 #include "componentsModule/ArmatureComponent.h"
 #include "componentsModule/MeshComponent.h"
 #include "componentsModule/ModelComponent.h"
@@ -11,6 +12,7 @@
 #include "componentsModule/Hierarchy.h"
 #include "componentsModule/TransformComponent.h"
 #include "ecss/Registry.h"
+#include "propertiesModule/PropertiesSystem.h"
 #include "systemsModule/TasksManager.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "systemsModule/systems/WorldTimeSystem.h"
@@ -54,20 +56,36 @@ namespace SFE::EngineTests {
 	// With a fixed frame step an animation moves by exactly frames * step * ticks per second.
 	TEST(EngineTest, AnimationAdvancesByTheFrameStep) {
 		auto& registry = ECSHandler::registry();
-		// The default world spawns its animated characters from the chunk loader, which is asynchronous.
-		ecss::EntityId animated = ecss::INVALID_ID;
-		for (int attempt = 0; attempt < 600 && animated == ecss::INVALID_ID; ++attempt) {
-			for (auto [id, animation] : registry.view<const AnimationComponent>()) {
-				if (animation && animation->mCurrentAnimation && animation->mPlay && animation->mLoop) {
-					animated = id;
-					break;
-				}
-			}
-			if (animated == ecss::INVALID_ID) {
-				step();
+		// An animated model of the test's own, the world being empty: a cube on one bone, with a clip of a single key and
+		// one of 40 frames. The longest clip is played, so the time has somewhere to go.
+		constexpr const char* kPath = "models/test_anim.fbx";
+		const auto* model = AssetsModule::ModelLoader::instance()->load(kPath);
+		ASSERT_NE(model, nullptr) << kPath << " did not load";
+		const AssetsModule::Animation* clip = nullptr;
+		for (const auto& candidate : model->getAnimations()) {
+			if (!clip || candidate.getDuration() > clip->getDuration()) {
+				clip = &candidate;
 			}
 		}
-		ASSERT_NE(animated, ecss::INVALID_ID) << "no animated entity in the default world";
+		ASSERT_NE(clip, nullptr) << kPath << " has no clip";
+		ASSERT_GT(clip->getDuration(), 0.f) << kPath << " has no clip that moves";
+
+		const auto animated = PropertiesModule::PropertiesSystem::spawnModel(kPath, {}, Math::Vec3{ 1.f }, {});
+		const Finally takeOut([animated] {
+			ECSHandler::destroyEntity(animated);
+			step();
+		});
+		{
+			auto animation = registry.pinComponent<AnimationComponent>(animated);
+			ASSERT_TRUE(animation) << kPath << " was spawned without an animation";
+			animation->mCurrentAnimation = clip;
+			animation->mLoop = true;
+			animation->play(0.f);
+		}
+		SystemsModule::TasksManager::instance()->notify({ animated, SystemsModule::ANIMATION_UPDATED });
+		// The clip starts on the first frame that draws it.
+		step();
+		ASSERT_FALSE(std::isnan(registry.pinComponent<const AnimationComponent>(animated)->mStart)) << "the clip never started";
 
 		auto* engine = Engine::instance();
 		const auto clockBefore = engine->animationClock();
@@ -75,14 +93,16 @@ namespace SFE::EngineTests {
 		step(kFrames);
 		EXPECT_DOUBLE_EQ(engine->animationClock() - clockBefore, kFrames * static_cast<double>(kFrameTime));
 
-		const auto animation = registry.pinComponent<const AnimationComponent>(animated);
-		const auto ticksPerSecond = AnimationComponent::ticksPerSecond(*animation->mCurrentAnimation);
-		const auto duration = animation->mCurrentAnimation->getDuration();
-		float expected = animation->time(clockBefore) + kFrames * kFrameTime * ticksPerSecond;
-		if (duration > 0.f) {
-			expected = std::fmod(expected, duration);
+		{
+			const auto animation = registry.pinComponent<const AnimationComponent>(animated);
+			const auto ticksPerSecond = AnimationComponent::ticksPerSecond(*animation->mCurrentAnimation);
+			const auto duration = animation->mCurrentAnimation->getDuration();
+			float expected = animation->time(clockBefore) + kFrames * kFrameTime * ticksPerSecond;
+			if (duration > 0.f) {
+				expected = std::fmod(expected, duration);
+			}
+			EXPECT_NEAR(animation->time(engine->animationClock()), expected, 1e-3f);
 		}
-		EXPECT_NEAR(animation->time(engine->animationClock()), expected, 1e-3f);
 	}
 
 	// GpuScene under the load its incremental layout is worst at: thousands of meshes with one instance each, then
@@ -103,6 +123,10 @@ namespace SFE::EngineTests {
 		const auto spawn = [&](uint32_t mesh) {
 			const auto id = registry.takeEntity();
 			registry.addComponent<TransformComponent>(id, id);
+			// Its render transform seeded, as a spawned model's is (PropertiesSystem::spawnModel). Left to the transform
+			// event of its construction alone it is now and then never made: the constructor tells before the component
+			// is stored, and a worker that takes the event first finds nothing to reload. Not what this test is about.
+			registry.addComponent<TransformMatComp>(id, Math::Mat4{ 1.f });
 			auto meshComp = registry.addComponent<MeshComponent>(id);
 			meshComp->meshGraph.root().value = { kFirstMesh + mesh, 0, 0, 3, 3 };
 			// A distinct material per mesh, the way dragging a slider makes a new one every step.
@@ -116,15 +140,27 @@ namespace SFE::EngineTests {
 		for (uint32_t i = 0; i < 3000; ++i) {
 			ids.push_back(spawn(i));
 		}
-		step(3);
-		ASSERT_TRUE(scene.validate());
+		// As many frames as the spawned meshes take to reach the scene -- through the transform, AABB and octree workers
+		// first, a frame or more each, more while the pool is busy -- counted alone, in a world that holds nothing else.
+		// Then as many more as the lists take to settle once the last is in. A scene that packed its lists again every
+		// frame would never settle, so the check below would still catch it.
 		size_t batches = 0;
-		for (const auto& group : scene.groups(Render::GpuScene::List::GBuffer)) {
-			batches += group.batchCount;
+		for (int frame = 0; frame < 300 && batches < 3000u; ++frame) {
+			step();
+			batches = 0;
+			for (const auto& group : scene.groups(Render::GpuScene::List::GBuffer)) {
+				batches += group.batchCount;
+			}
 		}
+		ASSERT_TRUE(scene.validate());
 		ASSERT_GE(batches, 3000u) << "the spawned meshes never reached the scene, so nothing below is tested";
-
 		auto compactions = scene.compactions();
+		for (int frame = 0, quiet = 0; frame < 300 && quiet < 10; ++frame) {
+			step();
+			quiet = scene.compactions() == compactions ? quiet + 1 : 0;
+			compactions = scene.compactions();
+		}
+
 		step(30);
 		EXPECT_EQ(scene.compactions(), compactions) << "the lists were packed again with nothing changing";
 

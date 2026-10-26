@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <utility>
+
 #include <gtest/gtest.h>
 
 #include "core/ECSHandler.h"
@@ -9,6 +12,23 @@
 #include "rhi/GraphicsBackend.h"
 
 namespace SFE::EngineTests {
+	// What a test made in the one engine all tests share, taken out on every way out of the test -- a failed ASSERT's
+	// return among them -- so no test leaves anything behind for the tests after it.
+	class Finally {
+	public:
+		explicit Finally(std::function<void()> run) : mRun(std::move(run)) {}
+		~Finally() {
+			if (mRun) {
+				mRun();
+			}
+		}
+		Finally(const Finally&) = delete;
+		Finally& operator=(const Finally&) = delete;
+
+	private:
+		std::function<void()> mRun;
+	};
+
 	// Every frame advances exactly this much.
 	inline constexpr float kFrameTime = 1.f / 60.f;
 

@@ -10,6 +10,23 @@
 using namespace SFE::ShaderModule;
 
 namespace {
+	// The file an #include names. A relative one is looked up as every other asset is -- under shaders/ in the
+	// application's content first, then among the engine's own -- and beside the including file only when neither has
+	// it. So an application stands in for an engine include by putting a file of that name in its own shaders, and every
+	// includer of one name gets the one file, an engine shader as much as the application's.
+	std::filesystem::path includedFile(const std::filesystem::path& inc, const std::filesystem::path& includerDir) {
+		if (inc.is_absolute()) {
+			return inc;
+		}
+		std::error_code ec;
+		auto found = SFE::FileSystem::resolve((std::filesystem::path("shaders") / inc).generic_string());
+		if (std::filesystem::exists(found, ec)) {
+			return found;
+		}
+		auto beside = includerDir / inc;
+		return std::filesystem::exists(beside, ec) ? beside : found;
+	}
+
 	std::string loadResolved(const std::filesystem::path& path, std::unordered_set<std::string>& seen) {
 		const auto key = path.lexically_normal().generic_string();
 		if (!seen.insert(key).second) {
@@ -34,12 +51,7 @@ namespace {
 
 			std::smatch m;
 			if (std::regex_search(line, m, includeRe)) {
-				const std::filesystem::path inc(m[1].str());
-				auto resolved = inc.is_absolute() ? inc : dir / inc;
-				if (!std::filesystem::exists(resolved)) {
-					resolved = SFE::FileSystem::resolve((std::filesystem::path("shaders") / inc).generic_string());
-				}
-				out += loadResolved(resolved, seen);
+				out += loadResolved(includedFile(m[1].str(), dir), seen);
 			}
 			else {
 				out += line;

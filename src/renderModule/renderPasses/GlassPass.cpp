@@ -24,7 +24,6 @@
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
-#include "systemsModule/systems/ChunksSystem.h"
 
 using namespace SFE::Render::RenderPasses;
 
@@ -209,12 +208,6 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		const auto& screen = Engine::instance()->getWindow()->getScreenData();
 		mParams.resolutionX = screen.renderW > 0 ? static_cast<float>(screen.renderW) : 1.f;
 		mParams.resolutionY = screen.renderH > 0 ? static_cast<float>(screen.renderH) : 1.f;
-	}
-	mParams.sphereSpacing = 8.f;
-	if (auto* chunks = ECSHandler::getSystem<SystemsModule::ChunksSystem>()) {
-		if (const auto* dd = static_cast<const SystemsModule::ChunksDebugData*>(chunks->getDebugData())) {
-			mParams.sphereSpacing = dd->sphereSpacing;
-		}
 	}
 	if (const auto* csm = frame.data<CsmFrame>(FrameId::Csm)) {
 		mParams.lightX = csm->lightDirection.x;

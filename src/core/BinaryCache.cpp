@@ -17,10 +17,10 @@ namespace SFE::BinaryCache {
 	std::string path(const std::string_view name, const uint64_t key) {
 		char hex[17];
 		std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(key));
-		// The folder the file resolves to, not "cache" on its own: with a game's content in front of the engine's, that
-		// resolved to the engine's folder while a new file went to the game's, which was never made -- and nothing was
-		// cached at all.
-		const auto file = FileSystem::resolve("cache/" + std::string(name) + "_" + hex + ".bin");
+		// Under the application's root, read and written alike: a cache is what the application's own runs made, so it is
+		// neither looked for behind the root as an asset is nor written into the engine's folder where a file of that name
+		// happens to be. Its folder is made here, for the first file of a cold cache.
+		const auto file = (FileSystem::root() / "cache" / (std::string(name) + "_" + hex + ".bin")).lexically_normal();
 		std::error_code ec;
 		std::filesystem::create_directories(file.parent_path(), ec);
 		return file.string();

@@ -1,5 +1,6 @@
 ﻿#include "propertiesModule/PropertiesSystem.h"
 #include "propertiesModule/ModelBinding.h"
+#include "propertiesModule/SceneEvents.h"
 #include "core/FileSystem.h"
 
 #include <algorithm>
@@ -176,10 +177,10 @@ namespace SFE::PropertiesModule {
 			transformComp->setPos(pos);
 			transformComp->setScale(scale);
 			transformComp->setRotate(rotate);
-			// ChunksSystem seeds before RenderSystem exists, so the render copy is filled here rather than left to the
-			// notify. It is computed from the spawn values, the way reloadTransform does for an entity with no parent,
-			// instead of reloading the component: the setters above have already woken TransformSystem, whose worker
-			// may be reloading the same component right now.
+			// A model spawned before RenderSystem exists never reaches it through the transform notify, so the render
+			// copy is filled here rather than left to the notify. It is computed from the spawn values, the way
+			// reloadTransform does for an entity with no parent, instead of reloading the component: the setters above
+			// have already woken TransformSystem, whose worker may be reloading the same component right now.
 			const auto rotation = Math::Quaternion<float>::fromEulerDegrees(rotate);
 			const auto seed = Math::translate(Math::Mat4{ 1.f }, pos) * rotation.toMat4() * Math::scale(Math::Mat4{ 1.f }, scale);
 			ECSHandler::registry().addComponent<ComponentsModule::TransformMatComp>(entity, seed);
@@ -602,6 +603,13 @@ namespace SFE::PropertiesModule {
 		}
 		}
 		LoadTrace::count("entities", static_cast<long long>(nodes.size()));
+
+		// Whatever takes something of a scene (the physics: its static colliders) takes it of this one now, every entity of
+		// it standing where the file puts it; in the order they subscribed (SceneEvents.h).
+		{
+			LoadTrace::Step listeners("scene listeners");
+			emitSceneLoaded({ std::string(path), scene, std::move(nodes) });
+		}
 		return scene;
 	}
 
@@ -621,7 +629,7 @@ namespace SFE::PropertiesModule {
 		Reload reload;
 		auto kept = reloadNode(scene.root, scene.read, fresh, reload);
 
-		// What went from the file taken out with its children, as a chunk unloads: off the octree, then destroyed.
+		// What went from the file taken out with its children: off the octree, then destroyed.
 		if (!reload.gone.empty()) {
 			std::vector<ecss::EntityId> doomed;
 			for (const auto entity : reload.gone) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -27,9 +28,33 @@ namespace SFE {
 
 		// Times under this are noise beside a load of seconds, and a table of them hides what matters.
 		constexpr double kWorthShowing = 0.002;
+
+		// With SFE_LOAD_BREADCRUMBS naming a file, every stage writes "begin <name>" to it as it starts, the file closed
+		// again at once: a load that hangs or dies leaves the last stage it began as the file's last line, where the
+		// table, printed only at the end, is never written. The variable is read once; without it nothing is written.
+		void leaveBreadcrumb(const std::string& name) {
+			static const std::string path = [] {
+				const char* named = std::getenv("SFE_LOAD_BREADCRUMBS");
+				return named ? std::string(named) : std::string();
+			}();
+			if (path.empty()) {
+				return;
+			}
+			// Stages may begin on more than one thread.
+			static std::mutex guard;
+			std::lock_guard lock(guard);
+			if (FILE* file = std::fopen(path.c_str(), "a")) {
+				std::fprintf(file, "begin %s\n", name.c_str());
+				std::fclose(file);
+			}
+		}
 	}
 
-	LoadTrace::Step::Step(std::string name) : mName(std::move(name)), mStart(std::chrono::steady_clock::now()) {}
+	LoadTrace::Step::Step(std::string name) : mName(std::move(name)) {
+		leaveBreadcrumb(mName);
+		// Taken after the breadcrumb, so writing it is not timed as part of the stage.
+		mStart = std::chrono::steady_clock::now();
+	}
 
 	LoadTrace::Step::~Step() {
 		const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - mStart;

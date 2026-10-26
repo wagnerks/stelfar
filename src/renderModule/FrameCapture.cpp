@@ -150,10 +150,12 @@ namespace SFE::Render {
 			return false;
 		}
 
+		// A relative path is under the application's root, as every write is: a picture never lands among the engine's
+		// assets, even where the engine's folder has a file of that name.
 		const std::filesystem::path requested(path);
 		const std::string resolved = requested.is_absolute()
 			? requested.string()
-			: FileSystem::resolve(path).string();
+			: (FileSystem::root() / requested).lexically_normal().string();
 
 		if (!writePng(resolved, rgba, width, height)) {
 			return false;

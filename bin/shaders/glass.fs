@@ -6,36 +6,6 @@
 layout(location = 14) in vec3 vRest;
 #include "sfe_look.glsl"
 
-uint hashGridTint(vec3 worldPos, float spacing) {
-    int gx = int(floor(worldPos.x / spacing - 0.5));
-    int gz = int(floor(worldPos.z / spacing - 0.5));
-    uint h = uint(gx) * 374761393u + uint(gz) * 668265263u;
-    h = (h ^ (h >> 13u)) * 1274126177u;
-    return h;
-}
-
-vec3 hsvToRgb(float h, float s, float v) {
-    float c = v * s;
-    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
-    float m = v - c;
-    vec3 rgb;
-    if (h < 1.0 / 6.0) rgb = vec3(c, x, 0.0);
-    else if (h < 2.0 / 6.0) rgb = vec3(x, c, 0.0);
-    else if (h < 3.0 / 6.0) rgb = vec3(0.0, c, x);
-    else if (h < 4.0 / 6.0) rgb = vec3(0.0, x, c);
-    else if (h < 5.0 / 6.0) rgb = vec3(x, 0.0, c);
-    else rgb = vec3(c, 0.0, x);
-    return rgb + m;
-}
-
-vec3 glassTintFromPos(vec3 worldPos) {
-    uint h = hashGridTint(worldPos, max(params.sphereSpacing, 1.0));
-    float hue = float(h % 12u) / 12.0;
-    float sat = 0.55 + float((h >> 4u) & 3u) * 0.12;
-    float val = 0.75 + float((h >> 6u) & 3u) * 0.08;
-    return hsvToRgb(hue, sat, val);
-}
-
 vec3 fresnelSchlick(float cosTheta, vec3 f0) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }

@@ -25,6 +25,7 @@
 #include "core/Clocks.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "propertiesModule/SceneEvents.h"
 #include "systemsModule/TerrainCollider.h"
 #include "logsModule/logger.h"
 
@@ -193,6 +194,26 @@ namespace SFE::SystemsModule {
 			}
 			return meshShapes(model, world);
 		}
+
+		// The static colliders of `entities` given to `physics` to take (replaceStatic), each where its render transform
+		// puts it -- seeded for every entity of a scene by the time the scene is told of (PropertiesSystem::loadScene).
+		// One with no collider is left out.
+		void queueStatic(PhysicsSystem& physics, const std::vector<ecss::EntityId>& entities) {
+			auto& registry = ECSHandler::registry();
+			for (const auto entity : entities) {
+				Math::Mat4 world{ 1.f };
+				{
+					const auto matrix = registry.pinComponent<const ComponentsModule::TransformMatComp>(entity);
+					if (!matrix) {
+						continue;
+					}
+					world = matrix->mTransform;
+				}
+				if (auto shapes = PhysicsSystem::staticShapes(entity, world); !shapes.empty()) {
+					physics.replaceStatic(entity, std::move(shapes));
+				}
+			}
+		}
 	}
 
 	struct PhysicsSystem::Layers {
@@ -221,6 +242,12 @@ namespace SFE::SystemsModule {
 					&& !((a == kCharacter && b == kHair) || (a == kHair && b == kCharacter));
 			}
 		} objectPairs;
+
+		// Not a layer: whether the world has begun stepping, and the lock its first update and a scene laid in at once take
+		// turns with (the constructor's listener). Here, in the one part of the system this file defines, until
+		// PhysicsSystem.h is next opened (docs/engine_split.md, step 6).
+		std::mutex stepping;
+		std::atomic<bool> stepped{ false };
 	};
 
 	PhysicsSystem::PhysicsSystem() : PhysicsSystem(kMainThreads) {}
@@ -239,9 +266,29 @@ namespace SFE::SystemsModule {
 		mWorld->SetPhysicsSettings(settings);
 		addStaticColliders();
 		mWorld->OptimizeBroadPhase();
+
+		// Take what is there (above), and listen for what is loaded after, the same way: replaceStatic. A scene loaded
+		// before the world first steps -- a game loading its scene once its systems are made -- is laid in at once, on the
+		// main thread, for whatever is made on it next; one loaded after goes in between two steps, at the start of the
+		// next update.
+		PropertiesModule::onSceneLoaded(this, [this](const PropertiesModule::SceneLoaded& scene) {
+			std::unique_lock lock(mLayers->stepping);
+			const bool atOnce = !mLayers->stepped.load(std::memory_order_relaxed);
+			if (!atOnce) {
+				lock.unlock();
+			}
+			queueStatic(*this, scene.entities);
+			if (atOnce) {
+				swapStatic();
+				mWorld->OptimizeBroadPhase();
+			}
+		});
 	}
 
-	PhysicsSystem::~PhysicsSystem() = default;
+	PhysicsSystem::~PhysicsSystem() {
+		// Told of no scene once it is going, made by a SystemManager or not.
+		PropertiesModule::forgetSceneListeners(this);
+	}
 
 	LoosePhysicsSystem::LoosePhysicsSystem()
 		: PhysicsSystem((std::max)(1, static_cast<int>(std::thread::hardware_concurrency()) / 2 - 1)) {}
@@ -260,6 +307,12 @@ namespace SFE::SystemsModule {
 	}
 
 	void PhysicsSystem::update(float dt) {
+		// From here on the world steps, and a scene loaded after goes in through replaceStatic; one being laid in at once
+		// (the constructor's listener) is finished first.
+		if (!mLayers->stepped.load(std::memory_order_acquire)) {
+			std::lock_guard lock(mLayers->stepping);
+			mLayers->stepped.store(true, std::memory_order_release);
+		}
 		{
 			SFE_PROFILE_ZONE("Physics swap static");
 			swapStatic();
@@ -307,20 +360,17 @@ namespace SFE::SystemsModule {
 	}
 
 	void PhysicsSystem::addStaticColliders() {
+		// The terrain, and the props set in the scene with a collider: taken as a scene loaded later is (the constructor's
+		// listener), and laid in at once, as nothing steps a world still being made.
 		auto& registry = ECSHandler::registry();
-		auto& bodies = mWorld->GetBodyInterface();
-		// The terrain, and the props set in the scene with a collider.
+		std::vector<ecss::EntityId> entities;
 		for (const auto& [id, model, matrix] : registry.view<const ModelComponent, const ComponentsModule::TransformMatComp>()) {
-			if (!model || !matrix || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
-				continue;
+			if (model && matrix && (model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
+				entities.push_back(id);
 			}
-			const auto shapes = colliderShapes(id, *model, matrix->mTransform);
-			for (const auto& shape : shapes) {
-				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
-				mStatic[id].push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
-			}
-			noteTerrain(id, shapes, mStatic[id]);
 		}
+		queueStatic(*this, entities);
+		swapStatic();
 	}
 
 	std::vector<JPH::ShapeRefC> PhysicsSystem::staticShapes(ecss::EntityId entity, const Math::Mat4& world) {

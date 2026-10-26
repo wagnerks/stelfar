@@ -31,8 +31,8 @@ namespace SFE::Render::RenderPasses {
 			float colorY = 1.f;
 			float colorZ = 1.f;
 			float _pad1 = 0.f;
-			float _pad4[3]{};
-			float sphereSpacing = 8.f;
+			// Spare, so the block keeps the size sfe_glass.glsl gives it.
+			float _pad4[4]{};
 		};
 
 		void ensureTargets(SystemsModule::RenderData& renderDataHandle);

@@ -16,6 +16,31 @@
 #include "logsModule/logger.h"
 
 namespace SFE {
+	namespace {
+		// Where a write goes: under the application's root, whichever folder resolve() would read the path from. A read
+		// finds the engine's own file behind the application's, but nothing a run makes goes among the engine's assets:
+		// they stay as the engine shipped them, and an application that saves a file the engine provides puts its own
+		// copy in front of it.
+		std::filesystem::path underRoot(std::string_view path) {
+			const auto p = std::filesystem::path(std::string(path));
+			if (p.empty() || p.is_absolute()) {
+				return p;
+			}
+			return (FileSystem::root() / p).lexically_normal();
+		}
+
+		// A file about to be written, its folder made first: so far that folder may be only the engine's, which a read
+		// finds and a write does not go into.
+		std::filesystem::path fileToWrite(std::string_view path) {
+			auto file = underRoot(path);
+			if (file.has_parent_path()) {
+				std::error_code ec;
+				std::filesystem::create_directories(file.parent_path(), ec);
+			}
+			return file;
+		}
+	}
+
 	void FileSystem::setRoot(std::string_view path) {
 		if (path.empty()) {
 			sRoot.clear();
@@ -126,7 +151,7 @@ namespace SFE {
 
 	bool FileSystem::createDirectories(std::string_view path) {
 		std::error_code ec;
-		std::filesystem::create_directories(resolve(path), ec);
+		std::filesystem::create_directories(underRoot(path), ec);
 		return !ec;
 	}
 
@@ -147,10 +172,10 @@ namespace SFE {
 	}
 
 	bool FileSystem::writeFile(std::string_view path, std::string& file) {
-		const auto resolved = resolve(path).string();
-		std::ofstream outputFile(resolved);
+		const auto written = fileToWrite(path).string();
+		std::ofstream outputFile(written);
 		if (!outputFile.is_open()) {
-			LogsModule::Logger::LOG_ERROR("FileSystem::FILE_NOT_SUCCESSFULLY_WRITE: %s", resolved.c_str());
+			LogsModule::Logger::LOG_ERROR("FileSystem::FILE_NOT_SUCCESSFULLY_WRITE: %s", written.c_str());
 			return false;
 		}
 
@@ -181,10 +206,10 @@ namespace SFE {
 	}
 
 	bool FileSystem::writeJson(std::string_view path, const Json::Value& root) {
-		const auto resolved = resolve(path).string();
-		std::ofstream ofs(resolved);
+		const auto written = fileToWrite(path).string();
+		std::ofstream ofs(written);
 		if (!ofs.is_open()) {
-			LogsModule::Logger::LOG_ERROR("FileSystem::writeJson can not open file: %s", resolved.c_str());
+			LogsModule::Logger::LOG_ERROR("FileSystem::writeJson can not open file: %s", written.c_str());
 			return false;
 		}
 
