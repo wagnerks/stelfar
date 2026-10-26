@@ -63,6 +63,11 @@ void ECSHandler::initSystems() {
 	mRegistry.setDestroyListener([](ecss::EntityId entity, void*) {
 		SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::ENTITY_DESTROYED });
 	});
+	// A new transform is reloaded, and its render copy made, once the registry has stored it: TransformSystem's worker
+	// may take the event at once, and one told before the store found nothing there and dropped it.
+	mRegistry.setAddListener<TransformComponent>([](ecss::EntityId entity, void*) {
+		SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::TRANSFORM_UPDATE });
+	});
 
 	//todo separate systems into  drawData preparing and logic update
 	/*

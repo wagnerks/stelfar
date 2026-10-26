@@ -162,9 +162,10 @@ namespace SFE::ComponentsModule {
 	// and a reload that ran between the flag and the write rebuilt the matrix from the old value and cleared the
 	// flag, so the new one was never applied: a random handful of spawned models kept their unrotated matrix.
 	// Every change notifies, even when the flag is already up: the flag may belong to an event the worker has
-	// already taken (or, from the constructor, one it could not act on because the component was not stored
-	// yet), and skipping the notify left the change with no reload at all -- now and then the sun kept an
-	// identity rotation. The system merges repeated notifications for one entity.
+	// already taken, and skipping the notify left the change with no reload at all -- now and then the sun kept an
+	// identity rotation. The system merges repeated notifications for one entity. A new component does not come
+	// through here: told from its constructor, before the registry had stored it, a worker that took the event at
+	// once found nothing to reload and dropped it, and an entity no setter touched again was never drawn.
 	void TransformComponent::markDirty() {
 		change([] {});
 	}

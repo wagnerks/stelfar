@@ -19,10 +19,13 @@ namespace SFE::ComponentsModule {
 	 * component: TransformSystem's worker reloads while the main thread sets values and reloads the
 	 * camera. The reference getters are not synchronised; code on another thread than the one
 	 * changing the entity reads copyTransform, or the TransformMatComp copy the worker publishes.
+	 *
+	 * A new one is dirty and tells no one: the registry's add listener tells TransformSystem once
+	 * it is stored (ECSHandler::initSystems).
 	 */
 	class TransformComponent : public ecss::ComponentInterface {
 	public:
-		TransformComponent(ecss::SectorId id) : ComponentInterface(id) { markDirty(); };
+		TransformComponent(ecss::SectorId id) : ComponentInterface(id) {}
 
 		const Math::Vec3& getPos(bool global = false) const;
 		void setX(float x);
@@ -69,7 +72,7 @@ namespace SFE::ComponentsModule {
 		// Writes a value and raises the flag under the lock, then notifies TransformSystem.
 		void change(const std::function<void()>& write);
 
-		bool mDirty = false;
+		bool mDirty = true;
 
 		Math::Quaternion<float> mRotateQuaternion;
 		Math::Mat4 mTransform = Math::Mat4{ 1.f };

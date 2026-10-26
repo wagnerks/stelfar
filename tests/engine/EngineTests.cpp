@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cmath>
 #include <vector>
 
@@ -51,6 +52,58 @@ namespace SFE::EngineTests {
 			// A 90 degree yaw leaves nothing of X on X; the unrotated matrix has 1 there.
 			EXPECT_NEAR(m[0][0], 0.f, 1e-5f) << "entity " << ids[i] << " kept its unrotated matrix";
 		}
+	}
+
+	// A transform added and never set again is reloaded and gets its render copy. Its event used to be sent from the
+	// constructor, before the registry had stored it, and a worker that took it at once found nothing to reload and
+	// dropped it: now and then one entity in thousands was never drawn. The probe asks, of every transform event, whether
+	// its transform is stored by then, which no event sent from the constructor was -- so it fails on every add, not
+	// now and then.
+	TEST(EngineTest, AddedTransformsAreToldOfOnceStored) {
+		// Subscribed for the rest of the run, the tasks manager having no unsubscribe, and listening only while armed.
+		struct Probe : SystemsModule::TaskWorker {
+			Probe() : TaskWorker({ SystemsModule::TRANSFORM_UPDATE }) { bindWorkers(); }
+			void notify(SystemsModule::Task task) override {
+				if (!armed) {
+					return;
+				}
+				++told;
+				if (!ECSHandler::registry().hasComponent<TransformComponent>(task.entity)) {
+					++toldEarly;
+				}
+			}
+			std::atomic_bool armed = false;
+			std::atomic<size_t> told = 0;
+			std::atomic<size_t> toldEarly = 0;
+		};
+		static Probe probe;
+		probe.told = 0;
+		probe.toldEarly = 0;
+		probe.armed = true;
+
+		auto& registry = ECSHandler::registry();
+		std::vector<ecss::EntityId> ids;
+		const Finally takeOut([&ids] {
+			probe.armed = false;
+			ECSHandler::destroyEntities(ids);
+			step();
+		});
+		for (int round = 0; round < 8; ++round) {
+			for (int i = 0; i < 1000; ++i) {
+				const auto id = registry.takeEntity();
+				registry.addComponent<TransformComponent>(id, id);
+				ids.push_back(id);
+			}
+			step(3);
+		}
+
+		EXPECT_GE(probe.told.load(), ids.size());
+		EXPECT_EQ(probe.toldEarly.load(), 0u) << "of " << probe.told.load() << " transform events, sent before the transform was stored";
+		size_t missing = 0;
+		for (const auto id : ids) {
+			missing += registry.hasComponent<TransformMatComp>(id) ? 0 : 1;
+		}
+		EXPECT_EQ(missing, 0u) << "of " << ids.size() << " entities with a transform alone, never given a render transform";
 	}
 
 	// With a fixed frame step an animation moves by exactly frames * step * ticks per second.
@@ -123,10 +176,6 @@ namespace SFE::EngineTests {
 		const auto spawn = [&](uint32_t mesh) {
 			const auto id = registry.takeEntity();
 			registry.addComponent<TransformComponent>(id, id);
-			// Its render transform seeded, as a spawned model's is (PropertiesSystem::spawnModel). Left to the transform
-			// event of its construction alone it is now and then never made: the constructor tells before the component
-			// is stored, and a worker that takes the event first finds nothing to reload. Not what this test is about.
-			registry.addComponent<TransformMatComp>(id, Math::Mat4{ 1.f });
 			auto meshComp = registry.addComponent<MeshComponent>(id);
 			meshComp->meshGraph.root().value = { kFirstMesh + mesh, 0, 0, 3, 3 };
 			// A distinct material per mesh, the way dragging a slider makes a new one every step.
