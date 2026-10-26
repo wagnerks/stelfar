@@ -20,8 +20,11 @@ target_include_directories(sfe_rhi
 )
 
 find_package(OpenGL REQUIRED)
-find_package(Vulkan REQUIRED COMPONENTS shaderc_combined)
-if(MSVC AND TARGET Vulkan::shaderc_combined)
+# Vulkan and shaderc from the Vulkan SDK when one is installed, built from source otherwise (VulkanFromSource.cmake).
+find_package(Vulkan COMPONENTS shaderc_combined)
+if(NOT Vulkan_FOUND)
+	include(${CMAKE_CURRENT_SOURCE_DIR}/VulkanFromSource.cmake)
+elseif(MSVC)
 	set_property(TARGET Vulkan::shaderc_combined PROPERTY MAP_IMPORTED_CONFIG_DEBUG Release)
 	set_property(TARGET Vulkan::shaderc_combined PROPERTY MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
 endif()
