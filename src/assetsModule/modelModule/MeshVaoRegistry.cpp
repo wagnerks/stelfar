@@ -160,6 +160,7 @@ namespace SFE {
 		data.vertexCount = static_cast<uint32_t>(mesh->vertices.size());
 		data.indexCount = static_cast<uint32_t>(mesh->indices.size());
 		data.lodCount = 1u + static_cast<uint32_t>(mesh->lodIndices.size());
+		data.oneSided = mesh->oneSided;
 		mVertexUsed = static_cast<uint32_t>(vertexEnd);
 		mIndexUsed = static_cast<uint32_t>(indexEnd);
 		if (uploadNow) {

@@ -65,9 +65,10 @@ namespace SFE::Render::RenderPasses {
 			PolygonFillMode fillMode = PolygonFillMode::Fill, bool secondPhase = false);
 	private:
 		// The fill mode is part of the key: wireframe is a second pipeline, not a state change. The
-		// RHI has no dynamic polygon mode -- Vulkan bakes it into the PSO and cannot override it.
+		// RHI has no dynamic polygon mode -- Vulkan bakes it into the PSO and cannot override it. So is whether back faces
+		// are culled (DrawGroup::oneSided).
 		Render::PipelineHandle getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,
-			Render::PolygonFillMode fillMode = Render::PolygonFillMode::Fill);
+			Render::PolygonFillMode fillMode = Render::PolygonFillMode::Fill, bool oneSided = false);
 		// The ground drawn dense near the camera (GroundMarksFrame::patch): g_buffer_ground.vs with the terrain's own
 		// fragment shader, no vertex input. None if its shaders are missing.
 		Render::PipelineHandle groundPatchPipeline(Render::PolygonFillMode fillMode);

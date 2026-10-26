@@ -36,6 +36,7 @@ namespace SFE::ModelCacheTests {
 		p.mesh.lodIndices = { { 0, 1, 2 }, { 0, 2, 1 } };
 		p.mesh.lodErrors = { 0.25f, 0.5f };
 		p.mesh.poseBounds = 3;
+		p.mesh.oneSided = vertices % 2 == 1;
 		p.material.name = name + " material";
 		p.material.fragmentShader = "shaders/" + name + ".fs";
 		p.material[DIFFUSE].path = "textures/" + name + ".png";
@@ -129,6 +130,7 @@ namespace SFE::ModelCacheTests {
 			EXPECT_EQ(a.mesh.lodIndices, b.mesh.lodIndices) << a.nodeName;
 			EXPECT_EQ(a.mesh.lodErrors, b.mesh.lodErrors) << a.nodeName;
 			EXPECT_EQ(a.mesh.poseBounds, b.mesh.poseBounds) << a.nodeName;
+			EXPECT_EQ(a.mesh.oneSided, b.mesh.oneSided) << a.nodeName;
 			EXPECT_EQ(a.material.name, b.material.name) << a.nodeName;
 			EXPECT_EQ(a.material.fragmentShader, b.material.fragmentShader) << a.nodeName;
 			EXPECT_EQ(a.material.materialTextures.size(), b.material.materialTextures.size()) << a.nodeName;

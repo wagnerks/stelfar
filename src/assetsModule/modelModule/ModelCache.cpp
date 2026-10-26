@@ -19,9 +19,9 @@ namespace AssetsModule::ModelCache {
 		using SFE::BinaryCache::Writer;
 
 		// Bump when what a model file is read into changes: ModelLoader's reading of it, weldMesh, generateTangents,
-		// buildMeshLods, or what is written here. A field added to a type written here changes its size, which the
+		// buildMeshLods, markOneSided, or what is written here. A field added to a type written here changes its size, which the
 		// file's name takes in too, so that one is caught without.
-		constexpr int kVersion = 1;
+		constexpr int kVersion = 3;
 
 		std::string fileOf(const std::string& path) {
 			const auto key = std::format("model v{} meshopt {} sizes {} {} {} {} {} {} {} | {}", kVersion, MESHOPTIMIZER_VERSION,
@@ -209,6 +209,7 @@ namespace AssetsModule::ModelCache {
 			io(a, part.mesh.lodIndices);
 			io(a, part.mesh.lodErrors);
 			io(a, part.mesh.poseBounds);
+			io(a, part.mesh.oneSided);
 			io(a, part.material);
 			io(a, part.transform);
 			io(a, part.aabb);

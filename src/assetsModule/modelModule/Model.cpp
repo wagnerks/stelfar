@@ -93,6 +93,7 @@ namespace AssetsModule {
 			// its levels already (the terrain, from its cache) keeps them, and the vertices they index.
 			if (node.value.mesh.lodIndices.empty()) {
 				SFE::weldMesh(node.value.mesh);
+				SFE::markOneSided(node.value.mesh);
 				SFE::buildMeshLods(node.value.mesh);
 			}
 			meshes.push_back(&node.value.mesh);

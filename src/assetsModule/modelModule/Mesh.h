@@ -25,6 +25,10 @@ namespace SFE {
 		// Skinned meshes of a model: 1 + the slot its pose bounds are written to (Armature::poseBoundsCount). 0 for
 		// a rigid mesh, or a skinned one without pose bounds.
 		uint32_t poseBounds = 0;
+		// Its back side is never seen (markOneSided), so it is drawn with its back faces culled: then a coarser level
+		// whose thin walls cross -- the outer sheet of a tin bucket dipping behind the inner one -- still shows the side
+		// that faces the eye, not the other sheet's inside.
+		bool oneSided = false;
 	};
 
 	using Mesh3D = Mesh<Vertex3D>;

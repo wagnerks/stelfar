@@ -23,4 +23,9 @@ namespace SFE {
 	// either kept with everything it carries -- bone weights included -- or no longer referenced, so a
 	// skinned mesh simplifies without touching the skinning. Weld first.
 	void buildMeshLods(Mesh<Vertex3D>& mesh, const MeshLodOptions& options = {});
+
+	// Sets mesh.oneSided: whether its back side is never seen. A closed surface facing out is not, in any pose. Nor is
+	// a rigid mesh of which, drawn from all round at full detail, hardly any of what is seen is back faces: a tin
+	// bucket closed but for the ends of its handle's wire. A sheet, an open box or a mesh facing in is seen from behind.
+	void markOneSided(Mesh<Vertex3D>& mesh);
 }

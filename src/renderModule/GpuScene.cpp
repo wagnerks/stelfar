@@ -521,7 +521,9 @@ namespace SFE::Render {
 			}
 			group.textures = material.materials;
 			group.textureKey = MaterialRules::textureKey(material.materials);
-			const auto key = group.vertexShader + '|' + group.fragmentShader + '|' + std::to_string(group.textureKey);
+			group.oneSided = mesh.oneSided;
+			const auto key = group.vertexShader + '|' + group.fragmentShader + '|' + std::to_string(group.textureKey)
+				+ (group.oneSided ? "|one" : "|two");
 			const auto index = groupFor(List::GBuffer, key, std::move(group));
 			// Once under every level of the chain. The levels are consecutive mesh ids, they share the draw
 			// group, and the culling keeps the one whose level matches the size on screen, so this costs a

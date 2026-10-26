@@ -636,7 +636,8 @@ void ModelLoader::finishMeshes(Loaded& loaded) {
 		}
 		mesh.aabb = SFE::FrustumModule::AABB(minAABB, maxAABB);
 
-		// Model::bindMeshes keeps levels a mesh already has.
+		// Model::bindMeshes keeps levels a mesh already has, and with them whether it is seen from one side.
+		SFE::markOneSided(mesh.mesh);
 		SFE::buildMeshLods(mesh.mesh);
 	});
 }

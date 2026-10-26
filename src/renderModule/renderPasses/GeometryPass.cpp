@@ -444,7 +444,7 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 		}
 
 		const auto pipeline = getGBufferPipeline(group.vertexShader,
-			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode);
+			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode, group.oneSided);
 		if (pipeline.id != bound.id) {
 			bound = pipeline;
 			rhi->cmdBindPipeline(cmd, pipeline);
@@ -477,10 +477,10 @@ SFE::Render::PipelineHandle GeometryPass::groundPatchPipeline(const Render::Poly
 }
 
 SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,
-	const Render::PolygonFillMode fillMode) {
+	const Render::PolygonFillMode fillMode, const bool oneSided) {
 	const std::string vs = vertexShader.empty() ? ComponentsModule::DefaultGBufferVS : vertexShader;
 	const std::string fs = fragmentShader.empty() ? ComponentsModule::DefaultGBufferFS : fragmentShader;
-	const auto key = vs + "|" + fs + (fillMode == PolygonFillMode::Line ? "|line" : "|fill");
+	const auto key = vs + "|" + fs + (fillMode == PolygonFillMode::Line ? "|line" : "|fill") + (oneSided ? "|one" : "");
 	if (const auto it = mGBufferPipelines.find(key); it != mGBufferPipelines.end()) {
 		return it->second;
 	}
@@ -501,7 +501,10 @@ SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& 
 	desc.fillMode = fillMode;
 	// The ground is a height field seen from above: wherever one of its back faces is in view, a front face of it is
 	// nearer. Left out, they are not rasterised, nor shaded for nothing where they come first.
-	if (fs == AssetsModule::kTerrainFS) {
+	// So is a mesh whose back side is never seen (Mesh::oneSided), and then where a coarser level's thin walls cross,
+	// what shows is still the side facing the eye. Its instances are taken to keep the winding: a mirroring transform
+	// would show it inside out, and nothing in the content mirrors.
+	if (fs == AssetsModule::kTerrainFS || oneSided) {
 		desc.cullMode = CullMode::Back;
 	}
 	// The foliage pre-pass (drawGBuffer): the cut into the depth alone; then the leaves shaded over it where it is

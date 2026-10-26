@@ -35,6 +35,7 @@ namespace SFE::Render {
 			std::string fragmentShader;
 			ComponentsModule::Materials textures;
 			uint64_t textureKey = 0;
+			bool oneSided = false;     // its meshes' back faces culled (Mesh::oneSided)
 			// Shadow
 			TextureHandle maskTexture; // empty: no mask, bind the default
 			bool cutout = false;       // needs the fragment shader: alpha cutout, mask or dithered opacity
