@@ -29,8 +29,8 @@ struct SfeMaterial {
     float emissiveR;        // the light it gives off, times its emissive texture; floats, as a vec3 would move it
     float emissiveG;
     float emissiveB;
-    vec4 mudWheels[4];      // the wheels that throw mud up over it: hub, radius; see MaterialComponent::mudWheels
-    vec4 mudTreads;         // how caked each one's tread is, 0..1
+    vec4 mudWheels[8];      // the wheels that throw mud up over it: hub, radius; see MaterialComponent::mudWheels
+    vec4 mudTreads[2];      // how caked each one's tread is, 0..1, four to a vec4
     vec4 mudMap;            // its mud map's low corner in the model, its first layer + 1 (0 none); see MudMapsFrame
 };
 

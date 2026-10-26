@@ -24,3 +24,7 @@ bin/cache/
 bin/compare_rooms/
 bin/p*.txt
 bin/perf_*.txt
+
+# What the runs write as they go: crash, fatal and repro logs, the hang trace.
+bin/*.log
+bin/hang.trace

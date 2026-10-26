@@ -5,6 +5,7 @@
 
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
 #include "assetsModule/modelModule/ModelLoader.h"
+#include "assetsModule/modelModule/ModelRelease.h"
 #include "componentsModule/ArmatureComponent.h"
 #include "componentsModule/MaterialComponent.h"
 #include "componentsModule/MeshComponent.h"
@@ -18,22 +19,6 @@ namespace SFE::PropertiesModule::ModelBinding {
 		std::vector<std::function<void(const std::string&)>>& reloadListeners() {
 			static std::vector<std::function<void(const std::string&)>> listeners;
 			return listeners;
-		}
-
-		// Every mesh of the tree, in the order a mesh graph is filled from it: each node, then its children.
-		void forEachMesh(const SFE::Tree<SFE::MeshObject3D>& node, const std::function<void(const SFE::MeshObject3D&)>& fn) {
-			fn(node.value);
-			for (const auto& child : node.children) {
-				forEachMesh(child, fn);
-			}
-		}
-
-		std::vector<MaterialComponent> materialsOf(const AssetsModule::Model& model) {
-			std::vector<MaterialComponent> materials;
-			forEachMesh(model.getMeshTree(), [&](const SFE::MeshObject3D& mesh) {
-				materials.push_back(SFE::ComponentsModule::fromAssetMaterial(mesh.material));
-			});
-			return materials;
 		}
 
 		bool sameTextures(const SFE::ComponentsModule::Materials& a, const SFE::ComponentsModule::Materials& b) {
@@ -90,7 +75,9 @@ namespace SFE::PropertiesModule::ModelBinding {
 		if (!modelComp) {
 			return;
 		}
-		AssetsModule::Model* model = modelComp->mPath.empty() ? nullptr : AssetsModule::ModelLoader::instance()->load(modelComp->mPath);
+		// As it is: one whose textures were let go of bound with the copies of their small levels (releaseModel), not
+		// read back by binding it; spawnModel reads them back first.
+		AssetsModule::Model* model = modelComp->mPath.empty() ? nullptr : AssetsModule::modelAsItIs(modelComp->mPath);
 		if (modelComp->getModel().meshes.empty() && model) {
 			modelComp->boneMatrices = model->getDefaultBoneMatrices();
 			modelComp->armature = model->getArmature();
@@ -100,12 +87,12 @@ namespace SFE::PropertiesModule::ModelBinding {
 			return;
 		}
 
-		// A binding again: the mesh materials as the last one left them, and as the model it was made from gave them.
+		// A binding again: the mesh materials as the last one left them, and as the model gave them at that binding.
 		std::vector<MaterialComponent> changed;
 		std::vector<MaterialComponent> given;
 		if (auto bound = registry.pinComponent<const MeshComponent>(entity); bound && bound->meshModel) {
 			changed = bound->meshMaterials;
-			given = materialsOf(*bound->meshModel);
+			given = bound->meshGiven;
 		}
 
 		auto meshComp = registry.addComponent<MeshComponent>(entity);
@@ -133,6 +120,7 @@ namespace SFE::PropertiesModule::ModelBinding {
 			});
 			meshComp->meshGraph = meshData;
 			meshComp->meshModel = model;
+			meshComp->meshGiven = meshComp->meshMaterials;
 			if (anyMesh && allGlass) {
 				materialComp->transparent = true;
 			}

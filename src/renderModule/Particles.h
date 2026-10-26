@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <array>
 #include <cstdint>
 #include <random>
@@ -9,8 +10,9 @@
 #include "rhi/RenderHardwareInterface.h"
 
 // Particles: bursts of small things let go into the scene, moved on the GPU (particles.cs) -- falling, drifting on the
-// wind, bouncing off and settling on whatever the picture shows there (its depth and normals) -- and drawn by
-// ParticlePass (chips, drops) and ParticleSpritePass (motes, sparks). Drops that stick are caught by what is given as
+// wind, bouncing off and settling on whatever the picture shows there (its depth and normals), going on through leaves
+// and grass -- and drawn by ParticlePass (chips), ParticleLiquidPass and ParticleClearLiquidPass (drops) and
+// ParticleSpritePass (motes, sparks). Drops that stick are caught by what is given as
 // a catcher (a vehicle) where they strike its shape, wherever the camera is, and told back (caught). Nothing of them
 // reaches the physics or the network: each machine lets go its own at what it sees happen.
 namespace SFE::Render::Particles {
@@ -19,8 +21,12 @@ namespace SFE::Render::Particles {
 	//   it settles where it lands and shrinks away at its end.
 	// - Mote: a soft puff (dust, steam, smoke) laid over the picture, lit by the sun and the sky, growing as it thins out.
 	// - Spark: a glowing speck giving off its own light, streaked along its way.
-	// - Drop: a blob of something wet (water, mud), drawn and settling as a chip is, but round and glossy, its face a
-	//   ball's to the light, drawn out along its way as it flies.
+	// - Drop: a blob of a liquid (water, mud), drawn as the liquid it is part of (ParticleLiquidPass): the drops near
+	//   each other run together into one body of it, clear or thick as the liquid is (`density`: what stops the light
+	//   into the G-buffer, lit as the scene is; what lets it through over the picture), smooth or in lumps as
+	//   far round as it gathers (`reach`), mirroring as a liquid's face does or dull (`rough`); in flight drawn out along
+	//   its way as far as it holds together; come to rest, spreading out over what it lies on as thin as it goes
+	//   (`settle`), those lying by each other a puddle.
 	enum class Look : uint32_t { Chip = 0, Mote = 1, Spark = 2, Drop = 3 };
 
 	// A handful of particles let go at once (emit).
@@ -45,6 +51,13 @@ namespace SFE::Render::Particles {
 		float bounce = 0.3f;                  // what it keeps of its speed into a surface it hits
 		float floor = -1e30f;                 // it is gone below this height: a lake's surface for a splash
 		float stick = 0.f;                    // a drop's: how much of it sticks to a catcher it strikes, 0 none (water) to 1 (mud)
+		float density = 5.f;                  // a drop's: how much of the light through it its liquid stops, of it a metre
+		float reach = 2.f;                    // and how far round it gathers with others, of its radius: far, smoothly into one body; just past it, in lumps
+		float rough = 0.f;                    // and how rough its face is: 0 a mirror (water), toward 1 dull
+		float settle = 0.1f;                  // and how thick it spreads out to lying, of its size: water thin, mud thicker
+		// Its colour that of what the picture shows at this point instead, as much darker as `shade` makes it, where it
+		// shows it there and not something before it (particles.cs): the ground a wheel threw it up from.
+		std::optional<Math::Vec3> colourOf;
 	};
 
 	// Any thread: `burst` let go at the next frame. More than a frame takes (kMaxSpawn) wait for the next ones.
@@ -87,8 +100,11 @@ namespace SFE::Render::Particles {
 		float colour[4]{};  // rgb albedo or light, a opacity (a drop's: how much of it sticks, Burst::stick)
 		float shape[4]{};   // x size, y grow, z look, w a random number of its own in [0, 1)
 		float motion[4]{};  // x gravity, y drag, z bounce, w floor
+		float liquid[4]{};  // a drop's: x density, y reach, z rough, w settle
+		float lying[4]{};   // a drop come to rest (particles.cs): xyz which way what it lies on faces, w its age then; let go
+		                    // to take its colour from the picture (Burst::colourOf): xyz where, w minus the share of it it is
 	};
-	static_assert(sizeof(GpuParticle) == 80);
+	static_assert(sizeof(GpuParticle) == 112);
 
 	// How many live at once at most: the oldest give way to new ones past that.
 	constexpr uint32_t kCapacity = 32768;
@@ -101,6 +117,8 @@ namespace SFE::Render::Particles {
 	std::vector<GpuParticle> take(double now);
 	// Whether any of what was taken may still live at `now`: nothing to move or draw otherwise.
 	bool alive(double now);
+	// Whether any drop let go may still be in flight at `now`.
+	bool liquid(double now);
 	// The particles, ParticlePass's: what ParticleSpritePass draws too. Empty before it made them.
 	BufferHandle& buffer();
 

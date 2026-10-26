@@ -10,6 +10,10 @@ namespace SFE::ComponentsModule {
 	struct MeshComponent {
 		Graph<RenderMeshData> meshGraph;
 		std::vector<MaterialComponent> meshMaterials;
+		// What meshModel gave meshMaterials when it was bound: what a binding again tells a change made since from. Not
+		// the model's own now, whose textures are swapped in place as they are let go of and read back
+		// (AssetsModule::releaseModel).
+		std::vector<MaterialComponent> meshGiven;
 		AssetsModule::Model* meshModel = nullptr;
 
 		template<typename Fn>

@@ -37,7 +37,8 @@ namespace SFE::SystemsModule::TerrainCollider {
 	// The finer field laid where such a square is cut out: over the square and the ring of cells round it (as much of
 	// it as the cut takes, and the rest where it is the terrain's own), `per` samples to a cell from cell (x - 1, z - 1):
 	// `heights` are samples(cells, per)^2 world heights row by row along z. Null if they are not as many. Any thread.
-	// It can be given ground down to `sink` lower than the lowest of them later (setHeights), no lower.
+	// It can be given ground down to `sink` lower than the lowest of them later (setHeights), and up to as much higher
+	// than the highest, no further.
 	int samples(int cells, int per);
 	JPH::ShapeRefC fine(const Grid& grid, int x, int z, int cells, int per, const std::vector<float>& heights, float sink);
 	// Part of a field made by `fine` given anew: `heights`, `width` x `height` samples of it from its sample (u, v), row by

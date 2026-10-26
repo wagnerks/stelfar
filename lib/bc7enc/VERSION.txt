@@ -1,0 +1,2 @@
+bc7enc_rdo, https://github.com/richgel999/bc7enc_rdo at b9438627eef73a1157e84201b6fa6eb2ffd6d9f0.
+Only the BC7 (bc7enc) and BC4 (rgbcx, smaller tables) encoders are taken.

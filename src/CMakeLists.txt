@@ -60,6 +60,16 @@ add_library(miniaudio STATIC
 target_include_directories(miniaudio PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio")
 target_link_libraries(${ENGINE_NAME} PRIVATE miniaudio)
 
+# Block compression of the textures read from files (TextureHandler): bc7enc's BC7 and rgbcx's BC4, two files of
+# bc7enc_rdo. rgbcx takes its smaller table: BC4 does not use it at all.
+add_library(bc7enc STATIC
+	"${ENGINE_PATH}/lib/bc7enc/bc7enc.cpp"
+	"${ENGINE_PATH}/lib/bc7enc/rgbcx.cpp"
+)
+target_compile_definitions(bc7enc PUBLIC RGBCX_USE_SMALLER_TABLES=1)
+target_include_directories(bc7enc PUBLIC "${ENGINE_PATH}/lib/bc7enc")
+target_link_libraries(${ENGINE_NAME} PRIVATE bc7enc)
+
 # Online play over UDP (networkModule/EnetTransport). ENet is a handful of C files; its own CMakeLists builds them the
 # same way, but also sets up install rules and a shared variant the engine has no use for.
 file(GLOB ENET_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/submodules/enet/*.c")
@@ -252,7 +262,8 @@ if(SFE_BUILD_RHI_TESTS)
 	add_executable(rhi_tests ${RHI_TEST_SOURCES})
 	# Links the RHI and nothing else of the engine. The tests borrow only the header-only math types, through
 	# the same RhiTypes extension the engine uses, for their push-constant structs.
-	target_link_libraries(rhi_tests PRIVATE sfe_rhi gtest)
+	# bc7enc: the compressed levels are encoded as TextureHandler encodes them.
+	target_link_libraries(rhi_tests PRIVATE sfe_rhi gtest bc7enc)
 	target_include_directories(rhi_tests PRIVATE
 		"${ENGINE_PATH}/tests"
 		"${CMAKE_CURRENT_SOURCE_DIR}"

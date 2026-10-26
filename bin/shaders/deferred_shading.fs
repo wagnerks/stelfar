@@ -177,50 +177,7 @@ float PointLightCalculation(PointLight light, vec3 fragPosWorldSpace, vec3 Norma
     return TechniqueVogelPoint(light, layer, projCoords);
 }
 
-const float PI = 3.14159265;
-const float MAX_REFLECTION_LOD = 4.0;
-
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
-    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-float distributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    float denom = NdotH2 * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
-}
-
-float geometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
-}
-
-// f90: how far the reflectance may rise at grazing angles. 1 for anything with a normal specular level; a surface that
-// asks for less (grass, soil) keeps its grazing highlight down too instead of turning into a white sheen against the sun.
-vec3 cookTorrance(vec3 N, vec3 V, vec3 L, vec3 albedo, vec3 F0, float roughness, float metallic, vec3 radiance, float f90) {
-    vec3 H = normalize(V + L);
-    float NdotL = max(dot(N, L), 0.0);
-    float NDF = distributionGGX(N, H, roughness);
-    float G = geometrySmith(N, V, L, roughness);
-    vec3 F = F0 + (max(vec3(f90), F0) - F0) * pow(clamp(1.0 - max(dot(H, V), 0.0), 0.0, 1.0), 5.0);
-    vec3 specular = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.0) * NdotL, 0.001);
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    return (kD * albedo / PI + specular) * radiance * NdotL;
-}
+#include "sfe_pbr.glsl"
 
 vec2 calculateIllumination(vec3 lightDir, vec3 normal){
     const float illumination = -dot(normal, lightDir);
@@ -291,7 +248,7 @@ void main() {
     float specFactor = pbr.y;
     float clearcoat = pbr.z;
     const bool glint = abs(clearcoat - kSfeGlint) < 0.5 / 255.0;
-    const bool ground = abs(clearcoat - kSfeGround) < 0.5 / 255.0;
+    const bool ground = sfeIsGround(clearcoat);
     if (glint || ground) {
         clearcoat = 0.0;
     }
@@ -384,12 +341,9 @@ void main() {
     // Painted: a crease or the ground under a tent is darker in the sun too, by a share of the AO. The lamps keep theirs.
     Lo *= mix(1.0, mix(1.0, AmbientOcclusion, pc.ssaoAmount), pc.ssaoSun);
     Lo += Lpoint;
-    // Over a wide range of angles: a normal map's bumps swing the normal across the terminator, and a narrow one cut
-    // hard black blotches into a sunlit trunk.
     // A side turned away from the sun is as much out of it as one under a cast shadow: the ambient and sheen below
     // dim alike, or the back of a trunk stays brighter than the ground in its shadow. Not where light comes through.
-    const float turnedAway = translucency > 0.0 ? 0.0 : 1.0 - smoothstep(-0.35, 0.3, dot(Normal, Lsun));
-    const float sunVisible = min(shadowFactor, 1.0 - pc.shadowIntensity * turnedAway);
+    const float sunVisible = sfeSunReaching(shadowFactor, translucency > 0.0 ? 1.0 : dot(Normal, Lsun), pc.shadowIntensity);
 
     vec3 F = fresnelSchlickRoughness(max(dot(Normal, V), 0.0), F0, roughness);
     vec3 kD = (1.0 - F) * (1.0 - metallic);

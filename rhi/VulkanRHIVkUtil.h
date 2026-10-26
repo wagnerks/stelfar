@@ -24,6 +24,8 @@ namespace SFE::Render::VulkanVkUtil {
 		case TextureFormat::DEPTH_COMPONENT32F: return VK_FORMAT_D32_SFLOAT;
 		case TextureFormat::DEPTH24_STENCIL8: return VK_FORMAT_D24_UNORM_S8_UINT;
 		case TextureFormat::DEPTH32F_STENCIL8: return VK_FORMAT_D32_SFLOAT_S8_UINT;
+		case TextureFormat::BC4_UNORM: return VK_FORMAT_BC4_UNORM_BLOCK;
+		case TextureFormat::BC7_UNORM: return VK_FORMAT_BC7_UNORM_BLOCK;
 		default: return VK_FORMAT_R8G8B8A8_UNORM;
 		}
 	}

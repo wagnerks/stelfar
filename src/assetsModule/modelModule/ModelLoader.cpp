@@ -10,7 +10,9 @@
 #include "MeshUtils.h"
 #include "MeshLod.h"
 #include "MeshVaoRegistry.h"
+#include "ModelCache.h"
 #include "ModelRelease.h"
+#include "ModelText.h"
 #include "logsModule/logger.h"
 #include "assetsModule/TextureHandler.h"
 #include "componentsModule/ArmatureComponent.h"
@@ -47,6 +49,9 @@ namespace {
 	std::unordered_map<Texture*, int> gUsers;
 	std::unordered_map<const Model*, std::vector<Texture*>> gHeld;
 	std::unordered_set<const Model*> gReleased;
+	// Set on the thread loading models without their textures (loadAllReleased): how many texels across at most the
+	// copies they are drawn with meanwhile are (distantTexture).
+	thread_local int tDistantTexels = 0;
 
 	// The parts of a model, or of one being loaded, as Model::getLODs has them: those with vertices.
 	std::vector<SFE::MeshObject3D*> partsOf(Model& model) {
@@ -72,10 +77,12 @@ namespace {
 		return gReleased.contains(model);
 	}
 
-	// The textures read from files that the parts' materials name, each once, held: one more user of each -- first, so
-	// that no model let go of meanwhile takes one away -- then each one let go of read again (TextureHandler::loadTexture
-	// reads it back) and the materials pointed at them. So a model never keeps a texture let go of, whether it was
-	// itself let go of or was loading while another one was.
+	// The textures read from files that the parts' materials name, each once, held: one more user of each -- first those
+	// loaded already, so that no model let go of meanwhile takes one away -- then each one let go of read again
+	// (TextureHandler::loadTexture reads it back), or read for the first time and held too, and the materials pointed at
+	// them. So a model never keeps a texture let go of, whether it was itself let go of or was loading while another one
+	// was, and lets go of every one it read when it is let go of, a model from the cache too, whose textures are first
+	// read here.
 	std::vector<Texture*> hold(const std::vector<SFE::MeshObject3D*>& parts) {
 		std::vector<Texture*> textures;
 		for (const auto* part : parts) {
@@ -92,14 +99,34 @@ namespace {
 				++gUsers[texture];
 			}
 		}
+		const auto* none = &TextureHandler::instance()->mDefaultTex;
 		for (auto* part : parts) {
 			for (auto& [type, slot] : part->material.materialTextures) {
-				if (!slot.path.empty()) {
-					slot.texture = TextureHandler::loadTexture(slot.path)->texture;
+				if (slot.path.empty()) {
+					continue;
+				}
+				auto* texture = TextureHandler::loadTexture(slot.path, false, TextureStorage::Compressed);
+				slot.texture = texture->texture;
+				if (texture != none && std::find(textures.begin(), textures.end(), texture) == textures.end()) {
+					std::lock_guard lock(gResidencyMutex);
+					++gUsers[texture];
+					textures.push_back(texture);
 				}
 			}
 		}
 		return textures;
+	}
+
+	// The parts' materials pointed at copies of their textures with only the levels `most` texels across or smaller
+	// (distantTexture), which are never let go of: what a model whose own were let go of is drawn with.
+	void pointAtDistant(const std::vector<SFE::MeshObject3D*>& parts, const int most) {
+		for (auto* part : parts) {
+			for (auto& [type, slot] : part->material.materialTextures) {
+				if (!slot.path.empty()) {
+					slot.texture = distantTexture(slot.path, most)->texture;
+				}
+			}
+		}
 	}
 
 	// A model whose textures were held (hold): their user, till releaseModel lets go of them.
@@ -107,6 +134,28 @@ namespace {
 		std::lock_guard lock(gResidencyMutex);
 		gReleased.erase(&model);
 		gHeld[&model] = std::move(textures);
+	}
+
+	// A model published without its textures (loadAllReleased): as releaseModel leaves one, so that its next load reads
+	// them. Those put on the device as it was read from its file rather than its cache, which no counted model uses, let
+	// go of again.
+	void uncounted(Model& model) {
+		std::vector<Texture*> textures;
+		for (const auto* part : partsOf(model)) {
+			for (const auto& [type, slot] : part->material.materialTextures) {
+				auto* texture = slot.path.empty() ? nullptr : AssetsManager::instance()->getAsset<Texture>(slot.path);
+				if (texture && std::find(textures.begin(), textures.end(), texture) == textures.end()) {
+					textures.push_back(texture);
+				}
+			}
+		}
+		std::lock_guard lock(gResidencyMutex);
+		gReleased.insert(&model);
+		for (auto* texture : textures) {
+			if (gUsers[texture] <= 0) {
+				releaseTexture(*texture);
+			}
+		}
 	}
 }
 
@@ -305,6 +354,30 @@ namespace {
 		}
 		return scene;
 	}
+
+	// Where the files read() looks at on this thread go while it reads a model for its cache (fileThere).
+	thread_local std::vector<ModelCache::Source>* tSources = nullptr;
+
+	// Whether a file is there; written down for the model's cache while one is being read (tSources).
+	bool fileThere(const std::string& path) {
+		if (tSources) {
+			tSources->push_back(ModelCache::source(path));
+		}
+		return SFE::FileSystem::isFileExists(path);
+	}
+
+	// Every texture file the parts' materials name, to decode ahead, side by side: publish's hold reads them.
+	std::vector<std::string> materialFiles(SFE::Tree<SFE::MeshObject3D>& meshes) {
+		std::vector<std::string> files;
+		for (const auto* part : partsOf(meshes)) {
+			for (const auto& [type, slot] : part->material.materialTextures) {
+				if (!slot.path.empty()) {
+					files.push_back(slot.path);
+				}
+			}
+		}
+		return files;
+	}
 }
 
 AssetsModule::Model* ModelLoader::load(const std::string& path) {
@@ -351,20 +424,48 @@ AssetsModule::Model* ModelLoader::load(const std::string& path) {
 		return asset;
 	}
 
-	Assimp::Importer import;
-	const aiScene* scene = readScene(import, path);
 	// Its textures decoded side by side first, as loadAll does: a character's are several large ones, and one after
-	// another they were most of its load.
+	// another they were most of its load. Kept till it is published, whose hold reads those a cached one names.
+	TextureHandler::Predecoded ahead;
 	Loaded loaded;
 	{
-		TextureHandler::Predecoded ahead;
+		SFE::LoadTrace::Step cached("model cache");
+		loaded.ok = ModelCache::read(path, loaded.meshes, loaded.armature, loaded.animations);
+	}
+	if (loaded.ok) {
+		SFE::LoadTrace::Step decoding("textures");
+		ahead = TextureHandler::predecode(materialFiles(loaded.meshes));
+	}
+	else {
+		loaded = Loaded{};
+		std::vector<ModelCache::Source> sources;
+		Assimp::Importer import;
+		ModelCache::watch(import, sources);
+		const aiScene* scene = nullptr;
+		{
+			SFE::LoadTrace::Step files("model files");
+			scene = readScene(import, path);
+		}
 		if (scene) {
 			SFE::LoadTrace::Step decoding("textures");
 			ahead = TextureHandler::predecode(textureFiles(scene, path));
 		}
-		loaded = read(path, scene);
+		{
+			SFE::LoadTrace::Step parts("model parts");
+			tSources = &sources;
+			loaded = read(path, scene);
+			tSources = nullptr;
+		}
+		{
+			SFE::LoadTrace::Step levels("model levels");
+			finishMeshes(loaded);
+		}
+		if (loaded.ok) {
+			SFE::LoadTrace::Step cached("model cache");
+			ModelCache::write(path, loaded.meshes, loaded.armature, loaded.animations, sources);
+		}
 	}
-	finishMeshes(loaded);
+	SFE::LoadTrace::Step upload("model upload");
 	return publish(path, std::move(loaded));
 }
 
@@ -385,40 +486,80 @@ void ModelLoader::loadAll(const std::vector<std::string>& paths) {
 		return;
 	}
 
-	// Everything CPU only is done side by side: reading the files, decoding their textures, the tangents and levels
-	// of detail. What reaches the device stays on this thread.
+	// Everything CPU only is done side by side: reading the caches and the files, decoding their textures, the tangents
+	// and levels of detail. What reaches the device stays on this thread.
 	std::vector<size_t> order(pending.size());
 	std::iota(order.begin(), order.end(), size_t{ 0 });
+	std::vector<Loaded> loaded(pending.size());
+	{
+		SFE::LoadTrace::Step cached("model cache");
+		std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
+			if (!(loaded[i].ok = ModelCache::read(pending[i], loaded[i].meshes, loaded[i].armature, loaded[i].animations))) {
+				loaded[i] = Loaded{};
+			}
+		});
+	}
+	// The rest read from their files, and their caches made.
+	std::vector<char> fresh(pending.size());
+	for (size_t i = 0; i < pending.size(); ++i) {
+		fresh[i] = !loaded[i].ok;
+	}
+	std::vector<std::vector<ModelCache::Source>> sources(pending.size());
 	std::vector<std::unique_ptr<Assimp::Importer>> importers(pending.size());
 	std::vector<const aiScene*> scenes(pending.size(), nullptr);
-	std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
-		importers[i] = std::make_unique<Assimp::Importer>();
-		scenes[i] = readScene(*importers[i], pending[i]);
-	});
+	{
+		SFE::LoadTrace::Step files("model files");
+		std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
+			if (fresh[i]) {
+				importers[i] = std::make_unique<Assimp::Importer>();
+				ModelCache::watch(*importers[i], sources[i]);
+				scenes[i] = readScene(*importers[i], pending[i]);
+			}
+		});
+	}
 
 	std::vector<std::string> textures;
 	for (size_t i = 0; i < pending.size(); ++i) {
-		if (scenes[i]) {
-			auto files = textureFiles(scenes[i], pending[i]);
-			textures.insert(textures.end(), files.begin(), files.end());
-		}
+		const auto files = scenes[i] ? textureFiles(scenes[i], pending[i]) : materialFiles(loaded[i].meshes);
+		textures.insert(textures.end(), files.begin(), files.end());
 	}
-	std::vector<Loaded> loaded(pending.size());
+	// Kept till the models are published, whose hold reads those the cached ones name.
+	TextureHandler::Predecoded ahead;
 	{
-		TextureHandler::Predecoded ahead;
-		{
-			SFE::LoadTrace::Step decoding("textures");
-			SFE::LoadTrace::count("texture files", static_cast<long long>(textures.size()));
+		SFE::LoadTrace::Step decoding("textures");
+		SFE::LoadTrace::count("texture files", static_cast<long long>(textures.size()));
+		if (!tDistantTexels) {
 			ahead = TextureHandler::predecode(textures);
 		}
+	}
+	{
+		SFE::LoadTrace::Step parts("model parts");
 		for (size_t i = 0; i < pending.size(); ++i) {
-			loaded[i] = read(pending[i], scenes[i]);
-			importers[i].reset();
+			if (fresh[i]) {
+				tSources = &sources[i];
+				loaded[i] = read(pending[i], scenes[i]);
+				tSources = nullptr;
+				importers[i].reset();
+			}
 		}
 	}
-	std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
-		finishMeshes(loaded[i]);
-	});
+	{
+		SFE::LoadTrace::Step levels("model levels");
+		std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
+			if (fresh[i]) {
+				finishMeshes(loaded[i]);
+			}
+		});
+	}
+	{
+		SFE::LoadTrace::Step cached("model cache");
+		std::for_each(std::execution::par, order.begin(), order.end(), [&](const size_t i) {
+			if (fresh[i] && loaded[i].ok) {
+				ModelCache::write(pending[i], loaded[i].meshes, loaded[i].armature, loaded[i].animations, sources[i]);
+			}
+		});
+	}
+	SFE::LoadTrace::Step upload("model upload");
 	for (size_t i = 0; i < pending.size(); ++i) {
 		publish(pending[i], std::move(loaded[i]));
 	}
@@ -522,13 +663,19 @@ AssetsModule::Model* ModelLoader::reload(const std::string& path) {
 AssetsModule::Model* ModelLoader::publish(const std::string& path, Loaded&& loaded) {
 	// Its textures held before anyone can see it, and outside the lock (hold may wait for the device thread): one let
 	// go of since it was read (releaseModel) is read back first.
-	auto textures = loaded.ok ? hold(partsOf(loaded.meshes)) : std::vector<Texture*>{};
+	auto textures = loaded.ok && !tDistantTexels ? hold(partsOf(loaded.meshes)) : std::vector<Texture*>{};
+	if (loaded.ok && tDistantTexels) {
+		pointAtDistant(partsOf(loaded.meshes), tDistantTexels);
+	}
 	// Made outside the lock too: made on a worker, the model waits on the main thread to bind its meshes, and the main
 	// thread may be in here meanwhile with a model of its own (a web's veil) -- each waited on the other for good.
 	AssetsModule::Model* asset = loaded.ok
 		? AssetsManager::instance()->createAsset<Model>(path, std::move(loaded.meshes), std::move(loaded.armature), std::move(loaded.animations))
 		: nullptr;
-	if (asset) {
+	if (asset && tDistantTexels) {
+		uncounted(*asset);
+	}
+	else if (asset) {
 		counted(*asset, std::move(textures));
 	}
 	std::lock_guard lock(mtx);
@@ -537,23 +684,37 @@ AssetsModule::Model* ModelLoader::publish(const std::string& path, Loaded&& load
 	return asset;
 }
 
-void AssetsModule::releaseModel(const std::string& path) {
+Model* AssetsModule::modelAsItIs(const std::string& path) {
+	auto* model = AssetsManager::instance()->getAsset<Model>(path);
+	return model ? model : ModelLoader::instance()->load(path);
+}
+
+void AssetsModule::loadAllReleased(const std::vector<std::string>& paths, const int most) {
+	tDistantTexels = most;
+	ModelLoader::instance()->loadAll(paths);
+	tDistantTexels = 0;
+}
+
+void AssetsModule::releaseModel(const std::string& path, const int most) {
 	auto* model = AssetsManager::instance()->getAsset<Model>(path);
 	if (!model) {
 		return;
 	}
-	std::lock_guard lock(gResidencyMutex);
-	// Once, and only one counted (published here): one still being read back is let go of already.
-	const auto held = gHeld.find(model);
-	if (held == gHeld.end() || !gReleased.insert(model).second) {
-		return;
-	}
-	for (auto* texture : held->second) {
-		if (auto& users = gUsers[texture]; --users <= 0) {
-			users = 0;
-			releaseTexture(*texture);
+	{
+		std::lock_guard lock(gResidencyMutex);
+		// Once, and only one counted (published here): one still being read back is let go of already.
+		const auto held = gHeld.find(model);
+		if (held == gHeld.end() || !gReleased.insert(model).second) {
+			return;
+		}
+		for (auto* texture : held->second) {
+			if (auto& users = gUsers[texture]; --users <= 0) {
+				users = 0;
+				releaseTexture(*texture);
+			}
 		}
 	}
+	pointAtDistant(partsOf(*model), most);
 }
 
 std::tuple<SFE::Tree<SFE::MeshObject3D>, Armature> ModelLoader::loadModel(const aiScene* scene, const std::string& path) {
@@ -564,6 +725,7 @@ std::tuple<SFE::Tree<SFE::MeshObject3D>, Armature> ModelLoader::loadModel(const 
 
 	processNode(scene->mRootNode, scene, directory, std::filesystem::path(path).stem().string(), meshes, armat);
 	finalizeArmature(scene, armat);
+	AssetsModule::ModelText::add(meshes);
 	bindUnskinnedMeshes(meshes, armat);
 
 	return { meshes, armat };
@@ -735,6 +897,7 @@ void ModelLoader::finalizeArmature(const aiScene* scene, Armature& armature) {
 void ModelLoader::readMaterialData(SFE::Material& material, aiMaterial* assimpMaterial, const std::string& directory, const std::string& atlasStem, const std::string& meshName) {
 	bool diffuseHasAlpha = false;
 	bool diffuseCutoutAlpha = false;
+	material.name = assimpMaterial->GetName().C_Str();
 
 	aiString alphaMode;
 	const bool gltfPbr = assimpMaterial->Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == AI_SUCCESS;
@@ -778,10 +941,10 @@ void ModelLoader::readMaterialData(SFE::Material& material, aiMaterial* assimpMa
 				continue;
 			}
 			const std::string path = directory + "/" + name;
-			if (!SFE::FileSystem::isFileExists(path)) {
+			if (!fileThere(path)) {
 				continue;
 			}
-			auto* tex = TextureHandler::loadTexture(path);
+			auto* tex = TextureHandler::loadTexture(path, false, TextureStorage::Compressed);
 			if (tex && tex->isValid()) {
 				if (!gltfPbr && type == SFE::METALLIC && !looksLikeMetalnessMap(tex)) {
 					continue;
@@ -1142,10 +1305,10 @@ std::vector<Texture*> ModelLoader::loadMaterialTextures(aiMaterial* mat, aiTextu
 	std::vector<Texture*> textures;
 	auto* defaultTex = &TextureHandler::instance()->mDefaultTex;
 	auto tryLoad = [defaultTex](const std::string& path) -> Texture* {
-		if (path.empty() || !SFE::FileSystem::isFileExists(path)) {
+		if (path.empty() || !fileThere(path)) {
 			return nullptr;
 		}
-		auto* tex = TextureHandler::loadTexture(path);
+		auto* tex = TextureHandler::loadTexture(path, false, TextureStorage::Compressed);
 		if (tex && tex != defaultTex && tex->isValid()) {
 			return tex;
 		}

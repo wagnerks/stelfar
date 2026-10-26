@@ -39,6 +39,8 @@ namespace SFE::ComponentsModule {
 
 	struct MaterialComponent {
 		Materials materials;
+		// The model's material it was made from (SFE::Material::name), empty for one made otherwise.
+		std::string name;
 		std::string vertexShader = DefaultGBufferVS;
 		std::string fragmentShader = DefaultGBufferFS;
 		// Drawn over the lit scene, blended (GlassPass): as glass, or by a fragment shader of its own when it names one
@@ -77,9 +79,9 @@ namespace SFE::ComponentsModule {
 		// for none) and how caked its tread is (mudTreads, 0 clean to 1 wholly), from the tread inward, turning with it;
 		// the rest as its mud map has it (MudMapsFrame), the drops that struck it: the map's low corner in the model (xyz)
 		// and its first layer + 1 (w, 0 for none).
-		static constexpr size_t kMudWheels = 4;
+		static constexpr size_t kMudWheels = 8;
 		Math::Vec4 mudWheels[kMudWheels]{};
-		Math::Vec4 mudTreads{};
+		float mudTreads[kMudWheels]{};
 		Math::Vec4 mudMap{};
 		// How far a plant has gone bare, 0 not at all to 1 dead: each triangle of a cut-out surface (a leaf) is gone
 		// from its own point on the way (sfePieceKey), and the rest of it, the bark, greys.
@@ -100,6 +102,7 @@ namespace SFE::ComponentsModule {
 
 	inline MaterialComponent fromAssetMaterial(const SFE::Material& src) {
 		MaterialComponent out;
+		out.name = src.name;
 		out.transparent = src.transparent;
 		out.alphaFromMaps = src.alphaFromMaps;
 		out.alphaDither = src.alphaDither;
@@ -116,6 +119,10 @@ namespace SFE::ComponentsModule {
 		if (src.alphaCutout) {
 			out.fragmentShader = DefaultGBufferMaskedFS;
 		}
+		if (!src.fragmentShader.empty()) {
+			out.fragmentShader = src.fragmentShader;
+		}
+		out.castsShadow = src.castsShadow;
 		for (const auto& [type, tex] : src.materialTextures) {
 			if (!tex.texture) {
 				continue;

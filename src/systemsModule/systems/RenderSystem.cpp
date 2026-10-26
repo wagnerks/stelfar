@@ -168,6 +168,8 @@ namespace SFE::SystemsModule {
 				{ 35, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Vertex },
 				// The vehicles' mud maps (MudMapsFrame): what is caked on them where drops struck.
 				{ 36, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment },
+				// Each entity's look (FrameId::PieceLooks): the game's litter worn and dirtied.
+				{ 37, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex },
 			};
 			frameSetLayout = rhi->createDescriptorSetLayout(frameLayout);
 			mRenderData.frameSetLayout = frameSetLayout;
@@ -409,6 +411,28 @@ namespace SFE::SystemsModule {
 		if (fresh || written->second != maps.first.id) {
 			written->second = maps.first.id;
 			Engine::instance()->rhi()->updateDescriptorSets({ { .set = frameSet, .binding = 36, .images{ { maps.first, maps.second } } } });
+		}
+	}
+
+	void RenderSystem::updatePieceLooks() {
+		auto* rhi = Engine::instance()->rhi();
+		auto& frame = mRenderData.frame;
+		if (!frame.buffer(Render::FrameId::PieceLooks)) {
+			if (!mNoLooks) {
+				Render::BufferDesc desc;
+				desc.size = 4 * sizeof(uint32_t);
+				desc.usage = Render::BufferUsage::Storage;
+				desc.debugName = "No piece looks";
+				const uint32_t none[4] = {};
+				mNoLooks = rhi->createBuffer(desc, none);
+			}
+			frame.set(Render::FrameId::PieceLooks, { .buffer = mNoLooks });
+		}
+		const auto looks = frame.buffer(Render::FrameId::PieceLooks);
+		const auto [written, fresh] = mFrameSetLooks.try_emplace(frameSet.id, looks.id);
+		if (fresh || written->second != looks.id) {
+			written->second = looks.id;
+			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 37, .buffers{ { looks } } } });
 		}
 	}
 
@@ -939,6 +963,7 @@ namespace SFE::SystemsModule {
 		updateAreaTint();
 		updateGroundMarks();
 		updateMudMaps();
+		updatePieceLooks();
 		const auto tBegin = Clock::now();
 		profile("Area tint", tTint, tBegin);
 		info->prepareMs = ms(tFrame, tBegin);

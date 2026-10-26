@@ -150,8 +150,10 @@ namespace SFE::Render::MaterialRules {
 				mix(static_cast<uint64_t>(static_cast<int64_t>(wheel[i] * 4096.f)));
 			}
 		}
+		for (const float tread : material.mudTreads) {
+			mix(static_cast<uint64_t>(tread * 4096.f));
+		}
 		for (size_t i = 0; i < 4; ++i) {
-			mix(static_cast<uint64_t>(material.mudTreads[i] * 4096.f));
 			mix(static_cast<uint64_t>(static_cast<int64_t>(material.mudMap[i] * 4096.f)));
 		}
 		mix(static_cast<uint64_t>(material.bare * 4096.f));

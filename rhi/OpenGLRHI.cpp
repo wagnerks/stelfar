@@ -33,6 +33,8 @@ namespace SFE::Render
 	static GLint ToGLInternalFormat(TextureFormat f)
 	{
 		switch (f) {
+		case TextureFormat::BC4_UNORM: return GL_COMPRESSED_RED_RGTC1;
+		case TextureFormat::BC7_UNORM: return GL_COMPRESSED_RGBA_BPTC_UNORM;
 		case TextureFormat::R8: return GL_R8;
 		case TextureFormat::R8_SNORM: return GL_R8_SNORM;
 		case TextureFormat::R16: return GL_R16;
@@ -2240,6 +2242,17 @@ namespace SFE::Render
 
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
+		if (isBlockCompressed(t->desc.format)) {
+			const GLenum internal = static_cast<GLenum>(ToGLInternalFormat(t->desc.format));
+			const auto bytes = static_cast<GLsizei>(imageBytes(t->desc.format, w, h));
+			if (t->desc.dimension == TextureDimension::Array) {
+				glCompressedTexSubImage3D(target, static_cast<GLint>(mip), x, y, static_cast<GLint>(layer), w, h, 1, internal, bytes, data);
+			}
+			else {
+				glCompressedTexSubImage2D(target, static_cast<GLint>(mip), x, y, w, h, internal, bytes, data);
+			}
+			return;
+		}
 		if (t->desc.dimension == TextureDimension::Array) {
 			glTexSubImage3D(target, static_cast<GLint>(mip), x, y, static_cast<GLint>(layer), w, h, 1, ToGLFormat(fmt), ToGLType(fmt), data);
 			return;
@@ -2368,6 +2381,15 @@ namespace SFE::Render
 				static_cast<GLsizei>(desc.height),
 				GL_TRUE);
 		}
+		else if (desc.dimension == TextureDimension::Tex2D && isBlockCompressed(desc.format)) {
+			// Every level made at once; updateTexture writes them as blocks.
+			glTexStorage2D(target, static_cast<GLsizei>((std::max)(1u, desc.mipLevels)), static_cast<GLenum>(ToGLInternalFormat(desc.format)),
+				static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height));
+			if (data) {
+				glCompressedTexSubImage2D(target, 0, 0, 0, static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height),
+					static_cast<GLenum>(ToGLInternalFormat(desc.format)), static_cast<GLsizei>(imageBytes(desc.format, desc.width, desc.height)), data);
+			}
+		}
 		else if (desc.dimension == TextureDimension::Tex2D) {
 			glTexImage2D(target,
 				0,
@@ -2469,6 +2491,10 @@ namespace SFE::Render
 			glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 			glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 			glTexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+		}
+		if (desc.swizzle == TextureSwizzle::Grey) {
+			const GLint grey[] = { GL_RED, GL_RED, GL_RED, GL_ONE };
+			glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, grey);
 		}
 
 		glBindTexture(target, 0);

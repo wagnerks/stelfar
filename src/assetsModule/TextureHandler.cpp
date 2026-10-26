@@ -1,20 +1,29 @@
 ﻿#include "TextureHandler.h"
 
 #include <stb_image.h>
+#include <bc7enc.h>
+#include <rgbcx.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include <execution>
+#include <format>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <unordered_map>
 
 #include "AssetsManager.h"
 #include "assetsModule/modelModule/ModelRelease.h"
+#include "core/BinaryCache.h"
 #include "core/FileSystem.h"
 #include "rhi/GraphicsBackend.h"
 #include "core/Engine.h"
@@ -35,6 +44,10 @@ namespace {
 	// An image read from its file, with what the loaders learn from its pixels.
 	struct DecodedImage {
 		std::unique_ptr<unsigned char, StbFree> data; // RGBA8
+		// A compressed one's instead of `data`: every level, the first one included, in `format`.
+		std::vector<std::vector<unsigned char>> blocks;
+		SFE::Render::TextureFormat format = SFE::Render::TextureFormat::RGBA8;
+		SFE::Render::TextureSwizzle swizzle = SFE::Render::TextureSwizzle::None;
 		int width = 0;
 		int height = 0;
 		bool hasAlpha = false;
@@ -43,20 +56,39 @@ namespace {
 		// Where the RHI prepares textures on any thread, the texture itself, and no pixels any more.
 		std::unique_ptr<SFE::Render::PreparedTexture> prepared;
 
-		bool read() const { return data || prepared; }
+		bool read() const { return data || !blocks.empty() || prepared; }
 	};
 
-	// A texture loaded from a file: RGBA8 unless asked otherwise, with a full mip chain. Without the levels a
-	// distant character samples one texel of a full size texture per pixel: the armour sparkles, and TAA averages
-	// the sparkle into grey.
-	SFE::Render::TextureDesc fileTextureDesc(const int width, const int height, const SFE::Render::TextureFormat format) {
+	// A texture loaded from a file, in the image's format, with a full mip chain. Without the levels a distant
+	// character samples one texel of a full size texture per pixel: the armour sparkles, and TAA averages the sparkle
+	// into grey.
+	SFE::Render::TextureDesc fileTextureDesc(const DecodedImage& image) {
 		SFE::Render::TextureDesc desc;
-		desc.width = static_cast<uint32_t>(width);
-		desc.height = static_cast<uint32_t>(height);
-		desc.format = format;
+		desc.width = static_cast<uint32_t>(image.width);
+		desc.height = static_cast<uint32_t>(image.height);
+		desc.format = image.format;
+		desc.swizzle = image.swizzle;
 		desc.dimension = SFE::Render::TextureDimension::Tex2D;
 		desc.mipLevels = SFE::Render::mipLevelsFor(desc.width, desc.height);
 		return desc;
+	}
+
+	// Every level of the image, the first one included, as the device takes them. An RGBA8 image's chain is built into
+	// `chain`, which has to outlive them.
+	std::vector<const void*> levelsOf(const DecodedImage& image, std::vector<std::vector<unsigned char>>& chain) {
+		std::vector<const void*> levels;
+		if (!image.blocks.empty()) {
+			for (const auto& level : image.blocks) {
+				levels.push_back(level.data());
+			}
+			return levels;
+		}
+		chain = AssetsModule::TextureHandler::buildMipChain(image.data.get(), image.width, image.height);
+		levels.push_back(image.data.get());
+		for (const auto& level : chain) {
+			levels.push_back(level.data());
+		}
+		return levels;
 	}
 
 	// Repeating, trilinear and anisotropic.
@@ -79,25 +111,32 @@ namespace {
 	// RenderHardwareInterface::prepareTexture), and the pixels let go; otherwise nothing changes.
 	void prepare(DecodedImage& image, const SFE::Render::TextureDesc& desc) {
 		auto* rhi = SFE::Engine::instance()->rhi();
-		if (image.prepared || !image.data || !rhi->preparesTextures()) {
+		if (image.prepared || !image.read() || !rhi->preparesTextures()) {
 			return;
 		}
-		const auto chain = AssetsModule::TextureHandler::buildMipChain(image.data.get(), image.width, image.height);
-		std::vector<const void*> levels{ image.data.get() };
-		for (const auto& level : chain) {
-			levels.push_back(level.data());
-		}
-		if ((image.prepared = rhi->prepareTexture(desc, levels))) {
+		std::vector<std::vector<unsigned char>> chain;
+		if ((image.prepared = rhi->prepareTexture(desc, levelsOf(image, chain)))) {
 			image.data.reset();
+			image.blocks = {};
 		}
 	}
 
-	DecodedImage decodeImage(const std::string& path, const bool flip) {
+	// An image file's bytes; empty when it does not read.
+	std::string readBytes(const std::string& path) {
+		std::ifstream in(SFE::FileSystem::resolve(path), std::ios::binary | std::ios::ate);
+		std::string bytes(in ? static_cast<size_t>(in.tellg()) : 0u, '\0');
+		in.seekg(0);
+		in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+		return in ? bytes : std::string{};
+	}
+
+	DecodedImage decodePixels(const std::string& file, const bool flip) {
 		DecodedImage image;
 		int channels = 0;
 		// stb's flag for this thread only: loads run on several at once.
 		stbi_set_flip_vertically_on_load_thread(flip);
-		image.data.reset(stbi_load(SFE::FileSystem::resolve(path).string().c_str(), &image.width, &image.height, &channels, 4));
+		image.data.reset(stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(file.data()), static_cast<int>(file.size()),
+			&image.width, &image.height, &channels, 4));
 		if (!image.data) {
 			return image;
 		}
@@ -124,7 +163,143 @@ namespace {
 		return image;
 	}
 
-	// Unflipped RGBA8 images predecode read ahead, waiting for loadTexture to take them.
+	// The image and its chain block compressed, in place of its pixels: BC4 of the red when it is grey and opaque, read
+	// as grey (TextureSwizzle::Grey), BC7 otherwise. Grey allows two levels between the channels, which a grey picture
+	// saved as colour -- a JPEG above all -- has.
+	void compress(DecodedImage& image) {
+		static std::once_flag once;
+		std::call_once(once, [] {
+			bc7enc_compress_block_init();
+			rgbcx::init();
+		});
+		const size_t texels = static_cast<size_t>(image.width) * image.height;
+		bool grey = !image.hasAlpha;
+		for (size_t i = 0; grey && i < texels; ++i) {
+			const unsigned char* px = image.data.get() + i * 4;
+			grey = std::abs(px[0] - px[1]) <= 2 && std::abs(px[0] - px[2]) <= 2;
+		}
+		image.format = grey ? SFE::Render::TextureFormat::BC4_UNORM : SFE::Render::TextureFormat::BC7_UNORM;
+		image.swizzle = grey ? SFE::Render::TextureSwizzle::Grey : SFE::Render::TextureSwizzle::None;
+
+		bc7enc_compress_block_params params;
+		bc7enc_compress_block_params_init(&params);
+		// Normal maps and packed masks are data rather than colour: the error is counted in RGB, not in luma.
+		bc7enc_compress_block_params_init_linear_weights(&params);
+		std::vector<std::vector<unsigned char>> chain;
+		const auto levels = levelsOf(image, chain);
+		const size_t blockBytes = grey ? 8u : 16u;
+		image.blocks.resize(levels.size());
+		for (size_t level = 0; level < levels.size(); ++level) {
+			const int w = (std::max)(1, image.width >> level);
+			const int h = (std::max)(1, image.height >> level);
+			const int blocksWide = (w + 3) / 4;
+			auto& out = image.blocks[level];
+			out.resize(static_cast<size_t>(blocksWide) * ((h + 3) / 4) * blockBytes);
+			const auto* src = static_cast<const unsigned char*>(levels[level]);
+			std::vector<int> rows((h + 3) / 4);
+			std::iota(rows.begin(), rows.end(), 0);
+			std::for_each(std::execution::par, rows.begin(), rows.end(), [&](const int by) {
+				unsigned char pixels[16 * 4];
+				for (int bx = 0; bx < blocksWide; ++bx) {
+					for (int y = 0; y < 4; ++y) {
+						for (int x = 0; x < 4; ++x) {
+							// Past the edge of a side that is not a multiple of 4: the last texel again.
+							const int sx = (std::min)(bx * 4 + x, w - 1);
+							const int sy = (std::min)(by * 4 + y, h - 1);
+							std::memcpy(pixels + (y * 4 + x) * 4, src + (static_cast<size_t>(sy) * w + sx) * 4, 4);
+						}
+					}
+					unsigned char* block = out.data() + (static_cast<size_t>(by) * blocksWide + bx) * blockBytes;
+					if (grey) {
+						rgbcx::encode_bc4_hq(block, pixels);
+					}
+					else {
+						bc7enc_compress_block(block, pixels, &params);
+					}
+				}
+			});
+		}
+		image.data.reset();
+	}
+
+	// What the cache holds ahead of a compressed image's levels. Bump kCompressedVersion when it, the encoders or their
+	// settings change.
+	constexpr int kCompressedVersion = 1;
+	struct CompressedHeader {
+		uint32_t width;
+		uint32_t height;
+		uint8_t format;
+		uint8_t swizzle;
+		uint8_t hasAlpha;
+		uint8_t hasCutoutAlpha;
+		float fgMean;
+	};
+
+	// A compressed image as the cache keeps one, every level: false when there is none whole there.
+	bool readCached(const std::string& cached, DecodedImage& image) {
+		SFE::BinaryCache::Reader reader(cached);
+		if (!reader) {
+			return false;
+		}
+		CompressedHeader header{};
+		reader.value(header);
+		image.format = static_cast<SFE::Render::TextureFormat>(header.format);
+		image.blocks.resize(SFE::Render::mipLevelsFor(header.width, header.height));
+		bool whole = SFE::Render::isBlockCompressed(image.format);
+		for (size_t level = 0; whole && level < image.blocks.size(); ++level) {
+			reader.vector(image.blocks[level]);
+			whole = reader && image.blocks[level].size() == SFE::Render::imageBytes(image.format,
+				(std::max)(1u, header.width >> level), (std::max)(1u, header.height >> level));
+		}
+		if (!whole) {
+			image.blocks.clear();
+			return false;
+		}
+		image.width = static_cast<int>(header.width);
+		image.height = static_cast<int>(header.height);
+		image.swizzle = static_cast<SFE::Render::TextureSwizzle>(header.swizzle);
+		image.hasAlpha = header.hasAlpha != 0;
+		image.hasCutoutAlpha = header.hasCutoutAlpha != 0;
+		image.fgMean = header.fgMean;
+		return true;
+	}
+
+	void writeCached(const std::string& cached, const DecodedImage& image) {
+		SFE::BinaryCache::Writer writer(cached);
+		writer.value(CompressedHeader{ static_cast<uint32_t>(image.width), static_cast<uint32_t>(image.height),
+			static_cast<uint8_t>(image.format), static_cast<uint8_t>(image.swizzle), image.hasAlpha, image.hasCutoutAlpha, image.fgMean });
+		for (const auto& level : image.blocks) {
+			writer.vector(level);
+		}
+		writer.commit();
+	}
+
+	// An image file's bytes compressed (compress): from the cache, which knows the file by its contents, or encoded
+	// and kept there.
+	DecodedImage readCompressed(const std::string& file, const bool flip) {
+		const uint64_t key = SFE::BinaryCache::hash(file, SFE::BinaryCache::hash(std::format("texture v{} flip {}", kCompressedVersion, flip)));
+		const auto cached = SFE::BinaryCache::path("texture", key);
+		if (DecodedImage image; readCached(cached, image)) {
+			return image;
+		}
+		auto image = decodePixels(file, flip);
+		if (!image.data) {
+			return image;
+		}
+		compress(image);
+		writeCached(cached, image);
+		return image;
+	}
+
+	DecodedImage decodeImage(const std::string& path, const bool flip, const TextureStorage storage = TextureStorage::Raw) {
+		const auto file = readBytes(path);
+		if (file.empty()) {
+			return {};
+		}
+		return storage == TextureStorage::Compressed ? readCompressed(file, flip) : decodePixels(file, flip);
+	}
+
+	// Compressed images predecode read ahead, unflipped, waiting for loadTexture to take them.
 	std::mutex gPredecodedMutex;
 	std::unordered_map<std::string, DecodedImage> gPredecoded;
 
@@ -165,18 +340,15 @@ namespace {
 
 	// The whole chain, ours rather than the driver's. createTexture is given no pixels on purpose: with data it
 	// would build the levels itself, and that is the part the two backends disagree on.
-	SFE::Render::TextureHandle createWithMips(const SFE::Render::TextureDesc& desc, const unsigned char* data) {
+	SFE::Render::TextureHandle createWithLevels(const SFE::Render::TextureDesc& desc, const std::vector<const void*>& levels) {
 		auto* rhi = SFE::Engine::instance()->rhi();
 		const auto tex = rhi->createTexture(desc, nullptr);
-		if (!tex || !data) {
+		if (!tex) {
 			return tex;
 		}
-		rhi->updateTexture(tex, 0, 0, desc.width, desc.height, desc.format, data, 0);
-		const auto levels = AssetsModule::TextureHandler::buildMipChain(data, static_cast<int>(desc.width), static_cast<int>(desc.height));
-		for (size_t i = 0; i < levels.size(); ++i) {
-			const uint32_t mip = static_cast<uint32_t>(i) + 1;
+		for (uint32_t mip = 0; mip < levels.size(); ++mip) {
 			rhi->updateTexture(tex, 0, 0, (std::max)(1u, desc.width >> mip), (std::max)(1u, desc.height >> mip),
-				desc.format, levels[i].data(), mip);
+				desc.format, levels[mip], mip);
 		}
 		return tex;
 	}
@@ -186,7 +358,8 @@ namespace {
 	void putOnDevice(Texture& texture, const SFE::Render::TextureDesc& desc, DecodedImage&& image) {
 		onDevice([&texture, desc, image = std::make_shared<DecodedImage>(std::move(image))] {
 			auto* rhi = SFE::Engine::instance()->rhi();
-			texture.texture = image->prepared ? rhi->adoptTexture(std::move(image->prepared)) : createWithMips(desc, image->data.get());
+			std::vector<std::vector<unsigned char>> chain;
+			texture.texture = image->prepared ? rhi->adoptTexture(std::move(image->prepared)) : createWithLevels(desc, levelsOf(*image, chain));
 			if (!texture.sampler) {
 				texture.sampler = rhi->createSampler(fileSamplerDesc());
 			}
@@ -223,9 +396,9 @@ namespace {
 		}
 		it->second = true;
 		lock.unlock();
-		auto image = decodeImage(texture.assetPath, texture.flip);
+		auto image = decodeImage(texture.assetPath, texture.flip, texture.storage);
 		if (image.read()) {
-			const auto desc = fileTextureDesc(image.width, image.height, texture.format);
+			const auto desc = fileTextureDesc(image);
 			prepare(image, desc);
 			putOnDevice(texture, desc, std::move(image));
 		}
@@ -254,11 +427,11 @@ TextureHandler::Predecoded TextureHandler::predecode(const std::vector<std::stri
 		}
 	}
 	forEachOnWorkers(ahead.mPaths.size(), [&](const size_t i) {
-		auto image = decodeImage(ahead.mPaths[i], false);
-		if (!image.data) {
+		auto image = decodeImage(ahead.mPaths[i], false, TextureStorage::Compressed);
+		if (!image.read()) {
 			return;
 		}
-		prepare(image, fileTextureDesc(image.width, image.height, SFE::Render::TextureFormat::RGBA8));
+		prepare(image, fileTextureDesc(image));
 		std::lock_guard lock(gPredecodedMutex);
 		gPredecoded.emplace(ahead.mPaths[i], std::move(image));
 	});
@@ -270,32 +443,32 @@ Texture* TextureHandler::loadTextureArray(const std::string& name, const std::ve
 		return texture;
 	}
 	std::vector<DecodedImage> images(paths.size());
-	std::vector<std::vector<std::vector<unsigned char>>> chains(paths.size());
 	forEachOnWorkers(paths.size(), [&](const size_t i) {
-		images[i] = decodeImage(paths[i], false);
-		chains[i] = buildMipChain(images[i].data.get(), images[i].width, images[i].height);
+		images[i] = decodeImage(paths[i], false, TextureStorage::Compressed);
 	});
 	for (size_t i = 0; i < images.size(); ++i) {
-		if (!images[i].data || images[i].width != images.front().width || images[i].height != images.front().height) {
-			SFE::LogsModule::Logger::LOG_ERROR("TextureHandler::texture array %s: %s is missing or not the size of the first layer", name.c_str(), paths[i].c_str());
+		if (!images[i].read() || images[i].width != images.front().width || images[i].height != images.front().height
+			|| images[i].format != images.front().format) {
+			SFE::LogsModule::Logger::LOG_ERROR("TextureHandler::texture array %s: %s is missing or not the size or format of the first layer",
+				name.c_str(), paths[i].c_str());
 			return &TextureHandler::instance()->mDefaultTex;
 		}
 	}
 
-	auto desc = fileTextureDesc(images.front().width, images.front().height, SFE::Render::TextureFormat::RGBA8);
+	auto desc = fileTextureDesc(images.front());
 	desc.dimension = SFE::Render::TextureDimension::Array;
 	desc.depth = static_cast<uint32_t>(images.size());
 	desc.arrayLayers = desc.depth;
 	auto* texture = AssetsManager::instance()->createAsset<Texture>(name);
-	onDevice([texture, desc, images = std::make_shared<std::vector<DecodedImage>>(std::move(images)),
-		chains = std::make_shared<std::vector<std::vector<std::vector<unsigned char>>>>(std::move(chains))] {
+	onDevice([texture, desc, images = std::make_shared<std::vector<DecodedImage>>(std::move(images))] {
 		auto* rhi = SFE::Engine::instance()->rhi();
 		texture->texture = rhi->createTexture(desc, nullptr);
 		for (uint32_t layer = 0; layer < desc.depth; ++layer) {
-			rhi->updateTexture(texture->texture, 0, 0, desc.width, desc.height, desc.format, (*images)[layer].data.get(), 0, layer);
-			for (uint32_t level = 1; level < desc.mipLevels && level <= (*chains)[layer].size(); ++level) {
+			std::vector<std::vector<unsigned char>> chain;
+			const auto levels = levelsOf((*images)[layer], chain);
+			for (uint32_t level = 0; level < desc.mipLevels && level < levels.size(); ++level) {
 				rhi->updateTexture(texture->texture, 0, 0, (std::max)(1u, desc.width >> level), (std::max)(1u, desc.height >> level), desc.format,
-					(*chains)[layer][level - 1].data(), level, layer);
+					levels[level], level, layer);
 			}
 		}
 		texture->sampler = rhi->createSampler(fileSamplerDesc());
@@ -324,11 +497,11 @@ size_t TextureHandler::reloadChanged(std::string& unchanged) {
 			continue;
 		}
 		AssetsManager::stamp(*texture);
-		auto image = decodeImage(texture->assetPath, texture->flip);
-		if (!image.data) {
+		auto image = decodeImage(texture->assetPath, texture->flip, texture->storage);
+		if (!image.read()) {
 			continue;
 		}
-		if (image.width != texture->width || image.height != texture->height || texture->format != SFE::Render::TextureFormat::RGBA8) {
+		if (image.width != texture->width || image.height != texture->height || image.format != texture->format) {
 			unchanged += (unchanged.empty() ? "" : ", ") + texture->assetPath;
 			continue;
 		}
@@ -336,12 +509,11 @@ size_t TextureHandler::reloadChanged(std::string& unchanged) {
 			rhi->waitIdle();
 			waited = true;
 		}
-		const auto chain = buildMipChain(image.data.get(), image.width, image.height);
-		const auto levels = SFE::Render::mipLevelsFor(static_cast<uint32_t>(image.width), static_cast<uint32_t>(image.height));
-		rhi->updateTexture(texture->texture, 0, 0, image.width, image.height, texture->format, image.data.get(), 0);
-		for (uint32_t level = 1; level < levels && level <= chain.size(); ++level) {
+		std::vector<std::vector<unsigned char>> chain;
+		const auto levels = levelsOf(image, chain);
+		for (uint32_t level = 0; level < levels.size(); ++level) {
 			rhi->updateTexture(texture->texture, 0, 0, (std::max)(1, image.width >> level), (std::max)(1, image.height >> level),
-				texture->format, chain[level - 1].data(), level);
+				texture->format, levels[level], level);
 		}
 		texture->hasAlpha = image.hasAlpha;
 		texture->hasCutoutAlpha = image.hasCutoutAlpha;
@@ -437,14 +609,14 @@ std::vector<std::vector<unsigned char>> TextureHandler::buildMipChain(const unsi
 	return levels;
 }
 
-Texture* TextureHandler::loadTexture(const std::string& path, bool flip, SFE::Render::TextureFormat format) {
+Texture* TextureHandler::loadTexture(const std::string& path, bool flip, TextureStorage storage) {
 	if (auto* texture = AssetsManager::instance()->getAsset<Texture>(path)) {
 		readBack(*texture);
 		return texture;
 	}
 
 	DecodedImage image;
-	if (!flip && format == SFE::Render::TextureFormat::RGBA8) {
+	if (!flip && storage == TextureStorage::Compressed) {
 		std::lock_guard lock(gPredecodedMutex);
 		if (const auto it = gPredecoded.find(path); it != gPredecoded.end()) {
 			image = std::move(it->second);
@@ -452,13 +624,13 @@ Texture* TextureHandler::loadTexture(const std::string& path, bool flip, SFE::Re
 		}
 	}
 	if (!image.read()) {
-		image = decodeImage(path, flip);
+		image = decodeImage(path, flip, storage);
 	}
 	if (!image.read()) {
 		SFE::LogsModule::Logger::LOG_ERROR("TextureHandler::can't load texture %s", path.c_str());
 		return &TextureHandler::instance()->mDefaultTex;
 	}
-	const auto desc = fileTextureDesc(image.width, image.height, format);
+	const auto desc = fileTextureDesc(image);
 	prepare(image, desc);
 
 	auto* texture = AssetsManager::instance()->createAsset<Texture>(path);
@@ -468,7 +640,8 @@ Texture* TextureHandler::loadTexture(const std::string& path, bool flip, SFE::Re
 	texture->width = image.width;
 	texture->height = image.height;
 	texture->flip = flip;
-	texture->format = format;
+	texture->storage = storage;
+	texture->format = image.format;
 	putOnDevice(*texture, desc, std::move(image));
 	return texture;
 }
@@ -485,4 +658,45 @@ void AssetsModule::releaseTexture(Texture& texture) {
 	SFE::Engine::instance()->rhi()->destroyTexture(texture.texture);
 	texture.texture = {};
 	gReleased.emplace(&texture, false);
+}
+
+Texture* AssetsModule::distantTexture(const std::string& path, const int most) {
+	const auto name = std::format("{}@{}", path, most);
+	if (auto* texture = AssetsManager::instance()->getAsset<Texture>(name)) {
+		return texture;
+	}
+	// Kept in the cache by the file's size and time, as ModelCache knows a model's files, rather than by its contents:
+	// knowing those would read the whole image, the very thing a copy of its small levels saves.
+	const auto file = SFE::FileSystem::resolve(path);
+	std::error_code error;
+	const auto stamp = std::format("distant texture v{} {} {} {} {}", kCompressedVersion, file.string(), std::filesystem::file_size(file, error),
+		std::filesystem::last_write_time(file, error).time_since_epoch().count(), most);
+	const auto cached = SFE::BinaryCache::path("texture", SFE::BinaryCache::hash(stamp));
+	DecodedImage image;
+	if (!readCached(cached, image)) {
+		image = decodeImage(path, false, TextureStorage::Compressed);
+		if (image.blocks.empty()) {
+			SFE::LogsModule::Logger::LOG_ERROR("distantTexture: can't load texture %s", path.c_str());
+			return &TextureHandler::instance()->mDefaultTex;
+		}
+		// The levels wider or higher than `most` left out: the next one down is the first.
+		size_t skip = 0;
+		while (skip + 1 < image.blocks.size() && (std::max)(image.width >> skip, image.height >> skip) > most) {
+			++skip;
+		}
+		image.blocks.erase(image.blocks.begin(), image.blocks.begin() + static_cast<std::ptrdiff_t>(skip));
+		image.width = (std::max)(1, image.width >> skip);
+		image.height = (std::max)(1, image.height >> skip);
+		writeCached(cached, image);
+	}
+	const auto desc = fileTextureDesc(image);
+	prepare(image, desc);
+	auto* texture = AssetsManager::instance()->createAsset<Texture>(name);
+	texture->hasAlpha = image.hasAlpha;
+	texture->hasCutoutAlpha = image.hasCutoutAlpha;
+	texture->fgMean = image.fgMean;
+	texture->format = image.format;
+	// No width: not one read from a file as it is, so neither releaseTexture nor reloadChanged takes it.
+	putOnDevice(*texture, desc, std::move(image));
+	return texture;
 }

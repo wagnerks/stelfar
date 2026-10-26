@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <thread>
 
 #include "core/FileSystem.h"
 
@@ -25,13 +26,16 @@ namespace SFE::BinaryCache {
 		return file.string();
 	}
 
-	Writer::Writer(std::string path) : mPath(std::move(path)), mOut(mPath + ".tmp", std::ios::binary | std::ios::trunc) {}
+	// The temporary file is this thread's own: two threads building the same file at once would otherwise write into one.
+	Writer::Writer(std::string path) : mPath(std::move(path)),
+		mTemp(mPath + "." + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + ".tmp"),
+		mOut(mTemp, std::ios::binary | std::ios::trunc) {}
 
 	Writer::~Writer() {
 		if (!mCommitted) {
 			mOut.close();
 			std::error_code ec;
-			std::filesystem::remove(mPath + ".tmp", ec);
+			std::filesystem::remove(mTemp, ec);
 		}
 	}
 
@@ -41,7 +45,7 @@ namespace SFE::BinaryCache {
 			return false;
 		}
 		std::error_code ec;
-		std::filesystem::rename(mPath + ".tmp", mPath, ec);
+		std::filesystem::rename(mTemp, mPath, ec);
 		mCommitted = !ec;
 		return mCommitted;
 	}

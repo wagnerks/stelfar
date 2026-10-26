@@ -426,6 +426,8 @@ namespace SFE::SystemsModule {
 		void updateAreaTint();
 		void updateGroundMarks();
 		void updateMudMaps();
+		// The entities' looks the game put (FrameId::PieceLooks), or none, put there for the passes after.
+		void updatePieceLooks();
 		void createGpuFrameResources(uint32_t slot);
 		void createSceneBuffers(size_t capacity);
 		// `previousToo` also as last frame's, for an entity that has no last frame: no motion on its first one.
@@ -458,6 +460,8 @@ namespace SFE::SystemsModule {
 		std::unordered_map<uint32_t, uint32_t> mFrameSetTint; // frame set id -> the tint map written to it
 		std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> mFrameSetMarks; // frame set id -> the marks map and heights written to it
 		std::unordered_map<uint32_t, uint32_t> mFrameSetMud; // frame set id -> the mud maps written to it
+		std::unordered_map<uint32_t, uint32_t> mFrameSetLooks; // frame set id -> the looks buffer written to it
+		Render::BufferHandle mNoLooks{}; // one look of nothing, while the game puts none
 
 		// Scene data lives on the GPU in one buffer each, indexed by entity id. Only entities that changed
 		// since the last frame are uploaded, through the backend's queued upload path.

@@ -4,8 +4,10 @@
 // Every particle a step on (ParticlePass): those let go this frame copied in where the oldest were, the rest aged,
 // pulled by gravity, carried by the wind, and bounced off what the picture shows where they get to -- its depth and
 // its normals, so anything drawn is ground to them, and nothing out of the picture is. A chip that comes to rest on
-// something flat enough stays there, still, while it lives. A drop that sticks striking a catcher's shape (a vehicle,
-// Particles::shape) is caught there, out of the picture or in it: gone, and told back (SfeCaught).
+// something flat enough stays there, still, while it lives; a drop that sticks (mud) stays where it strikes, as steep
+// as what it strikes is; either lies there while what it lies on is there, falling on once it is gone. A drop that
+// sticks striking a catcher's shape (a vehicle, Particles::shape) is caught there, out of the picture or in it: gone,
+// and told back (SfeCaught).
 layout(local_size_x = 64) in;
 
 layout(SFE_SET(0, 1), std430) buffer SfeParticles {
@@ -19,6 +21,8 @@ layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
 } matrices;
 layout(SFE_SET(0, 6)) uniform sampler2D sceneDepth; // the G-buffer's
 layout(SFE_SET(0, 7)) uniform sampler2D gNormal;
+layout(SFE_SET(0, 9)) uniform sampler2D gAlbedo;
+layout(SFE_SET(0, 10)) uniform sampler2D gMaterial;
 // The catchers (Particles::GpuCatcher): the world into each one's frame, its low corner and cells' metres (w), its
 // cells across and where its shape starts in `shapes` (w); a bit a cell, x fastest, then z, then y.
 struct SfeCatcher {
@@ -58,6 +62,24 @@ const float kSlide = 0.8;
 // How far behind what the picture shows a particle may be and still be taken for in it, metres, besides its step: any
 // further, it is behind it, not in it.
 const float kThickness = 0.3;
+// How near what the picture shows must be to where a particle takes its colour from to be taken for it, metres.
+const float kShownNear = 0.15;
+// How much further than a particle lying on something the picture must show what is behind it for what it lay on to be
+// taken for gone from under it, metres.
+const float kGone = 0.1;
+
+// How much further than `point` what the picture shows there is, metres, more than any reach where it shows nothing (the
+// sky); `seen`, whether the picture shows where it is at all.
+float sfeShownBeyond(vec3 point, vec3 eye, out bool seen) {
+    vec4 clip = matrices.PV * vec4(point, 1.0);
+    vec2 uv = clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5;
+    seen = clip.w > 0.05 && all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)));
+    if (!seen) {
+        return 0.0;
+    }
+    vec3 shown = sfeScenePosition(sceneDepth, uv, matrices.invProjection, matrices.invView);
+    return shown == vec3(0.0) ? 1e9 : distance(shown, eye) - distance(point, eye);
+}
 
 // Whether going from `from` to `to` strikes catcher `c`'s shape, and where in its frame first: tried every half a
 // cell along the way, so a fast drop does not go through a thin wall.
@@ -94,7 +116,21 @@ void main() {
     }
     uint fresh = (i + capacity - pc.start) % capacity;
     if (fresh < pc.count) {
-        particles[i] = spawned[fresh];
+        SfeParticle p = spawned[fresh];
+        // Of the colour of the ground where it was told to take it from (Burst::colourOf), if the picture shows the ground
+        // there and not something before it (a blade of grass).
+        if (p.lying.w < 0.0) {
+            vec4 clip = matrices.PV * vec4(p.lying.xyz, 1.0);
+            vec2 uv = clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5;
+            if (clip.w > 0.05 && all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+                vec3 shown = sfeScenePosition(sceneDepth, uv, matrices.invProjection, matrices.invView);
+                if (shown != vec3(0.0) && distance(shown, p.lying.xyz) < kShownNear && sfeIsGround(textureLod(gMaterial, uv, 0.0).z)) {
+                    p.colour.rgb = textureLod(gAlbedo, uv, 0.0).rgb * -p.lying.w;
+                }
+            }
+            p.lying = vec4(0.0);
+        }
+        particles[i] = p;
         return;
     }
     SfeParticle p = particles[i];
@@ -108,8 +144,9 @@ void main() {
         return;
     }
 
+    bool lies = dot(p.lying.xyz, p.lying.xyz) > 0.0;
     vec3 wind = vec3(matrices.wind.x, 0.0, matrices.wind.z) * matrices.wind.y * pc.windSpeed;
-    vec3 v = p.velLife.xyz + (vec3(0.0, -9.81 * p.motion.x, 0.0) + p.motion.y * (wind - p.velLife.xyz)) * pc.dt;
+    vec3 v = lies ? vec3(0.0) : p.velLife.xyz + (vec3(0.0, -9.81 * p.motion.x, 0.0) + p.motion.y * (wind - p.velLife.xyz)) * pc.dt;
     vec3 at = p.posAge.xyz + v * pc.dt;
     if (sfeParticleIs(p, kSfeParticleDrop) && p.colour.a > 0.0) {
         for (uint c = 0u; c < pc.catchers; ++c) {
@@ -132,27 +169,56 @@ void main() {
         particles[i] = p;
         return;
     }
+    vec3 eye = matrices.invView[3].xyz;
+    // Lying on something, while the picture shows it there, or anything before it: once it shows what is further
+    // behind, what it lay on has gone on (a wheel rolled away, someone walked off), and it falls on from there.
+    if (lies) {
+        bool seen;
+        if (sfeShownBeyond(at, eye, seen) > kGone && seen) {
+            p.lying = vec4(0.0);
+            p.velLife.xyz = vec3(0.0, -1e-3, 0.0);
+        }
+        particles[i] = p;
+        return;
+    }
 
     vec4 clip = matrices.PV * vec4(at, 1.0);
     if (clip.w > 0.05 && dot(v, v) > 0.0) {
         vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
         if (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
             vec3 surface = sfeScenePosition(sceneDepth, uv, matrices.invProjection, matrices.invView);
-            vec3 eye = matrices.invView[3].xyz;
             float radius = sfeParticleSize(p) * 0.5;
             float behind = distance(at, eye) - distance(surface, eye);
-            if (surface != vec3(0.0) && behind > -radius && behind < kThickness + length(v) * pc.dt) {
+            // A leaf or a blade of grass is too thin to stop it: it goes on through, down into the grass.
+            if (surface != vec3(0.0) && behind > -radius && behind < kThickness + length(v) * pc.dt
+                && !sfeIsFoliage(textureLod(gMaterial, uv, 0.0))) {
                 vec3 n = textureLod(gNormal, uv, 0.0).rgb;
                 n = dot(n, n) > 1e-6 ? normalize(n) : vec3(0.0, 1.0, 0.0);
-                float into = dot(v, n);
-                if (into < 0.0) {
-                    v = (v - into * n) * kSlide - into * p.motion.z * n;
+                // A drop that sticks strikes what it comes at from before it, not what it set off from (a tread going
+                // on round, where the picture shows the wheel as it is, not as it goes), and stays there.
+                if (sfeParticleIs(p, kSfeParticleDrop) && p.colour.a > 0.0) {
+                    bool seen;
+                    if (sfeShownBeyond(p.posAge.xyz, eye, seen) > radius || !seen) {
+                        v = vec3(0.0);
+                        at = surface;
+                        p.lying = vec4(n, p.posAge.w);
+                    }
                 }
-                at = p.posAge.xyz + v * pc.dt;
-                if (sfeParticleIsPiece(p) && n.y > kRestFlat && length(v) < kRestSpeed) {
-                    v = vec3(0.0);
-                    at = p.posAge.xyz;
-                    p.motion.xy = vec2(0.0);
+                else {
+                    float into = dot(v, n);
+                    if (into < 0.0) {
+                        v = (v - into * n) * kSlide - into * p.motion.z * n;
+                    }
+                    at = p.posAge.xyz + v * pc.dt;
+                    if (sfeParticleIsPiece(p) && n.y > kRestFlat && length(v) < kRestSpeed) {
+                        v = vec3(0.0);
+                        at = p.posAge.xyz;
+                        p.lying = vec4(n, p.posAge.w);
+                        // A drop lies on what it came to rest on, there to spread out over it (particle_liquid.vs).
+                        if (sfeParticleIs(p, kSfeParticleDrop)) {
+                            at = surface;
+                        }
+                    }
                 }
             }
         }

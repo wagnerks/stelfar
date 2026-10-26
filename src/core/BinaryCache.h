@@ -29,10 +29,15 @@ namespace SFE::BinaryCache {
 			value(static_cast<uint64_t>(v.size()));
 			mOut.write(static_cast<const char*>(static_cast<const void*>(v.data())), static_cast<std::streamsize>(v.size() * sizeof(T)));
 		}
+		void text(std::string_view s) {
+			value(static_cast<uint64_t>(s.size()));
+			mOut.write(s.data(), static_cast<std::streamsize>(s.size()));
+		}
 		bool commit();
 
 	private:
 		std::string mPath;
+		std::string mTemp;
 		std::ofstream mOut;
 		bool mCommitted = false;
 	};
@@ -43,6 +48,8 @@ namespace SFE::BinaryCache {
 
 		// False once anything was missing or short; whatever was read by then is not to be used.
 		explicit operator bool() const { return mOk; }
+		// What was read makes no sense to the caller: false from here on, as if it were short.
+		void fail() { mOk = false; }
 
 		template<class T> requires std::is_trivially_copyable_v<T>
 		void value(T& v) { read(&v, sizeof(T)); }
@@ -56,6 +63,16 @@ namespace SFE::BinaryCache {
 			}
 			v.resize(static_cast<size_t>(size));
 			read(v.data(), v.size() * sizeof(T));
+		}
+		void text(std::string& s) {
+			uint64_t size = 0;
+			value(size);
+			if (!mOk || size > mRemaining) {
+				mOk = false;
+				return;
+			}
+			s.resize(static_cast<size_t>(size));
+			read(s.data(), s.size());
 		}
 
 	private:

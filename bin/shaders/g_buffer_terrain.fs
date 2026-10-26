@@ -240,8 +240,9 @@ void main() {
     vec2 reachZ = vec2(0.0, matrices.marksLook.y);
     bool marked = false;
     if (marksCover.x + marksCover.y > 0.001) {
-        float depth = sfeMarks(marksAt, dpdx, dpdy, marksCover).x;
-        marked = depth > 1e-4 || sfeMarks(marksAt, dpdx + reachX, dpdy + reachZ, marksCover).x > 1e-4;
+        vec3 here = sfeMarksAll(marksAt, dpdx, dpdy, marksCover);
+        float depth = here.x;
+        marked = depth > 1e-4 || here.z > 1e-4 || sfeMarks(marksAt, dpdx + reachX, dpdy + reachZ, marksCover).x > 1e-4;
         float close = 1.0 - smoothstep(0.015, 0.03, footprint);
         // Only as much of it as the ground drawn dense near the camera has not pressed into its own shape: TexCoords1.y
         // of it there (g_buffer_ground.vs), none on the terrain's own mesh.
@@ -357,13 +358,15 @@ void main() {
     float marksDepth = 0.0;
     float marksChurn = 0.0;
     float marksAround = 0.0;
+    float marksRaised = 0.0; // how high what the marks pressed aside is heaped up here, metres
     float churnAround = 0.0;
     float pressed = 0.0;
     vec2 marksAlong = vec2(1.0, 0.0);
     if (marked) {
-        vec2 marks = sfeMarks(marksAt, dpdx, dpdy, marksCover);
+        vec3 marks = sfeMarksAll(marksAt, dpdx, dpdy, marksCover);
         marksDepth = marks.x;
         marksChurn = marks.y;
+        marksRaised = marks.z;
         vec2 around = sfeMarks(marksAt, dpdx + reachX, dpdy + reachZ, marksCover);
         marksAround = around.x;
         churnAround = around.y;
@@ -559,7 +562,7 @@ void main() {
             detailNormal = normalize(mix(detailNormal, vec3(tilt.x, -tilt.y, 1.0), laid));
         }
         float earth = (1.0 - grassy) * inMark;
-        float rim = smoothstep(0.0, 0.01, matrices.marksLook.x * max(marksAround - marksDepth, 0.0)) * (1.0 - grassy);
+        float rim = smoothstep(0.0, 0.01, marksRaised) * (1.0 - grassy);
         // Bare earth packs down a shade darker.
         albedo *= 1.0 - 0.12 * pressed * earth * (1.0 - mud);
         float near = detail(14.0, footprint);

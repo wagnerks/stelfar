@@ -917,6 +917,9 @@ namespace SFE::Render {
 		viewInfo.subresourceRange.levelCount = mipLevels;
 		viewInfo.subresourceRange.baseArrayLayer = 0;
 		viewInfo.subresourceRange.layerCount = arrayLayers;
+		if (desc.swizzle == TextureSwizzle::Grey) {
+			viewInfo.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ONE };
+		}
 		if (vkCreateImageView(m_device, &viewInfo, nullptr, &out.view) != VK_SUCCESS) {
 			RhiLog::fatal("VulkanRHI: vkCreateImageView failed");
 		}
@@ -929,8 +932,7 @@ namespace SFE::Render {
 
 		out.layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		if (data && desc.dimension == TextureDimension::Tex2D && desc.sampleCount <= 1) {
-			const size_t pixelSize = bytesPerPixel(desc.format);
-			const size_t imageSize = static_cast<size_t>(desc.width) * desc.height * pixelSize;
+			const size_t imageSize = imageBytes(desc.format, desc.width, desc.height);
 			VmaAllocation stagingMemory = VK_NULL_HANDLE;
 			const VkBuffer staging = createStagingBuffer(imageSize, stagingMemory, data);
 			executeImmediate([&](VkCommandBuffer cmd) {
@@ -967,8 +969,11 @@ namespace SFE::Render {
 				range.levelCount = mipLevels;
 				range.layerCount = arrayLayers;
 				if (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
-					const VkClearColorValue zero{};
-					vkCmdClearColorImage(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+					// A block compressed image cannot be cleared; its levels are all written before it is read.
+					if (!isBlockCompressed(desc.format)) {
+						const VkClearColorValue zero{};
+						vkCmdClearColorImage(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+					}
 				}
 				else {
 					const VkClearDepthStencilValue zero{};
@@ -1069,8 +1074,8 @@ namespace SFE::Render {
 		createImageObjects(resource, vulkanTextureDesc(desc, true), mipLevels, arrayLayers);
 
 		// Every level in one staging buffer, one after another, and one command buffer copying them all.
-		const size_t pixelSize = bytesPerPixel(desc.format);
 		std::vector<VkBufferImageCopy> regions(levelCount);
+		std::vector<size_t> levelBytes(levelCount);
 		size_t total = 0;
 		for (uint32_t level = 0; level < levelCount; ++level) {
 			const uint32_t w = (std::max)(1u, desc.width >> level);
@@ -1081,15 +1086,16 @@ namespace SFE::Render {
 			region.imageSubresource.mipLevel = level;
 			region.imageSubresource.layerCount = 1;
 			region.imageExtent = { w, h, 1 };
-			total += static_cast<size_t>(w) * h * pixelSize;
+			levelBytes[level] = imageBytes(desc.format, w, h);
+			// A block compressed copy starts on a whole block, which the 16 bytes keep for both sizes.
+			total += (levelBytes[level] + 15u) & ~size_t{ 15 };
 		}
 		VmaAllocation stagingMemory = VK_NULL_HANDLE;
 		const VkBuffer staging = createStagingBuffer(total, stagingMemory, nullptr);
 		void* mapped = nullptr;
 		vmaMapMemory(m_allocator, stagingMemory, &mapped);
 		for (uint32_t level = 0; level < levelCount; ++level) {
-			const auto& extent = regions[level].imageExtent;
-			std::memcpy(static_cast<char*>(mapped) + regions[level].bufferOffset, levels[level], static_cast<size_t>(extent.width) * extent.height * pixelSize);
+			std::memcpy(static_cast<char*>(mapped) + regions[level].bufferOffset, levels[level], levelBytes[level]);
 		}
 		vmaFlushAllocation(m_allocator, stagingMemory, 0, total);
 		vmaUnmapMemory(m_allocator, stagingMemory);
@@ -1160,7 +1166,7 @@ namespace SFE::Render {
 		if (!texture || !data || w == 0 || h == 0) {
 			return;
 		}
-		const size_t imageSize = static_cast<size_t>(w) * h * bytesPerPixel(texture->desc.format);
+		const size_t imageSize = imageBytes(texture->desc.format, w, h);
 		if (queueTextureUpload(tex.id, x, y, w, h, mip, layer, data, imageSize)) {
 			return;
 		}

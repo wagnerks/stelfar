@@ -33,10 +33,10 @@ namespace SFE::Render {
 		float bare = 0.f;
 		float emissive[3]{}; // the light it gives off, times its EMISSIVE texture
 		float mudWheels[4 * ComponentsModule::MaterialComponent::kMudWheels]{};
-		float mudTreads[4]{};
+		float mudTreads[ComponentsModule::MaterialComponent::kMudWheels]{};
 		float mudMap[4]{};
 	};
-	static_assert(sizeof(GpuMaterial) == 224, "must match the std430 SfeMaterial");
+	static_assert(sizeof(GpuMaterial) == 304, "must match the std430 SfeMaterial");
 
 	// One entry per distinct material, keyed by MaterialRules::materialHash and counted by the instances using it.
 	// An index stays valid while it is held; a released one is reused, so editing a material (a slider drag gives

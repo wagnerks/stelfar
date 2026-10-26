@@ -79,7 +79,7 @@ namespace SFE::Render {
 		SamplerHandle sampler;
 		Math::Vec4 window; // xy the fine window's least x and z, zw the coarse one's, metres
 		Math::Vec4 size;   // x the fine window's span, y the coarse one's, z the deepest pressed, metres; w how deep grass lies flat
-		Math::Vec4 look;   // x the rims' height of the depth pressed aside within y metres; z how wet churned ground looks; w ruts' darkening per metre below their sides
+		Math::Vec4 look;   // x spare; y how far round a mark the grass lies flat and its walls are read, metres; z how wet churned ground looks; w ruts' darkening per metre below their sides
 		Math::Vec4 churn;  // xy the churn the soil starts and wholly shows at, zw the churn grass starts going and is all gone at
 		// A square of ground near the camera drawn dense (g_buffer_ground.vs), so that its marks are pressed into it as
 		// they are deep; the terrain's own mesh is put out of sight under it (sfeGroundUnderPatch). The terrain's heights,
@@ -195,6 +195,9 @@ namespace SFE::Render {
 		constexpr const char* AreaTint = "areaTint";
 		constexpr const char* GroundMarks = "groundMarks";
 		constexpr const char* MudMaps = "mudMaps";
+		// A storage buffer of each entity's look, a uvec4 by its index (g_buffer.vs's sfeLooks), put by the game (set,
+		// FrameResource::buffer): its pieces of litter worn and dirtied. Without it nothing is.
+		constexpr const char* PieceLooks = "pieceLooks";
 	}
 
 }

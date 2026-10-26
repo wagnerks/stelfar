@@ -67,6 +67,8 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(7, DescriptorType::StorageBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
+	// g_buffer.vs reads each entity's look (FrameId::PieceLooks).
+	layoutDesc.bindings.emplace_back(37, DescriptorType::StorageBuffer, ShaderStage::Vertex);
 	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
 
 	auto& pipelineDesc = mPipelineDesc;
@@ -298,6 +300,7 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		writes.push_back(std::move(albedo));
 	}
 	writes.push_back({ .set = glassSet, .binding = 7, .buffers{ { materials } } });
+	writes.push_back({ .set = glassSet, .binding = 37, .buffers{ { renderDataHandle.frame.buffer(FrameId::PieceLooks) } } });
 	// One set per frame slot: its inputs (the scene copy's transient parameters, the visible list) differ per
 	// frame, and writing a set the previous frame still binds costs a copy of it.
 	const auto slot = rhi->frameInFlight() % (std::max)(1u, rhi->framesInFlight());

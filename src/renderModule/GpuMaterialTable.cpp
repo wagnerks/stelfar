@@ -45,9 +45,9 @@ namespace SFE::Render {
 				for (size_t i = 0; i < 4; ++i) {
 					m.mudWheels[4 * w + i] = src.mudWheels[w][i];
 				}
+				m.mudTreads[w] = src.mudTreads[w];
 			}
 			for (size_t i = 0; i < 4; ++i) {
-				m.mudTreads[i] = src.mudTreads[i];
 				m.mudMap[i] = src.mudMap[i];
 			}
 			m.bare = src.bare;

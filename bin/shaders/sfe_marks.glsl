@@ -1,7 +1,7 @@
 #ifndef SFE_MARKS_GLSL
 #define SFE_MARKS_GLSL
-// The marks in the ground round the camera (GroundMarksFrame): how deep the ground is pressed and how churned up, in
-// two windows that wrap round as the camera moves on, a fine one near and a coarse one further out. Included after
+// The marks in the ground round the camera (GroundMarksFrame): how deep the ground is pressed, how churned up and how
+// high what was pressed aside is heaped up round it, in two windows that wrap round as the camera moves on, a fine one near and a coarse one further out. Included after
 // the SharedMatrices block, named `matrices`, whose marks* it reads; its pass binds the map at 34 of set 0.
 layout(SFE_SET(0, 34)) uniform sampler2DArray groundMarks;
 
@@ -28,34 +28,42 @@ float sfeMarksFloor(vec2 xz) {
     return sfeValueNoise(xz * 1.3);
 }
 
-// How deep the ground is pressed at `xz`, metres (x), and how churned up, 0..1 (y), filtered over `dx` and `dy` (the
-// metres a pixel spans, or as far round as wanted), each window as much as it stands there (`cover`, sfeMarksCover).
-// Read where the ground's unevenness puts it (sfeMarksWarp, sfeMarksFloor), the same for all that reads the marks.
-vec2 sfeMarks(vec2 xz, vec2 dx, vec2 dy, vec2 cover) {
+// How deep the ground is pressed at `xz`, metres (x), how churned up, 0..1 (y), and how high it is heaped up, metres
+// (z), filtered over `dx` and `dy` (the metres a pixel spans, or as far round as wanted), each window as much as it
+// stands there (`cover`, sfeMarksCover). Read where the ground's unevenness puts it (sfeMarksWarp, sfeMarksFloor), the
+// same for all that reads the marks.
+vec3 sfeMarksAll(vec2 xz, vec2 dx, vec2 dy, vec2 cover) {
     xz += sfeMarksWarp(xz);
-    vec2 marks = vec2(0.0);
+    vec3 marks = vec3(0.0);
     if (cover.y > 0.001 && cover.x < 0.999) {
         float span = matrices.marksSize.y;
-        marks = textureGrad(groundMarks, vec3(xz / span, 1.0), dx / span, dy / span).rg * cover.y;
+        marks = textureGrad(groundMarks, vec3(xz / span, 1.0), dx / span, dy / span).rgb * cover.y;
     }
     if (cover.x > 0.001) {
         float span = matrices.marksSize.x;
-        marks = mix(marks, textureGrad(groundMarks, vec3(xz / span, 0.0), dx / span, dy / span).rg, cover.x);
+        marks = mix(marks, textureGrad(groundMarks, vec3(xz / span, 0.0), dx / span, dy / span).rgb, cover.x);
     }
-    return vec2(marks.x * matrices.marksSize.z * (0.85 + 0.3 * sfeMarksFloor(xz)), marks.y);
+    return vec3(marks.x * matrices.marksSize.z * (0.85 + 0.3 * sfeMarksFloor(xz)), marks.y, marks.z * matrices.marksSize.z);
 }
 
-// The ground's height the marks leave at `xz`, metres: down as deep as it is pressed, and up round that by marksLook.x
-// of the depth pressed aside within marksLook.y metres, as mud is pushed up into rims. The ground slumps into what is
-// pressed in, so a mark's walls slope over about as far as they go down, not straight down; churned up, the ground is
-// loose mud and flows in further, its walls sloping over twice as far as they go down, rounded.
+// How deep and how churned up (sfeMarksAll's x and y).
+vec2 sfeMarks(vec2 xz, vec2 dx, vec2 dy, vec2 cover) {
+    return sfeMarksAll(xz, dx, dy, cover).xy;
+}
+
+// The ground's height the marks leave at `xz`, metres: down as deep as it is pressed, and up as high as what was
+// pressed aside is heaped up round it (GroundMarks::Marks::press: rims along a rut, a heap before a wheel). The ground
+// slumps into what is pressed in, so a mark's walls slope over about as far as they go down, not straight down;
+// churned up, the ground is loose mud and flows in further, its walls sloping over twice as far as they go down,
+// rounded. What was pressed aside lies as the press heaped it, already rounded, on the slumped walls' tops: smeared
+// over the slump too, a rim no wider than a wheel's half would sink back into the wall it stands on.
 float sfeMarksHeight(vec2 xz, vec2 dx, vec2 dy, vec2 cover) {
     float reach = matrices.marksLook.y;
     vec2 around = sfeMarks(xz, dx + vec2(reach, 0.0), dy + vec2(0.0, reach), cover);
     float loose = smoothstep(matrices.marksChurn.x, matrices.marksChurn.y, around.y);
     float slump = 0.015 + mix(0.8, 2.0, loose) * around.x;
     float depth = sfeMarks(xz, dx + vec2(slump, 0.0), dy + vec2(0.0, slump), cover).x;
-    return matrices.marksLook.x * max(around.x - depth, 0.0) - depth;
+    return sfeMarksAll(xz, dx, dy, cover).z - depth;
 }
 
 // Which way the marks run at `xz`, a unit vector either way along them: the way their depth, filtered over `reach`

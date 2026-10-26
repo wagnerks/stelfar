@@ -133,8 +133,11 @@ namespace SFE::SystemsModule::TerrainCollider {
 		JPH::HeightFieldShapeSettings settings(heights.data(), at, JPH::Vec3(spacing, 1.f, spacing), static_cast<JPH::uint32>(count));
 		settings.mBlockSize = kBlock;
 		settings.mBitsPerSample = kBits;
-		// A field keeps no height outside the range it is made over: given lower later, it would stay where it was.
-		settings.mMinHeightValue = *std::min_element(heights.begin(), heights.end()) - (std::max)(sink, 0.f);
+		// A field keeps no height outside the range it is made over: given lower or higher later, it would stay where it
+		// was. As much room above as below, for what is heaped up round what sinks in.
+		const auto [low, high] = std::minmax_element(heights.begin(), heights.end());
+		settings.mMinHeightValue = *low - (std::max)(sink, 0.f);
+		settings.mMaxHeightValue = *high + (std::max)(sink, 0.f);
 		const auto made = settings.Create();
 		return made.HasError() ? JPH::ShapeRefC{} : JPH::ShapeRefC(made.Get());
 	}

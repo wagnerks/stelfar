@@ -48,6 +48,11 @@ namespace SFE {
 		}
 
 		std::unordered_map<MaterialType, MaterialTexture> materialTextures;
+		// The material's name in the file it was loaded from: what a game finds a part of a model by (a lamp's glass).
+		std::string name;
+		// A fragment shader of its own (a content path), empty for the engine's own.
+		std::string fragmentShader;
+		bool castsShadow = true;
 		bool transparent = false;
 		bool alphaCutout = false;
 		bool alphaFromMaps = false;

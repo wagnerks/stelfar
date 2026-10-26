@@ -854,6 +854,11 @@ namespace SFE::PropertiesModule {
 		return spawnModelEntity(AssetsModule::ModelLoader::instance()->load(path), path.c_str(), pos, scale, false, rotate);
 	}
 
+	ecss::EntityId PropertiesSystem::spawnModel(AssetsModule::Model* model, const std::string& path, const Math::Vec3& pos, const Math::Vec3& scale,
+		const Math::Vec3& rotate) {
+		return spawnModelEntity(model, path.c_str(), pos, scale, false, rotate);
+	}
+
 	ecss::EntityId PropertiesSystem::spawnDefaultScene() {
 		return {};
 	}

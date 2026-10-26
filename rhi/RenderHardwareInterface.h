@@ -119,7 +119,13 @@ namespace SFE::Render
 		DEPTH_COMPONENT32,
 		DEPTH24_STENCIL8,
 		DEPTH32F_STENCIL8,
+		// Block compressed, 4x4 texels a block: sampled only, given level by level as blocks (imageBytes).
+		BC4_UNORM, // red alone, 8 bytes a block
+		BC7_UNORM, // RGBA, 16 bytes a block
 	};
+
+	// What a sampled texture's channels read: as stored, or its red as grey -- r, g and b all the red, alpha 1.
+	enum class TextureSwizzle : uint8_t { None, Grey };
 
 	enum class TextureUsage : uint8_t {
 		None = 0,
@@ -296,7 +302,12 @@ namespace SFE::Render
 		TextureFormat    format = TextureFormat::RGBA8;
 		TextureUsage     usage = TextureUsage::Sampled;
 		uint32_t         sampleCount = 1; // 1, 2, 4, or 8
+		TextureSwizzle   swizzle = TextureSwizzle::None;
 	};
+
+	inline bool isBlockCompressed(TextureFormat format) {
+		return format == TextureFormat::BC4_UNORM || format == TextureFormat::BC7_UNORM;
+	}
 
 	inline uint32_t bytesPerPixel(TextureFormat format) {
 		switch (format) {
@@ -321,6 +332,15 @@ namespace SFE::Render
 		}
 	}
 
+	// Bytes of one w x h image of this format, rows packed: whole 4x4 blocks for a block compressed one.
+	inline uint64_t imageBytes(TextureFormat format, uint32_t w, uint32_t h) {
+		if (isBlockCompressed(format)) {
+			const uint64_t blocks = static_cast<uint64_t>((w + 3u) / 4u) * ((h + 3u) / 4u);
+			return blocks * (format == TextureFormat::BC4_UNORM ? 8u : 16u);
+		}
+		return static_cast<uint64_t>(w) * h * bytesPerPixel(format);
+	}
+
 	// Bytes a texture of this description takes on the device, every level, layer and sample of it.
 	inline uint64_t textureBytes(const TextureDesc& desc) {
 		// An array gives its layers in depth or arrayLayers (usually both); depth also counts for a volume.
@@ -328,11 +348,11 @@ namespace SFE::Render
 			: desc.dimension == TextureDimension::Array ? (std::max)({ 1u, desc.depth, desc.arrayLayers })
 			: desc.dimension == TextureDimension::Tex3D ? (std::max)(1u, desc.depth) : 1u;
 		const uint32_t levels = desc.sampleCount > 1 ? 1u : (std::max)(1u, desc.mipLevels);
-		uint64_t texels = 0;
+		uint64_t bytes = 0;
 		for (uint32_t level = 0; level < levels; ++level) {
-			texels += static_cast<uint64_t>((std::max)(1u, desc.width >> level)) * (std::max)(1u, desc.height >> level);
+			bytes += imageBytes(desc.format, (std::max)(1u, desc.width >> level), (std::max)(1u, desc.height >> level));
 		}
-		return texels * layers * (std::max)(1u, desc.sampleCount) * bytesPerPixel(desc.format);
+		return bytes * layers * (std::max)(1u, desc.sampleCount);
 	}
 
 	// Full mip chain for a texture of this size. Both backends build the levels from level 0 when the

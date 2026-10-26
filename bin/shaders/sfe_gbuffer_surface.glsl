@@ -15,6 +15,7 @@ layout(location = 8) in vec4 vPrevClip;
 layout(location = 9) in vec3 vSurface;
 layout(location = 12) flat in float vPiece;
 layout(location = 14) in vec3 vRest;
+#include "sfe_look.glsl"
 
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
@@ -86,21 +87,14 @@ void sfeTriplanar(sampler2D albedo, sampler2D normals, float repeat, bool rotate
 // round with it, a door's swings with it.
 const float kSfeMudInward = 0.75;
 const float kSfeMudGrain = 6.0;                      // splashes a metre, and drops kSfeMudGrain * 4
-const float kSfeMudClods = 10.0;                     // clods a metre in the cake, and lumps on them kSfeMudLumps
-const float kSfeMudLumps = 30.0;
-const float kSfeMudDepth = 0.015;                    // metres the cake stands out at its thickest, for its relief
-const vec3 kSfeMud = vec3(0.085, 0.064, 0.042);     // wet mud's colour, linear: a brown, lighter than a tyre
-const vec3 kSfeMudDry = vec3(0.16, 0.13, 0.095);     // dried out where it is thin, lighter and greyer
+const float kSfeMudDepth = 0.015;                    // metres the mud stands out at its thickest, for its relief
+const vec3 kSfeMud = vec3(0.045, 0.032, 0.022);     // wet mud's colour, linear: the ground's (g_buffer_terrain.fs kWetMud)
 // A mud map's cells: as MudMapsFrame::kCell and kCells.
 const float kSfeMudCell = 0.05;
 const vec3 kSfeMudCells = vec3(56.0, 60.0, 128.0);
 
-// Noise over the model's rest space at `scale` a metre, three planes of it taken together: 0..1 round a half.
 float sfeMudNoise(float scale, int octaves) {
-    vec3 q = vRest * scale;
-    float n = (sfeFbm(q.xy, octaves) + sfeFbm(q.yz + 17.0, octaves) + sfeFbm(q.zx + 31.0, octaves)) / 3.0;
-    // Spread out again from the middle that taking three of them brings it to.
-    return clamp((n - 0.5) * 2.5 + 0.5, 0.0, 1.0);
+    return sfeRestNoise(vec3(0.0), scale, octaves);
 }
 
 // How caked the model is here by the drops that struck it, as its mud map has it (mudMap), 0 none to 1 wholly: the
@@ -123,7 +117,7 @@ float sfeMudStruck() {
 // axle, the model's x, and a little more than half a radius aside) by how caked its tread is, from the tread in; on
 // the rest as the drops that struck it caked it.
 float sfeMudThrown() {
-    for (int w = 0; w < 4; ++w) {
+    for (int w = 0; w < 8; ++w) {
         vec4 wheel = pc.mudWheels[w];
         if (wheel.w <= 0.0) {
             continue;
@@ -131,15 +125,16 @@ float sfeMudThrown() {
         vec3 off = vRest - wheel.xyz;
         float across = length(off.yz) / wheel.w;
         if (across <= 1.02 && abs(off.x) < 0.6 * wheel.w) {
-            float tread = pc.mudTreads[w];
+            float tread = pc.mudTreads[w / 4][w % 4];
             return tread > 0.0 ? smoothstep(-0.12, 0.12, across - 1.0 + kSfeMudInward * tread) : 0.0;
         }
     }
     return sfeMudStruck();
 }
 
-// The mud here: x how much of the surface it hides (0..1, a sharp edge), y how thick it is caked (0 at its edge, 1 a
-// full cake), z how high it stands, metres (its lumps). `crevice` how sunk the surface is there, 0..1. Where little was
+// The mud here: x how much of the surface it hides (0..1, a sharp edge), y how thick it lies (0 at its edge, 1 a full
+// coat), z how high it stands, metres: a liquid's, swelling smoothly up from its edge, so each splash and drop of it is
+// a rounded blob and they run together where they meet. `crevice` how sunk the surface is there, 0..1. Where little was
 // thrown, only the highest of its splashes and drops show.
 vec3 sfeMud(float crevice) {
     float thrown = sfeMudThrown();
@@ -150,20 +145,7 @@ vec3 sfeMud(float crevice) {
     float caked = splash + 1.3 * thrown - 0.75 + 0.3 * crevice * min(4.0 * thrown, 1.0);
     float cover = smoothstep(0.47, 0.53, caked);
     float thick = smoothstep(0.5, 0.9, caked);
-    float lumps = 0.6 * sfeMudNoise(kSfeMudClods, 2) + 0.4 * sfeMudNoise(kSfeMudLumps, 2);
-    return vec3(cover, thick, cover * kSfeMudDepth * (0.3 + 0.7 * thick) * (0.4 + 1.2 * lumps));
-}
-
-// `N` tilted up the slope of a height `h` (metres) over the surface: bump mapping from the screen's derivatives
-// (Mikkelsen's surface gradient), no tangents needed.
-vec3 sfeBumped(vec3 N, float h) {
-    vec3 dpx = dFdx(FragPos);
-    vec3 dpy = dFdy(FragPos);
-    vec3 r1 = cross(dpy, N);
-    vec3 r2 = cross(N, dpx);
-    float det = dot(dpx, r1);
-    vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
-    return normalize(abs(det) * N - grad);
+    return vec3(cover, thick, cover * kSfeMudDepth * smoothstep(0.47, 1.1, caked));
 }
 
 vec2 uvOf(uint bit) {
@@ -273,20 +255,35 @@ void main() {
     // little deeper in colour.
     float soaked = 1.0 - smoothstep(pc.wetBelow - 0.03, pc.wetBelow + 0.03, vSurface.y);
     linAlb = mix(linAlb, pow(linAlb, vec3(1.15)) * 0.4, soaked);
-    // Mud caked over it: wet and dark where it is thick, dried lighter at its thin edges and on its lumps' tops; standing
-    // out in lumps over the surface, whose own relief (its normal map) it buries. Worked out over the whole material once
-    // it is muddy at all, as the relief takes the neighbouring pixels' heights.
+    // Wet mud over it, the same liquid the drops that struck it are: dark, standing out in smooth blobs over the surface,
+    // whose own relief (its normal map) it buries. Worked out over the whole material once it is muddy at all, as the
+    // relief takes the neighbouring pixels' heights.
     vec3 mud = vec3(0.0);
     if (pc.mudMap.w > 0.0) {
         mud = sfeMud(1.0 - texture(texture_occlusion, uvOf(64u)).r);
         vec3 buried = normalize(mix(Nw, normalize(TBN[2]), mud.y));
         Nw = normalize(mix(Nw, sfeBumped(buried, mud.z), mud.x));
-        // How high it stands over its edge, its tallest lumps about 1.6: darker down between them.
-        float high = mud.z / kSfeMudDepth;
-        float dry = clamp(0.45 * (1.0 - mud.y) + 0.3 * (high - 1.0), 0.0, 1.0);
-        linAlb = mix(linAlb, mix(kSfeMud, kSfeMudDry, dry) * mix(0.7, 1.1, clamp(high, 0.0, 1.0)), mud.x);
+        linAlb = mix(linAlb, kSfeMud, mud.x);
     }
     float muddy = mud.x;
+    float roughness = pc.matRoughness;
+    if ((maps & 1u) != 0u) {
+        roughness = texture(texture_roughness, uvRough).g;
+    } else if ((maps & 4u) != 0u) {
+        roughness = 1.0 - texture(texture_specular1, uvSpec).r;
+    }
+    float metallic = pc.matMetallic;
+    if ((maps & 2u) != 0u) {
+        metallic = texture(texture_metallic, uvMetal).b;
+    }
+    // A piece of litter worn and dirtied (sfeLooked), over what its maps give.
+    if (vLook.x != 0u) {
+        SfeLooked looked = sfeLooked(linAlb, Nw, roughness, metallic, 1.0 - texture(texture_occlusion, uvAo).r);
+        linAlb = looked.albedo;
+        Nw = looked.normal;
+        roughness = looked.rough;
+        metallic = looked.metal;
+    }
     // A plant going bare (SfeMaterial::bare): its bark greys with it, and a leaf past its point is gone (sfeBareKeeps).
     float dead = pc.alphaCutoff > 0.0 ? 0.0 : pc.bare;
 #ifdef SFE_GBUFFER_CUTOUT
@@ -319,22 +316,12 @@ void main() {
 
     gAlbedoSpec.rgb = linAlb;
 
-    float roughness = pc.matRoughness;
-    if ((maps & 1u) != 0u) {
-        roughness = texture(texture_roughness, uvRough).g;
-    } else if ((maps & 4u) != 0u) {
-        roughness = 1.0 - texture(texture_specular1, uvSpec).r;
-    }
     roughness = mix(roughness, max(roughness, 0.62), clamp(sss, 0.0, 1.0));
     if (pc.clearcoat > 0.5) {
         roughness = 0.48;
     }
-    // Wet mud: a soft sheen, over the paint's coat; dull where it dried thin.
-    roughness = mix(roughness, mix(0.6, 0.2, mud.y), muddy);
-    float metallic = pc.matMetallic;
-    if ((maps & 2u) != 0u) {
-        metallic = texture(texture_metallic, uvMetal).b;
-    }
+    // Wet mud: glossy as a liquid's face, over the paint's coat.
+    roughness = mix(roughness, mix(0.25, 0.12, mud.y), muddy);
     metallic *= 1.0 - clamp(pc.clearcoat, 0.0, 1.0);
     if ((maps & 8u) != 0u || cutout) {
         metallic = 0.0;

@@ -12,6 +12,7 @@ namespace SFE::Render::Particles {
 		std::mt19937 gRandom{ 0x5eedu };
 		BufferHandle gBuffer;
 		double gAliveUntil = -1.0;
+		double gLiquidUntil = -1.0;
 		uint64_t gEmitted = 0;
 		// The catchers: each one's shape and its version, where it is, whether it was ever placed; what they caught.
 		struct Held {
@@ -63,6 +64,16 @@ namespace SFE::Render::Particles {
 			p.motion[1] = burst.drag;
 			p.motion[2] = burst.bounce;
 			p.motion[3] = burst.floor;
+			p.liquid[0] = burst.density;
+			p.liquid[1] = burst.reach;
+			p.liquid[2] = burst.rough;
+			p.liquid[3] = burst.settle;
+			if (burst.colourOf) {
+				p.lying[0] = burst.colourOf->x;
+				p.lying[1] = burst.colourOf->y;
+				p.lying[2] = burst.colourOf->z;
+				p.lying[3] = -(std::max)(shade, 1e-3f);
+			}
 			out.push_back(p);
 		}
 	}
@@ -89,6 +100,9 @@ namespace SFE::Render::Particles {
 		}
 		for (const auto& p : taken) {
 			gAliveUntil = (std::max)(gAliveUntil, now + static_cast<double>(p.velLife[3]) + 0.1);
+			if (p.shape[2] == static_cast<float>(Look::Drop)) {
+				gLiquidUntil = (std::max)(gLiquidUntil, now + static_cast<double>(p.velLife[3]) + 0.1);
+			}
 		}
 		return taken;
 	}
@@ -101,6 +115,11 @@ namespace SFE::Render::Particles {
 	bool alive(double now) {
 		std::lock_guard lock(gMutex);
 		return now <= gAliveUntil;
+	}
+
+	bool liquid(double now) {
+		std::lock_guard lock(gMutex);
+		return now <= gLiquidUntil;
 	}
 
 	BufferHandle& buffer() {

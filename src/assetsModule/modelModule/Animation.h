@@ -33,6 +33,8 @@ namespace AssetsModule {
         void rename(std::string name) { mName = std::move(name); }
         // A bone's keys to change -- a clip edited while the engine runs -- made empty when the clip has none for it.
         BoneAnimationKeys& keysOf(const std::string& boneName) { return mBoneAnimationInfos[boneName]; }
+        // Every animated node's keys, by its name (ModelCache writes them).
+        const std::unordered_map<std::string, BoneAnimationKeys>& keys() const { return mBoneAnimationInfos; }
 
     private:
         static void readKeys(const aiAnimation* animation, std::unordered_map<std::string, BoneAnimationKeys>& keys);

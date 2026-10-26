@@ -653,10 +653,12 @@ namespace SFE::Render {
 		// shadow faces pick their layer in the vertex shader.
 		if (!supported12.drawIndirectCount || !supported12.shaderOutputLayer || !supported11.shaderDrawParameters
 			|| !supportedFeatures.multiDrawIndirect || !supportedFeatures.drawIndirectFirstInstance
-			|| !supportedFeatures.shaderSampledImageArrayDynamicIndexing) {
-			RhiLog::fatal("VulkanRHI: drawIndirectCount, shaderOutputLayer, shaderDrawParameters, multiDrawIndirect, drawIndirectFirstInstance and shaderSampledImageArrayDynamicIndexing are required");
+			|| !supportedFeatures.shaderSampledImageArrayDynamicIndexing || !supportedFeatures.textureCompressionBC) {
+			RhiLog::fatal("VulkanRHI: drawIndirectCount, shaderOutputLayer, shaderDrawParameters, multiDrawIndirect, drawIndirectFirstInstance, shaderSampledImageArrayDynamicIndexing and textureCompressionBC are required");
 		}
 		deviceFeatures.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+		// The textures read from files are BC7 and BC4 (TextureHandler).
+		deviceFeatures.textureCompressionBC = VK_TRUE;
 
 		const char* deviceExtensions[] = {
 			VK_KHR_SWAPCHAIN_EXTENSION_NAME,

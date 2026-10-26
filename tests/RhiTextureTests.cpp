@@ -1,5 +1,9 @@
 #include "RhiTestFixture.h"
 
+#include <bc7enc.h>
+#include <rgbcx.h>
+#include <cstdlib>
+
 // Textures beyond the create-and-read-back round trip RhiResourceTests already pins. `updateTexture`
 // is the only call in the interface that writes *part* of a texture, so it carries an origin the
 // round trip never exercises: every existing upload covers the whole image, where an x/y convention
@@ -33,6 +37,31 @@ namespace SFE::Render::Tests {
 			bytes.reserve(static_cast<size_t>(w) * h * 4u);
 			for (uint32_t i = 0; i < w * h; ++i) {
 				bytes.insert(bytes.end(), { color.r, color.g, color.b, color.a });
+			}
+			return bytes;
+		}
+
+		// One w x h level of a single colour, block compressed as TextureHandler's encoders do it: every block alike.
+		std::vector<uint8_t> solidBlocks(TextureFormat format, uint32_t w, uint32_t h, const Rgba& color) {
+			static std::once_flag once;
+			std::call_once(once, [] {
+				bc7enc_compress_block_init();
+				rgbcx::init();
+			});
+			const auto texels = solid(4, 4, color);
+			uint8_t block[16];
+			if (format == TextureFormat::BC4_UNORM) {
+				rgbcx::encode_bc4_hq(block, texels.data());
+			}
+			else {
+				bc7enc_compress_block_params params;
+				bc7enc_compress_block_params_init(&params);
+				bc7enc_compress_block(block, texels.data(), &params);
+			}
+			const size_t blockBytes = format == TextureFormat::BC4_UNORM ? 8u : 16u;
+			std::vector<uint8_t> bytes;
+			for (uint64_t i = 0; i < imageBytes(format, w, h) / blockBytes; ++i) {
+				bytes.insert(bytes.end(), block, block + blockBytes);
 			}
 			return bytes;
 		}
@@ -1461,7 +1490,8 @@ namespace SFE::Render::Tests {
 	// itself gets exactly its own bytes in every level, on both backends. TextureHandler does this so that
 	// OpenGL and Vulkan sample the same texels -- their own generated chains differ, which the test above
 	// measures. Solid colours, one per level, and none of them a blend of any other pair: a level that came
-	// from the driver's filter instead of from the upload reads as a mixture and names itself.
+	// from the driver's filter instead of from the upload reads as a mixture and names itself. The same for
+	// the block compressed formats TextureHandler keeps the textures read from files in.
 	TEST_P(RhiBackendTest, UploadedMipLevelsAreTheOnesSampledBack) {
 		constexpr uint32_t kBase = 64;
 		constexpr uint32_t kLevels = 7; // 64, 32, 16, 8, 4, 2, 1
@@ -1499,38 +1529,60 @@ namespace SFE::Render::Tests {
 		const auto pipeline = rhi().createGraphicsPipeline(pipelineDesc);
 		ASSERT_TRUE(pipeline) << "pipeline creation failed";
 
-		TextureDesc desc;
-		desc.width = kBase;
-		desc.height = kBase;
-		desc.format = TextureFormat::RGBA8;
-		desc.dimension = TextureDimension::Tex2D;
-		desc.mipLevels = kLevels;
-		// No pixels here: with them a backend builds the rest of the chain, and this test is about the
-		// levels the caller writes.
-		const auto texture = rhi().createTexture(desc);
-		ASSERT_TRUE(texture);
+		// RGBA8 as the caller's own bytes. BC7 and BC4 as TextureHandler writes a compressed image's levels: each
+		// level's colour encoded by the encoders it uses, over a base no multiple of 4, whose levels end in part
+		// blocks. BC4 is red alone, read as grey (TextureSwizzle::Grey): the red in r, g and b, as an RGBA8 grey image
+		// reads. An encoder may miss a colour by a level or two; a level from the driver's filter misses by far more.
+		struct FormatCase {
+			const char* name;
+			TextureFormat format;
+			TextureSwizzle swizzle;
+			uint32_t w;
+			uint32_t h;
+			int tolerance;
+		};
+		for (const FormatCase fc : { FormatCase{ "RGBA8", TextureFormat::RGBA8, TextureSwizzle::None, kBase, kBase, 0 },
+			FormatCase{ "BC7", TextureFormat::BC7_UNORM, TextureSwizzle::None, 20, 12, 2 },
+			FormatCase{ "BC4 grey", TextureFormat::BC4_UNORM, TextureSwizzle::Grey, 20, 12, 2 } }) {
+			TextureDesc desc;
+			desc.width = fc.w;
+			desc.height = fc.h;
+			desc.format = fc.format;
+			desc.swizzle = fc.swizzle;
+			desc.dimension = TextureDimension::Tex2D;
+			desc.mipLevels = mipLevelsFor(fc.w, fc.h);
+			ASSERT_LE(desc.mipLevels, kLevels);
+			// No pixels here: with them a backend builds the rest of the chain, and this test is about the
+			// levels the caller writes.
+			const auto texture = rhi().createTexture(desc);
+			ASSERT_TRUE(texture) << fc.name;
 
-		for (uint32_t lod = 0; lod < kLevels; ++lod) {
-			const uint32_t w = (std::max)(1u, kBase >> lod);
-			const uint32_t h = (std::max)(1u, kBase >> lod);
-			const auto pixels = solid(w, h, kLevelColours[lod]);
-			rhi().updateTexture(texture, 0, 0, w, h, TextureFormat::RGBA8, pixels.data(), lod);
-		}
-
-		for (uint32_t lod = 0; lod < kLevels; ++lod) {
-			const uint32_t w = (std::max)(1u, kBase >> lod);
-			const uint32_t h = (std::max)(1u, kBase >> lod);
-			const MipImage got = readMipLevel(rhi(), pass, pipeline, layout, sampler, texture, lod, w, h);
-			ASSERT_EQ(got.rgba.size(), static_cast<size_t>(w) * h * 4u) << "level " << lod << " readback failed";
-			const Rgba& want = kLevelColours[lod];
-			for (size_t texel = 0; texel < got.rgba.size(); texel += 4) {
-				ASSERT_EQ(got.rgba[texel + 0], want.r) << "level " << lod << " texel " << texel / 4;
-				ASSERT_EQ(got.rgba[texel + 1], want.g) << "level " << lod << " texel " << texel / 4;
-				ASSERT_EQ(got.rgba[texel + 2], want.b) << "level " << lod << " texel " << texel / 4;
+			const auto colourOf = [&](const uint32_t lod) {
+				const Rgba& colour = kLevelColours[lod];
+				return fc.swizzle == TextureSwizzle::Grey ? Rgba{ colour.r, colour.r, colour.r, 255 } : colour;
+			};
+			for (uint32_t lod = 0; lod < desc.mipLevels; ++lod) {
+				const uint32_t w = (std::max)(1u, fc.w >> lod);
+				const uint32_t h = (std::max)(1u, fc.h >> lod);
+				const auto pixels = isBlockCompressed(fc.format) ? solidBlocks(fc.format, w, h, colourOf(lod)) : solid(w, h, colourOf(lod));
+				rhi().updateTexture(texture, 0, 0, w, h, fc.format, pixels.data(), lod);
 			}
+
+			for (uint32_t lod = 0; lod < desc.mipLevels; ++lod) {
+				const uint32_t w = (std::max)(1u, fc.w >> lod);
+				const uint32_t h = (std::max)(1u, fc.h >> lod);
+				const MipImage got = readMipLevel(rhi(), pass, pipeline, layout, sampler, texture, lod, w, h);
+				ASSERT_EQ(got.rgba.size(), static_cast<size_t>(w) * h * 4u) << fc.name << " level " << lod << " readback failed";
+				const Rgba want = colourOf(lod);
+				for (size_t texel = 0; texel < got.rgba.size(); texel += 4) {
+					ASSERT_LE(std::abs(got.rgba[texel + 0] - want.r), fc.tolerance) << fc.name << " level " << lod << " texel " << texel / 4;
+					ASSERT_LE(std::abs(got.rgba[texel + 1] - want.g), fc.tolerance) << fc.name << " level " << lod << " texel " << texel / 4;
+					ASSERT_LE(std::abs(got.rgba[texel + 2] - want.b), fc.tolerance) << fc.name << " level " << lod << " texel " << texel / 4;
+				}
+			}
+			rhi().destroyTexture(texture);
 		}
 
-		rhi().destroyTexture(texture);
 		rhi().destroyGraphicsPipeline(pipeline);
 		rhi().destroyDescriptorSetLayout(layout);
 		rhi().destroyRenderPass(pass);

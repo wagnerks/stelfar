@@ -128,6 +128,9 @@ bool sfeIsFoliage(vec4 material) {
 const float kSfeGlint = 1.0 / 255.0;
 // And this, the ground: shaded as it is, and known for what stains it (the area tint).
 const float kSfeGround = 3.0 / 255.0;
+bool sfeIsGround(float clearcoat) {
+    return abs(clearcoat - kSfeGround) < 0.5 / 255.0;
+}
 
 // The world position of what the scene shows at `uv`, from SceneDepthPass's copy of the depth buffer and the
 // camera's inverse matrices (the jittered ones the G-buffer was drawn with); zero where nothing was drawn. The

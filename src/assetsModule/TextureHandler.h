@@ -12,6 +12,11 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace AssetsModule {
+	// How a texture read from a file is kept on the device. Compressed takes a quarter of Raw's RGBA8 or less: BC4 of
+	// the red when the image is grey and opaque, read as grey in r, g and b, and BC7 otherwise. Encoding is slow, so
+	// the levels are kept in the cache, by the file's contents (BinaryCache).
+	enum class TextureStorage : uint8_t { Raw, Compressed };
+
 	class Texture : public Asset {
 	public:
 		Texture(const Texture& other) = delete;
@@ -32,6 +37,8 @@ namespace AssetsModule {
 		int width = 0;
 		int height = 0;
 		bool flip = false;
+		TextureStorage storage = TextureStorage::Raw;
+		// What the device holds it as.
 		SFE::Render::TextureFormat format = SFE::Render::TextureFormat::RGBA8;
 	};
 
@@ -42,9 +49,9 @@ namespace AssetsModule {
 
 		// Any thread; the texture is on the device when it returns. One that does not read is mDefaultTex, which is
 		// not isValid().
-		static Texture* loadTexture(const std::string& path, bool flip = false, SFE::Render::TextureFormat format = SFE::Render::TextureFormat::RGBA8);
-		// Image files read ahead, in parallel, for loadTexture (unflipped RGBA8) to upload without reading them again.
-		// Whatever it did not take is let go with this.
+		static Texture* loadTexture(const std::string& path, bool flip = false, TextureStorage storage = TextureStorage::Raw);
+		// Image files read ahead, in parallel, for loadTexture (unflipped, Compressed) to upload without reading them
+		// again. Whatever it did not take is let go with this.
 		class Predecoded {
 		public:
 			Predecoded() = default;
@@ -58,8 +65,8 @@ namespace AssetsModule {
 			std::vector<std::string> mPaths; // the ones read ahead here
 		};
 		[[nodiscard]] static Predecoded predecode(const std::vector<std::string>& paths);
-		// A texture array, one layer per image in order, every image the same size; unflipped RGBA8 with mips.
-		// Kept under `name`.
+		// A texture array, one layer per image in order, every image the same size and, compressed, the same format (a
+		// grey layer among colour ones is not); unflipped, with mips. Kept under `name`.
 		static Texture* loadTextureArray(const std::string& name, const std::vector<std::string>& paths);
 		// An image file's pixels on the CPU: RGBA8, rows from the top, unflipped; empty when it does not read. Any thread.
 		static std::vector<unsigned char> readPixels(const std::string& path, int& width, int& height);
