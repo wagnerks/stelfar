@@ -13,6 +13,9 @@ Microsoft.DTfW.DHL.manifest
 # cache, trusting its .hash sidecar, serves it.
 bin/shaders/vulkan/*.spv
 bin/shaders/vulkan/*.spv.hash
+# The same cache, written by rhi_tests when run from the repository's root: its cache is shaders/vulkan under where
+# it runs (RhiTestFixture.h).
+/shaders/vulkan/
 
 # compare-backends.ps1 output: rewritten by every run.
 bin/compare/

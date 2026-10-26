@@ -19,9 +19,6 @@ foreach(EXCLUDE_DIR ${EXCLUDE_DIR_1})
     list(REMOVE_ITEM SRC ${EXCLUDE_FILES})
 endforeach()
 
-list(REMOVE_ITEM SRC
-	"${CMAKE_CURRENT_SOURCE_DIR}/core/main.cpp"
-)
 list(APPEND SRC "${CMAKE_CURRENT_SOURCE_DIR}/assetsModule/modelModule/mikktspace.c")
 
 if (EDITOR)
@@ -290,7 +287,9 @@ endif()
 
 if(SFE_BUILD_ENGINE_TESTS)
 	file(GLOB ENGINE_TEST_SOURCES CONFIGURE_DEPENDS "${ENGINE_PATH}/tests/engine/*.cpp")
-	add_executable(engine_tests ${ENGINE_TEST_SOURCES})
+	# Left out of the default build: built when its target is asked for (--target engine_tests); ctest runs it once
+	# built.
+	add_executable(engine_tests EXCLUDE_FROM_ALL ${ENGINE_TEST_SOURCES})
 	target_link_libraries(engine_tests PRIVATE ${ENGINE_NAME} gtest)
 	target_include_directories(engine_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${ENGINE_PATH}/tests/engine")
 	set_target_properties(engine_tests PROPERTIES
@@ -304,4 +303,7 @@ if(SFE_BUILD_ENGINE_TESTS)
 	# Links the whole engine, so it needs the native DLLs next to it like the apps.
 	sfe_stage_app(engine_tests)
 	add_test(NAME engine_tests COMMAND engine_tests WORKING_DIRECTORY "${ENGINE_PATH}/bin")
+	# On the engine's own assets: guessed from the executable, the root would be a game's content when the engine is
+	# built inside one (FileSystem::guessContentRoot takes a "content" beside or above it first).
+	set_tests_properties(engine_tests PROPERTIES ENVIRONMENT "STELFORGE_CONTENT=${ENGINE_PATH}/bin")
 endif()
