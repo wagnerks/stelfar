@@ -32,16 +32,15 @@ layout(location = 9) out vec3 vSurface;
 layout(location = 12) flat out float vPiece;
 // Where this is on the model at rest, in its own metres: what stays put on it as it moves, such as mud thrown on it.
 layout(location = 14) out vec3 vRest;
-// The model's normal there at rest, and the entity's look: for a piece of litter how worn and dirty it is (sfeLooked).
+// The model's normal there at rest.
 layout(location = 15) out vec3 vRestNormal;
-layout(location = 13) flat out uvec4 vLook;
-// The rest of the look, silted and burnt: its second half.
-layout(location = 16) flat out uvec4 vLookMore;
+// The entity's words (EntityUser.h, sfe_words.glsl), words 0-3 then 4-7.
+layout(location = 13) flat out uvec4 vWords;
+layout(location = 16) flat out uvec4 vWordsMore;
 
-// Each entity's look by its index, as the game puts it (FrameId::PieceLooks), two uvec4 each: 0s for all it does not,
-// and for any past its end.
-layout(SFE_SET(0, 37), std430) readonly buffer SfeLooks {
-    uvec4 sfeLooks[];
+// Each entity's words by its id, two uvec4 each (EntityUser): 0s past the buffer's end.
+layout(SFE_SET(0, 37), std430) readonly buffer SfeEntityWords {
+    uvec4 sfeEntityWords[];
 };
 
 layout(SFE_SET(0, 1), std430) readonly buffer modelMatrices {
@@ -94,9 +93,9 @@ void main() {
     vSurface = worldPos.xyz - model[index][3].xyz;
     vRest = aPos;
     vRestNormal = aNormal;
-    bool looked = 2u * index + 1u < uint(sfeLooks.length());
-    vLook = looked ? sfeLooks[2u * index] : uvec4(0u);
-    vLookMore = looked ? sfeLooks[2u * index + 1u] : uvec4(0u);
+    bool worded = 2u * index + 1u < uint(sfeEntityWords.length());
+    vWords = worded ? sfeEntityWords[2u * index] : uvec4(0u);
+    vWordsMore = worded ? sfeEntityWords[2u * index + 1u] : uvec4(0u);
     vPiece = sfePieceKey(uint(SFE_VERTEX_ID), model[index][3].xyz);
     worldPos.xyz += sfeWindSway(worldPos.xyz, model[index][3].xyz, instance.material, matrices.wind);
     worldPos.xyz = sfeGroundUnderPatch(worldPos.xyz, instance.material);

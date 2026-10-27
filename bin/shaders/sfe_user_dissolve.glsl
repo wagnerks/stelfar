@@ -6,7 +6,9 @@
 // where it cuts out its alpha (sfe_gbuffer_surface.glsl), and in the cut-out casters of the sun's and the point lights'
 // shadows (cascadeShadowMap.fs, pointLightMap.fs). An application stands in for this file with one of the same name in
 // its content's shaders/. It is included at file scope after sfe.glsl and sfe_material.glsl, in every one of those
-// passes, so a body here reads nothing but its argument and the helpers of those two.
+// passes, so a body here reads its argument, the helpers of those two, and its own frame data in the user frame set,
+// set 3, bindings 40-63 (UserFrameSet.h), which every pipeline compiling this hook lays out and binds; not an entity's
+// words (sfe_words.glsl), which the shadow casters' vertex shaders do not hand on.
 //
 // sfeUserDissolveKeeps is given a texel's linear albedo (its colour map's, times the material's own colour) and says
 // whether it stays: a texel that does not is discarded, and casts no shadow. sfeUserDissolved is given the albedo of a

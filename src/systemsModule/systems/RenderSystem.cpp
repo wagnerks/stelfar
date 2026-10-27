@@ -14,7 +14,10 @@
 
 #include "core/Clocks.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/EntityUser.h"
 #include "renderModule/FrameCapture.h"
+#include "renderModule/TerrainPatch.h"
+#include "renderModule/UserFrameSet.h"
 
 #include "CameraSystem.h"
 #include "OcTreeSystem.h"
@@ -301,20 +304,19 @@ namespace SFE::SystemsModule {
 				{ 9, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex | Render::ShaderStage::Compute },
 				// Vertex too: the G-buffer vertex shader reads how a material sways in the wind.
 				{ 7, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex | Render::ShaderStage::Fragment },
-				// The area tint map (AreaTintFrame): the terrain's bank goes by it.
-				{ 22, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment },
-				// The marks in the ground (GroundMarksFrame): the terrain is drawn pressed and churned by them, and the ground
-				// near the camera pressed in by them (g_buffer_ground.vs) over the terrain's heights.
-				{ 34, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Vertex | Render::ShaderStage::Fragment },
+				// The heights under the ground drawn dense near the camera (TerrainPatch): its producer's, or a texel of 0.
 				{ 35, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Vertex },
-				// The vehicles' mud maps (MudMapsFrame): what is caked on them where drops struck.
-				{ 36, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment },
-				// Each entity's look (FrameId::PieceLooks): the game's litter worn and dirtied.
+				// Each entity's words (EntityUser): eight an entity, an application's for its shaders.
 				{ 37, Render::DescriptorType::StorageBuffer, Render::ShaderStage::Vertex },
 			};
 			frameSetLayout = rhi->createDescriptorSetLayout(frameLayout);
 			mRenderData.frameSetLayout = frameSetLayout;
 		}
+		// The channels an application hands the engine's shaders (its frame data, each entity's words, the ground drawn
+		// dense), made before any pass is: a pass lays out the user frame set in its init.
+		Render::UserFrameSet::instance().create(*rhi, mGpuFrames);
+		Render::EntityUser::instance().create(*rhi);
+		Render::createTerrainPatch(*rhi);
 
 		createSceneBuffers(maxDrawSize);
 		growBones(4096);
@@ -516,65 +518,42 @@ namespace SFE::SystemsModule {
 	}
 
 	void RenderSystem::updateAreaTint() {
-		auto* rhi = Engine::instance()->rhi();
-		const auto* tint = mRenderData.frame.data<Render::AreaTintFrame>(Render::FrameId::AreaTint);
-		const Math::Vec4 place[] = { tint ? tint->area : Math::Vec4{}, tint ? tint->shore : Math::Vec4{} };
-		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, tintArea), sizeof(place), place);
-		// Rewritten only when the game makes a new map, which it does as the litter's bounds change.
-		const auto map = Render::Utils::areaTintMap(mRenderData.frame);
-		const auto [written, fresh] = mFrameSetTint.try_emplace(frameSet.id, map.first.id);
-		if (fresh || written->second != map.first.id) {
-			written->second = map.first.id;
-			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 22, .images{ { map.first, map.second } } } });
-		}
+		// Nothing since step 5: an application's frame data is in its user frame set (UserFrameSet); step 6 deletes this.
 	}
 
 	void RenderSystem::updateGroundMarks() {
 		auto* rhi = Engine::instance()->rhi();
-		const auto* marks = mRenderData.frame.data<Render::GroundMarksFrame>(Render::FrameId::GroundMarks);
-		const Math::Vec4 place[] = { marks ? marks->window : Math::Vec4{}, marks ? marks->size : Math::Vec4{},
-			marks ? marks->look : Math::Vec4{}, marks ? marks->churn : Math::Vec4{}, marks ? marks->grid : Math::Vec4{},
-			marks ? marks->patch : Math::Vec4{} };
-		static_assert(offsetof(RenderMatrices, marksPatch) == offsetof(RenderMatrices, marksWindow) + sizeof(place) - sizeof(Math::Vec4));
-		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, marksWindow), sizeof(place), place);
-		const auto map = Render::Utils::groundMarksMap(mRenderData.frame);
-		const auto heights = Render::Utils::groundHeightsMap(mRenderData.frame);
-		const auto [written, fresh] = mFrameSetMarks.try_emplace(frameSet.id, std::pair{ map.first.id, heights.first.id });
-		if (fresh || written->second != std::pair{ map.first.id, heights.first.id }) {
-			written->second = { map.first.id, heights.first.id };
-			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 34, .images{ { map.first, map.second } } },
-				{ .set = frameSet, .binding = 35, .images{ { heights.first, heights.second } } } });
+		// The ground drawn dense near the camera (TerrainPatch): how deep the mesh under it goes in the lane GLSL calls
+		// patchDeepest, its grid and square in marksGrid and marksPatch (renamed in step 6), its heights at binding 35.
+		const auto& patch = Render::terrainPatch();
+		const Math::Vec4 lanes[] = { { patch.deepest, 0.f, 0.f, 0.f }, patch.grid, patch.square };
+		static_assert(offsetof(RenderMatrices, marksGrid) == offsetof(RenderMatrices, marksChurn) + sizeof(Math::Vec4)
+			&& offsetof(RenderMatrices, marksPatch) == offsetof(RenderMatrices, marksChurn) + 2 * sizeof(Math::Vec4));
+		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, marksChurn), sizeof(lanes), lanes);
+		// Rewritten only when the producer publishes other heights.
+		const auto heights = Render::terrainPatchHeights();
+		const std::pair ids{ heights.first.id, heights.second.id };
+		const auto [written, fresh] = mFrameSetMarks.try_emplace(frameSet.id, ids);
+		if (fresh || written->second != ids) {
+			written->second = ids;
+			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 35, .images{ { heights.first, heights.second } } } });
 		}
 	}
 
 	void RenderSystem::updateMudMaps() {
-		const auto maps = Render::Utils::mudMaps(mRenderData.frame);
-		const auto [written, fresh] = mFrameSetMud.try_emplace(frameSet.id, maps.first.id);
-		if (fresh || written->second != maps.first.id) {
-			written->second = maps.first.id;
-			Engine::instance()->rhi()->updateDescriptorSets({ { .set = frameSet, .binding = 36, .images{ { maps.first, maps.second } } } });
-		}
+		// Nothing since step 5: an application's frame data is in its user frame set (UserFrameSet); step 6 deletes this.
 	}
 
 	void RenderSystem::updatePieceLooks() {
-		auto* rhi = Engine::instance()->rhi();
-		auto& frame = mRenderData.frame;
-		if (!frame.buffer(Render::FrameId::PieceLooks)) {
-			if (!mNoLooks) {
-				Render::BufferDesc desc;
-				desc.size = 4 * sizeof(uint32_t);
-				desc.usage = Render::BufferUsage::Storage;
-				desc.debugName = "No piece looks";
-				const uint32_t none[4] = {};
-				mNoLooks = rhi->createBuffer(desc, none);
-			}
-			frame.set(Render::FrameId::PieceLooks, { .buffer = mNoLooks });
-		}
-		const auto looks = frame.buffer(Render::FrameId::PieceLooks);
-		const auto [written, fresh] = mFrameSetLooks.try_emplace(frameSet.id, looks.id);
-		if (fresh || written->second != looks.id) {
-			written->second = looks.id;
-			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 37, .buffers{ { looks } } } });
+		// Each entity's words (EntityUser): those written since the last frame go up, then binding 37 is the store's
+		// buffer, written again when a grow has replaced it.
+		auto& words = Render::EntityUser::instance();
+		words.upload();
+		const auto buffer = words.buffer();
+		const auto [written, fresh] = mFrameSetLooks.try_emplace(frameSet.id, buffer.id);
+		if (fresh || written->second != buffer.id) {
+			written->second = buffer.id;
+			Engine::instance()->rhi()->updateDescriptorSets({ { .set = frameSet, .binding = 37, .buffers{ { buffer } } } });
 		}
 	}
 
@@ -953,6 +932,8 @@ namespace SFE::SystemsModule {
 			mScene.markEntity(task.entity);
 		}
 		else if (task.type == ENTITY_DESTROYED) {
+			// Told before the id can be taken again: a new entity under it starts with no words.
+			Render::EntityUser::instance().clear(task.entity);
 			mScene.markEntity(task.entity);
 			std::lock_guard lock(mGpuDirtyMutex);
 			mDestroyedBones.push_back(task.entity);
@@ -1106,14 +1087,15 @@ namespace SFE::SystemsModule {
 				profile(zone, tPrepare, Clock::now());
 			}
 		}
-		// After prepare: the game makes the area tint's map in its own, and may have just replaced it.
-		const auto tTint = Clock::now();
-		updateAreaTint();
+		// After prepare, before the frame's commands: what the producers published in theirs (the ground drawn dense, the
+		// entities' words, the application's frame data) goes up and into the sets, device-local writes among it queued
+		// in the frame.
+		const auto tChannels = Clock::now();
 		updateGroundMarks();
-		updateMudMaps();
 		updatePieceLooks();
+		Render::UserFrameSet::instance().write();
 		const auto tBegin = Clock::now();
-		profile("Area tint", tTint, tBegin);
+		profile("Frame channels", tChannels, tBegin);
 		info->prepareMs = ms(tFrame, tBegin);
 		profile("Prepare passes", tFrame, tBegin);
 		auto cmd = rhi->beginCommandList(Render::CommandListType::Graphics);
@@ -1246,6 +1228,11 @@ namespace SFE::SystemsModule {
 	}
 
 	RenderSystem::~RenderSystem() {
+		// What the channels made, while the RHI is still there; the device is idle (Engine::~Engine waits first). The
+		// passes go after, with the members: one that published into them unpublishes, which only records.
+		Render::UserFrameSet::instance().destroy();
+		Render::EntityUser::instance().destroy();
+		Render::destroyTerrainPatch();
 		// The settings go with this system; the registry keeps their values until another binds them.
 		Params::unbind(&mRenderData.graphics, &mRenderData.graphics + 1);
 		// A pass is told of no scene once it is going (SceneEvents.h); the passes themselves go with the members.

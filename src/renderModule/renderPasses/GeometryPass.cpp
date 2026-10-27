@@ -11,6 +11,8 @@
 #include "renderModule/Atmosphere.h"
 #include "renderModule/GBuffer.h"
 #include "renderModule/MaterialTextures.h"
+#include "renderModule/TerrainPatch.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "componentsModule/ArmatureComponent.h"
 #include "componentsModule/CameraComponent.h"
@@ -100,6 +102,9 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	if (frameLayout) {
 		pipelineDesc.descriptorSetLayouts.push_back(gBuffetLayout);
 	}
+	// Set 3, the application's frame data (UserFrameSet), for what its hooks compiled into these shaders read of its own.
+	// The ground patch's pipelines and each material's are copies of this desc, and take the set with it.
+	UserFrameSet::instance().extend(pipelineDesc);
 
 	geometryPipeline = Engine::instance()->rhi()->createGraphicsPipeline(pipelineDesc);
 	mGBufferPipelineDesc = pipelineDesc;
@@ -427,18 +432,19 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 			rhi->updateDescriptorSets(materialTextureWrites(textures, group.textures));
 		}
 		const DescriptorSetHandle sets[] = { frameSet, textures };
-		// The ground drawn dense near the camera, with the terrain's textures, once: the terrain's own mesh is put out of
-		// sight under it (sfe_ground_patch.glsl), and drawn after it is rejected there before it is shaded. With the first
-		// phase, so the second's occlusion test has it.
+		// The ground drawn dense near the camera (TerrainPatch, as its producer published it), with the terrain's textures,
+		// once: the terrain's own mesh is put out of sight under it (sfe_ground_patch.glsl), and drawn after it is rejected
+		// there before it is shaded. With the first phase, so the second's occlusion test has it.
 		if (turn == Turn::Ground && !secondPhase && !patched) {
 			patched = true;
-			const auto* marks = renderSystem->getRenderData().frame.data<GroundMarksFrame>(FrameId::GroundMarks);
-			if (marks && marks->patch.z > 0.f) {
+			const auto& patch = terrainPatch();
+			if (patch.square.z > 0.f) {
 				if (const auto ground = groundPatchPipeline(fillMode)) {
 					bound = ground;
 					rhi->cmdBindPipeline(cmd, ground);
 					rhi->cmdBindDescriptorSets(cmd, ground, 0, sets, 2);
-					Utils::drawGroundPatch(cmd, marks->patch);
+					UserFrameSet::instance().bind(cmd, ground);
+					Utils::drawGroundPatch(cmd, patch.square);
 				}
 			}
 		}
@@ -453,6 +459,8 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 			rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
 		}
 		rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2);
+		// The application's frame data, after the pass's own sets (UserFrameSet::bind).
+		UserFrameSet::instance().bind(cmd, pipeline);
 		scene.draw(cmd, view, group, secondPhase);
 	}
 }

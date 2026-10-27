@@ -18,6 +18,7 @@
 #include "debugModule/Benchmark.h"
 #include "ecss/Registry.h"
 #include "multithreading/ThreadPool.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -206,6 +207,9 @@ void PointLightPass::ensureGpu(SystemsModule::RenderData&) {
 	pipelineDesc.frontFace = FrontFace::CounterClockWise;
 	pipelineDesc.renderPass = renderPass;
 	pipelineDesc.descriptorSetLayouts = { mBufferLayout, mTextureLayout };
+	// Set 3, the application's frame data (UserFrameSet), for what its dissolve hook (sfe_user_dissolve.glsl, in
+	// pointLightMap.fs) reads of its own; both pipelines below are made from this desc.
+	UserFrameSet::instance().extend(pipelineDesc);
 	pipelineDesc.pushConstantSize = sizeof(PointShadowPush);
 	pipelineDesc.pushConstantStages = ShaderStage::Vertex;
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/pointLightMap.vs");
@@ -323,6 +327,8 @@ void PointLightPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 				}
 				const DescriptorSetHandle sets[] = { mViews[face].set, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
 				rhi->cmdBindDescriptorSets(cmd, drawn, 0, sets, 2, &matricesBlock.offset, 1);
+				// The application's frame data, after the pass's own sets (UserFrameSet::bind).
+				UserFrameSet::instance().bind(cmd, drawn);
 				scene.draw(cmd, mViews[face].view, group);
 			}
 		}

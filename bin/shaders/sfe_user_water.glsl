@@ -6,8 +6,8 @@
 // content's shaders/.
 //
 // Both shaders include it at file scope before main, after their `water` block (SFE_WATER_PARAMS) and PI, so a body
-// of the application's may read those and everything sfe.glsl and sfe_water.glsl declare. A sampler of its own must
-// be on a binding the pass already sets.
+// of the application's may read those and everything sfe.glsl and sfe_water.glsl declare. Its own frame data is in the
+// user frame set, set 3, bindings 40-63 (UserFrameSet.h), which every pipeline compiling this hook lays out and binds.
 
 // The water at `xz` on the ground. `place` comes in as the engine has it (sfeWaterPlace: its own albedo, the
 // clarity of WaterComponent, the whole mirror and white surf), and what this leaves in it is what the engine draws

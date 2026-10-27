@@ -1,7 +1,9 @@
 ﻿#pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <mutex>
 #include <atomic>
 #include <string>
@@ -15,6 +17,7 @@
 #include "vk_mem_alloc.h"
 
 #include "rhi/RenderHardwareInterface.h"
+#include "rhi/SpirvReflect.h"
 
 namespace SFE::Render
 {
@@ -98,6 +101,11 @@ namespace SFE::Render
 		bool submitted = false;
 		std::vector<PipelineBarrier> barriers;
 		std::vector<VkDescriptorSet> boundSets;
+		// The sets bound at each bind point as Vulkan keeps them, by handle id: what the draw check reads.
+		std::array<BoundSets, 2> bound; // graphics, compute
+		uint32_t boundPipeline = BoundSets::kNone;
+		// Set once the bound pipeline's draw check has run; a pipeline or a set bound since clears it.
+		bool drawChecked = false;
 	};
 
 	struct VkShaderModuleResource {
@@ -105,6 +113,8 @@ namespace SFE::Render
 		ShaderModuleDesc desc{};
 		// Modules are shared per SPIR-V name; every create is one reference, every destroy drops one.
 		uint32_t refs = 0;
+		// What its SPIR-V binds and whether its entry point uses each (reflectSpirv): the layout and draw checks'.
+		std::vector<SpirvResource> resources;
 		uint32_t generation = 0;
 		bool live = false;
 	};
@@ -117,6 +127,13 @@ namespace SFE::Render
 		RenderPassHandle ownedRenderPass{};
 		const char* label = nullptr; // in the GPU's spans (pipelineLabel)
 		bool isCompute = false;
+		uint32_t setCount = 0;
+		std::vector<uint32_t> compat; // LayoutCompat ids, one a set
+		std::vector<SpirvResource> used; // its stages' used resources, one per (set, binding)
+		std::array<uint32_t, BoundSets::kMaxSets> complete{}; // per set index the set id last found complete (kNone)
+		// Said once each, until the pipeline is made again: a bind past its sets, and a draw that cannot read what it uses.
+		bool warnedSets = false;
+		bool warnedDraw = false;
 		uint32_t generation = 0;
 		bool live = false;
 	};
@@ -297,7 +314,15 @@ namespace SFE::Render
 		void executeImmediate(const std::function<void(VkCommandBuffer)>& fn, VkCommandPool pool, VkFence fence);
 		void createDescriptorPool();
 		void destroyDescriptorPool();
+		// A dead handle becomes the empty layout: a hole, so set N of the desc stays set N of the shaders.
 		void expandSetLayouts(const std::vector<DescriptorSetLayoutHandle>& handles, std::vector<VkDescriptorSetLayout>& out) const;
+		// What the live stages use that the set layouts do not give them, said in one line at the pipeline's build
+		// (layoutMismatches). `vertex` and `fragment` name the pipeline (fragment nullptr for a compute one).
+		void checkLayout(const char* vertex, const char* fragment, std::initializer_list<const VkShaderModuleResource*> stages,
+			const std::vector<DescriptorSetLayoutHandle>& sets) const;
+		// At the first draw or dispatch after a pipeline or a set was bound: what the bound pipeline uses that the list
+		// has not bound compatibly, or bound unwritten (BoundSets::missing), said once a pipeline.
+		void checkDraw(VkRecordedCommandList& list, bool compute);
 		uint32_t inferFramebufferLayers(const FramebufferDesc& desc) const;
 		bool realizeFramebuffer(VkFramebufferResource& fb, VkRenderPass vkPass);
 		RenderPassHandle synthesizeGraphicsRenderPass(const GraphicsPipelineDesc& desc);
@@ -384,6 +409,10 @@ namespace SFE::Render
 		VkCommandBuffer m_sceneCmds[2]{};
 		bool m_swapchainTransferDst = false;
 		VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+		// No bindings: what a pipeline layout has at a set index its desc leaves without a live layout.
+		VkDescriptorSetLayout m_emptySetLayout = VK_NULL_HANDLE;
+		// Compat ids of every pipeline layout built, for the draw check.
+		LayoutCompat m_layoutCompat;
 		VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
 		std::vector<VkCommandBuffer> m_commandBuffers;
 		VkFence m_sceneFence = VK_NULL_HANDLE;

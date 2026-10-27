@@ -21,6 +21,8 @@
 #include "mathModule/VectorOperations.h"
 #include "mathModule/MatrixOperators.h"
 #include "multithreading/ThreadPool.h"
+#include "renderModule/EntityUser.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -66,7 +68,7 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(7, DescriptorType::StorageBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
-	// g_buffer.vs reads each entity's look (FrameId::PieceLooks).
+	// g_buffer.vs reads each entity's words (EntityUser).
 	layoutDesc.bindings.emplace_back(37, DescriptorType::StorageBuffer, ShaderStage::Vertex);
 	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
 
@@ -92,6 +94,9 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.blend.dstColor = BlendFactor::OneMinusSrcAlpha;
 	pipelineDesc.renderPass = mRenderPass;
 	pipelineDesc.descriptorSetLayouts = { mLayout };
+	// Set 3, the application's frame data (UserFrameSet), for what its glass hook (sfe_user_glass.glsl) reads of its own;
+	// every pipeline pipelineFor makes is a copy of this desc.
+	UserFrameSet::instance().extend(pipelineDesc);
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer.vs");
 }
 
@@ -293,7 +298,7 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		writes.push_back(std::move(albedo));
 	}
 	writes.push_back({ .set = glassSet, .binding = 7, .buffers{ { materials } } });
-	writes.push_back({ .set = glassSet, .binding = 37, .buffers{ { renderDataHandle.frame.buffer(FrameId::PieceLooks) } } });
+	writes.push_back({ .set = glassSet, .binding = 37, .buffers{ { EntityUser::instance().buffer() } } });
 	// One set per frame slot: its inputs (the scene copy's transient parameters, the visible list) differ per
 	// frame, and writing a set the previous frame still binds costs a copy of it.
 	const auto slot = rhi->frameInFlight() % (std::max)(1u, rhi->framesInFlight());
@@ -332,6 +337,8 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 			rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 			rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
 			rhi->cmdBindDescriptorSets(cmd, one, 0, &mGroups[group].sets[slot], 1, &params.offset, 1);
+			// The application's frame data, after the pass's own set (UserFrameSet::bind).
+			UserFrameSet::instance().bind(cmd, one);
 			scene.drawSorted(cmd, mGroups[group].view, group);
 		}
 	}

@@ -85,10 +85,6 @@ namespace SFE::Render::RenderPasses {
 			float shelterCount = 0.f;
 			// ShelterComponent::kSoft: the metres from a shelter's walls and roof over which its inside comes in.
 			float shelterSoft = 0.f;
-			// The area tint (AreaTintFrame); a zero area, no tint.
-			Math::Vec4 tintArea{};
-			Math::Vec4 tintFoliage{};
-			Math::Vec4 tintAir{};
 			// The ShelterComponents in the scene, the first kMostShelters.
 			static constexpr int kMostShelters = 4;
 			struct Shelter {
@@ -173,7 +169,6 @@ namespace SFE::Render::RenderPasses {
 			BoundImage pointShadow{};
 			BoundImage outlines{};
 			BoundImage clouds{};
-			BoundImage areaTint{};
 			BoundImage csm{};
 			BoundImage csmDepth{};
 			BoundImage iblIrr{};

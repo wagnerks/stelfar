@@ -3,8 +3,9 @@
 // A hook of mist.fs: a medium of the application's own along the view ray, besides the engine's mist and haze. An
 // application stands in for this file with one of the same name in its content's shaders/. mist.fs includes it at file
 // scope after all its own declarations and before main, so a body here may read everything mist.fs declares: its
-// MistBlock `fog`, the shared matrices, the scene depth, the sky, PI and the helpers of sfe.glsl. It may declare a
-// sampler of its own only at a binding the pass already lays out.
+// MistBlock `fog`, the shared matrices, the scene depth, the sky, PI and the helpers of sfe.glsl. It may declare its
+// own frame data in the user frame set, set 3, bindings 40-63 (UserFrameSet.h), which every pipeline compiling this
+// hook lays out and binds.
 //
 // sfeUserMist is given the camera's position, the ray's unit direction, how far along it the pass looks (metres up to
 // whatever the pixel shows, ending where the ray goes down through the mist's base and at the sky's distance), the

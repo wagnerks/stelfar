@@ -5,9 +5,10 @@
 // its own declarations and before main, so a body here may read everything declared there: the surface's inputs
 // (FragPos, TBN, the texture coordinates, vSurface, vPiece, vRest), the material's textures, its entry pc in the
 // material table, uvOf and the helpers of sfe.glsl and sfe_material.glsl. It may declare inputs of its own at locations
-// the vertex shader writes, a sampler only at a binding the pass already lays out, and file-scope variables to carry
-// what the first call finds over to the second. It reads nothing that a shader including the surface declares after
-// its include.
+// the vertex shader writes (an entity's words in sfe_words.glsl), its own frame data in the user frame set, set 3,
+// bindings 40-63 (UserFrameSet.h), which every pipeline compiling this hook lays out and binds, and file-scope
+// variables to carry what the first call finds over to the second. It reads nothing that a shader including the
+// surface declares after its include.
 //
 // sfeUserSurface is given the surface's linear albedo (its colour map's, after a triplanar texture and a shader's own
 // style, times the material's own colour), its world normal (after the normal map, the clear coat's flattening and a

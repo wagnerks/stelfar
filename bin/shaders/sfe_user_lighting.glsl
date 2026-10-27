@@ -6,8 +6,9 @@
 //
 // deferred_shading.fs takes this file once, at file scope, after all its declarations and before its main: a copy may
 // read every one of them (the PushConstants block pc, the G-buffer's and the IBL's samplers, matrices, the sun's
-// shadow, sfe.glsl and sfe_pbr.glsl), and may declare a sampler of its own only on a binding the pass's layout already
-// has. A copy cannot take this file in by its name: the name leads to the copy itself.
+// shadow, sfe.glsl and sfe_pbr.glsl), and may declare its own frame data in the user frame set, set 3, bindings 40-63
+// (UserFrameSet.h), which every pipeline compiling this hook lays out and binds. A copy cannot take this file in by its
+// name: the name leads to the copy itself.
 
 // The albedo a surface is lit with, at the world position FragPos; ground is true on the ground's material
 // (sfeIsGround), metallic is the G-buffer's. Called once a pixel, before anything reads the albedo: the sun's and the

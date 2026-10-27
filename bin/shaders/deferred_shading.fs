@@ -58,10 +58,6 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     float ssaoSun; // the share of the AO the sun's light takes
     float shelterCount;
     float shelterSoft; // ShelterComponent::kSoft, metres
-    // The area tint (AreaTintFrame): the map's place, and the foliage's and the air's colour and strength.
-    vec4 tintArea;
-    vec4 tintFoliage;
-    vec4 tintAir; // a the haze per metre where the map is full
     // The ShelterComponents, the first four.
     Shelter shelters[4];
 } pc;

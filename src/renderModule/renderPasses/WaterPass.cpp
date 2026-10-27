@@ -14,6 +14,7 @@
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -25,8 +26,6 @@ namespace {
 		SFE::Render::Atmosphere::SkyParams sky;
 		float surface[4]{}; // xz centre, y level, w half size
 		float look[4]{};    // x clarity, yz 1 / render size, w 1 when the water looks for reflections on screen
-		SFE::Math::Vec4 tintArea{}; // the area tint (AreaTintFrame); a zero area, no tint
-		SFE::Math::Vec4 tintWater{};
 		SFE::Math::Vec4 current{}; // xy the surface current (WaterComponent::current) on world x/z, metres a second; z the
 		                           // sky's share left in the sun's shade (GraphicsSettings::shadowAmbient)
 	};
@@ -57,10 +56,6 @@ namespace {
 				params.current = { current.x, current.y, 0.f, 0.f };
 			}
 			params.current.z = renderData.graphics.shadowAmbient;
-			if (const auto* tint = renderData.frame.data<SFE::Render::AreaTintFrame>(SFE::Render::FrameId::AreaTint)) {
-				params.tintArea = tint->area;
-				params.tintWater = tint->water;
-			}
 			return true;
 		}
 		return false;
@@ -109,7 +104,6 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(21, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(22, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	layoutDesc.bindings.emplace_back(23, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	mSurfaceLayout = rhi->createDescriptorSetLayout(layoutDesc);
 	mSurfaceSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSurfaceSets) {
@@ -129,6 +123,8 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	desc.descriptorSetLayouts = { mSurfaceLayout };
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/water.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water.fs");
+	// What the application's water hook (sfe_user_water.glsl) reads of its own is in the user frame set, set 3.
+	UserFrameSet::instance().extend(desc);
 	mSurfacePipeline = rhi->createGraphicsPipeline(desc);
 }
 
@@ -158,7 +154,6 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	const auto clouds = Render::Atmosphere::cloudTexture();
 	// The fine ripple map; without it the water keeps the sum of waves alone, which is what it had before.
 	const auto* ripple = AssetsModule::TextureHandler::instance()->loadTexture("textures/water/ripple.png");
-	const auto tint = Utils::areaTintMap(renderDataHandle.frame);
 	// The sun's shadow on it (sfe_sun_shadow.glsl): the lighting pass's block and the cascades' matrices. Without a
 	// lighting pass the block is zero, the shadow's strength with it.
 	const LightingPass* lighting = nullptr;
@@ -185,7 +180,6 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		{ .set = set, .binding = 20, .images{ { skyLut.texture, skyLut.sampler } } },
 		{ .set = set, .binding = 21, .images{ { clouds.texture ? clouds.texture : skyLut.texture, clouds.sampler ? clouds.sampler : skyLut.sampler } } },
 		{ .set = set, .binding = 22, .images{ { ripple ? ripple->texture : skyLut.texture, ripple ? mRipple : skyLut.sampler } } },
-		{ .set = set, .binding = 23, .images{ { tint.first, tint.second } } },
 	});
 	// The lit scene under and around the water, for the refraction and for what the reflected rays run into.
 	rhi->cmdBlit(cmd, finalFbo, mSceneCopyFbo, BlitMask::Color, BlitFilter::Nearest);
@@ -200,6 +194,8 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	// The dynamic offsets in binding order: 9, 10, 15.
 	const uint32_t offsets[] = { shadows.offset, lightMatrices.offset, block.offset };
 	rhi->cmdBindDescriptorSets(cmd, mSurfacePipeline, 0, &set, 1, offsets, 3);
+	// The application's frame data, after the pass's own set (UserFrameSet::bind).
+	UserFrameSet::instance().bind(cmd, mSurfacePipeline);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 }
@@ -216,7 +212,6 @@ void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(7, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	layoutDesc.bindings.emplace_back(23, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
@@ -235,6 +230,8 @@ void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	desc.descriptorSetLayouts = { mLayout };
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water_under.fs");
+	// The water hook again (sfe_user_water.glsl): the application's frame data in set 3.
+	UserFrameSet::instance().extend(desc);
 	mPipeline = rhi->createGraphicsPipeline(desc);
 }
 
@@ -263,14 +260,12 @@ void UnderwaterPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
 	const auto block = rhi->allocTransient(params);
 	const auto skyLut = Render::Atmosphere::skyTexture();
-	const auto tint = Utils::areaTintMap(renderDataHandle.frame);
 	rhi->updateDescriptorSets({
 		{ .set = set, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },
 		{ .set = set, .binding = 6, .images{ { mSceneCopy, mLinear } } },
 		{ .set = set, .binding = 7, .images{ { sceneDepth, mNearest } } },
 		{ .set = set, .binding = 15, .buffers{ { block.buffer, 0, sizeof(params) } } },
 		{ .set = set, .binding = 20, .images{ { skyLut.texture, skyLut.sampler } } },
-		{ .set = set, .binding = 23, .images{ { tint.first, tint.second } } },
 	});
 	rhi->cmdBlit(cmd, finalFbo, mSceneCopyFbo, BlitMask::Color, BlitFilter::Nearest);
 
@@ -283,6 +278,7 @@ void UnderwaterPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 	rhi->cmdBeginRenderPass(cmd, begin);
 	rhi->cmdBindPipeline(cmd, mPipeline);
 	rhi->cmdBindDescriptorSets(cmd, mPipeline, 0, &set, 1, &block.offset, 1);
+	UserFrameSet::instance().bind(cmd, mPipeline);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 }

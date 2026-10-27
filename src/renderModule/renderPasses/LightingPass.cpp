@@ -2,10 +2,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include "assetsModule/TextureHandler.h"
 #include "core/Engine.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/IblBaker.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "imgui.h"
@@ -50,7 +52,6 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 	texLayoutDesc.bindings.emplace_back(13, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(14, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(21, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	texLayoutDesc.bindings.emplace_back(22, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(23, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 
 	mTexSetLayout = rhi->createDescriptorSetLayout(texLayoutDesc);
@@ -105,6 +106,10 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 	pipelineDesc.descriptorSetLayouts = { mTexSetLayout, mUboSetLayout };
 	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
 	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/deferred_shading.fs");
+	// deferred_shading.fs's PushConstants: the shelters right after shelterSoft.
+	static_assert(offsetof(DrawData, shelters) == 112);
+	// What the application's lighting hook (sfe_user_lighting.glsl) reads of its own is in the user frame set, set 3.
+	UserFrameSet::instance().extend(pipelineDesc);
 	pipeline = rhi->createGraphicsPipeline(pipelineDesc);
 
 	{
@@ -313,14 +318,6 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 		drawData.cloudCoverage = Atmosphere::skyParams(renderDataHandle, sky) ? sky.toSun[3] : 0.f;
 		drawData.stylise = renderDataHandle.graphics.stylise;
 	}
-	if (const auto* tint = renderDataHandle.frame.data<AreaTintFrame>(FrameId::AreaTint)) {
-		drawData.tintArea = tint->area;
-		drawData.tintFoliage = tint->foliage;
-		drawData.tintAir = tint->air;
-	}
-	else {
-		drawData.tintArea = {};
-	}
 	int shelters = 0;
 	for (const auto& [id, shelter, transform] : ECSHandler::registry().view<const ShelterComponent, const TransformComponent>()) {
 		if (shelter && transform && shelters < DrawData::kMostShelters) {
@@ -431,10 +428,6 @@ void LightingPass::updateTextures(SystemsModule::RenderData& renderDataHandle, R
 		const auto clouds = Atmosphere::cloudTexture();
 		addImage(21, clouds.texture, clouds.sampler, slotSets.clouds);
 	}
-	{
-		const auto tint = Utils::areaTintMap(frame);
-		addImage(22, tint.first, tint.second, slotSets.areaTint);
-	}
 	addBuffer(3, blocks.pointMatrices.buffer, slotSets.pointMat, sizeof(Math::Mat4) * PointShadowFrame::kMaxShadowFaces);
 	addImage(7, frame.texture(FrameId::ShadowPoint), frame.sampler(FrameId::ShadowPoint), slotSets.pointShadow);
 
@@ -474,4 +467,6 @@ void LightingPass::updateTextures(SystemsModule::RenderData& renderDataHandle, R
 	const uint32_t offsets[] = { blocks.pointMatrices.offset, blocks.cascadedShadows.offset, blocks.pointLights.offset,
 		blocks.lightMatrices.offset, blocks.drawData.offset };
 	rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, offsets, static_cast<uint32_t>(std::size(offsets)));
+	// The application's frame data, after the pass's own sets (UserFrameSet::bind).
+	UserFrameSet::instance().bind(cmd, pipeline);
 }

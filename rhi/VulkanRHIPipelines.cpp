@@ -51,6 +51,25 @@ void main() {
 			}
 			return module;
 		}
+
+		// What a pipeline's stages use, one entry per (set, binding): the draw check's list.
+		std::vector<SpirvResource> usedResources(const std::initializer_list<const VkShaderModuleResource*> stages) {
+			std::vector<SpirvResource> used;
+			for (const auto* stage : stages) {
+				if (!stage) {
+					continue;
+				}
+				for (const auto& resource : stage->resources) {
+					const bool listed = std::any_of(used.begin(), used.end(), [&](const SpirvResource& other) {
+						return other.set == resource.set && other.binding == resource.binding;
+					});
+					if (resource.used && !listed) {
+						used.push_back(resource);
+					}
+				}
+			}
+			return used;
+		}
 	}
 
 	void VulkanRHI::setPresentBlitSource(const TextureHandle texture, const SamplerHandle sampler) {
@@ -598,10 +617,77 @@ void main() {
 		for (const auto layoutHandle : handles) {
 			const auto* layout = getLive(m_descriptorSetLayouts, layoutHandle.id);
 			if (!layout) {
+				// A hole, not a shift: dropped, every later set landed one index lower than its shaders declare it.
+				if (m_emptySetLayout != VK_NULL_HANDLE) {
+					out.push_back(m_emptySetLayout);
+				}
 				continue;
 			}
 			out.push_back(layout->layout);
 		}
+	}
+
+	void VulkanRHI::checkLayout(const char* vertex, const char* fragment, const std::initializer_list<const VkShaderModuleResource*> stages,
+		const std::vector<DescriptorSetLayoutHandle>& sets) const
+	{
+		std::vector<SpirvStage> live;
+		for (const auto* stage : stages) {
+			if (stage) {
+				live.push_back({ stage->desc.stage, stage->desc.name.c_str(), &stage->resources });
+			}
+		}
+		std::vector<const DescriptorSetLayoutDesc*> descs;
+		descs.reserve(sets.size());
+		for (const auto handle : sets) {
+			const auto* layout = getLive(m_descriptorSetLayouts, handle.id);
+			descs.push_back(layout ? &layout->desc : nullptr);
+		}
+		const auto lines = layoutMismatches(live, descs);
+		if (lines.empty()) {
+			return;
+		}
+		std::string message;
+		for (const auto& line : lines) {
+			message += (message.empty() ? "" : "; ") + line;
+		}
+		RhiLog::error("VulkanRHI: layout mismatch: %s (pipeline %s%s%s)", message.c_str(), vertex ? vertex : "?",
+			fragment ? " | " : "", fragment ? fragment : "");
+	}
+
+	void VulkanRHI::checkDraw(VkRecordedCommandList& list, const bool compute) {
+		if (list.drawChecked) {
+			return;
+		}
+		auto* gp = getLive(m_pipelines, list.boundPipeline);
+		// The pipeline bound last is of the other bind point: this one's is checked once it is bound again.
+		if (!gp || gp->isCompute != compute) {
+			return;
+		}
+		list.drawChecked = true;
+		if (gp->warnedDraw) {
+			return;
+		}
+		const auto& bound = list.bound[compute ? 1 : 0];
+		const auto lines = bound.missing(gp->compat, gp->used, gp->complete, [this](const uint32_t setId, const uint32_t binding) {
+			// A detached copy keeps what was written (detachBoundSet), so the handle's list is the set's.
+			const auto* set = getLive(m_descriptorSets, setId);
+			return set && std::any_of(set->written.begin(), set->written.end(), [binding](const auto& entry) { return entry.first == binding; });
+		});
+		if (lines.empty()) {
+			// What it reads is all there: the sets bound now need no second look until another is bound.
+			for (const auto& resource : gp->used) {
+				if (resource.set < BoundSets::kMaxSets) {
+					gp->complete[resource.set] = bound.setAt(resource.set);
+				}
+			}
+			return;
+		}
+		gp->warnedDraw = true;
+		std::string message;
+		for (const auto& line : lines) {
+			message += (message.empty() ? "" : "; ") + line;
+		}
+		RhiLog::error("VulkanRHI: draw with %s: %s", gp->label ? gp->label : "a pipeline", message.c_str());
 	}
 
 	uint32_t VulkanRHI::inferFramebufferLayers(const FramebufferDesc& desc) const {
@@ -754,6 +840,11 @@ void main() {
 		resource.desc = desc;
 		resource.refs = 1;
 		resource.live = true;
+		auto reflection = reflectSpirv(code);
+		if (!reflection.ok) {
+			RhiLog::error("VulkanRHI: cannot read the bindings of %s", desc.name.c_str());
+		}
+		resource.resources = std::move(reflection.resources);
 
 		ShaderModuleHandle handle{};
 		handle.id = storeResource(m_shaders, m_freeShaders, std::move(resource));
@@ -955,6 +1046,16 @@ void main() {
 
 		std::vector<VkDescriptorSetLayout> setLayouts;
 		expandSetLayouts(local.descriptorSetLayouts, setLayouts);
+		checkLayout(vert->desc.name.c_str(), frag->desc.name.c_str(), { vert, tessCtrl, tessEval, geom, frag }, local.descriptorSetLayouts);
+		// What the draw check compares: the layout's compat ids and what its stages read.
+		std::vector<const DescriptorSetLayoutDesc*> layoutDescs;
+		layoutDescs.reserve(local.descriptorSetLayouts.size());
+		for (const auto handle : local.descriptorSetLayouts) {
+			const auto* layout = getLive(m_descriptorSetLayouts, handle.id);
+			layoutDescs.push_back(layout ? &layout->desc : nullptr);
+		}
+		auto compat = m_layoutCompat.idsOf(layoutDescs, desc.pushConstantSize, desc.pushConstantStages);
+		auto used = usedResources({ vert, tessCtrl, tessEval, geom, frag });
 
 		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 		{
@@ -1137,6 +1238,10 @@ void main() {
 		out.label = pipelineLabel(vert->desc.name, frag->desc.name);
 		out.ownedRenderPass = ownedRp;
 		out.layout = pipelineLayout;
+		out.setCount = static_cast<uint32_t>(setLayouts.size());
+		out.compat = std::move(compat);
+		out.used = std::move(used);
+		out.complete.fill(BoundSets::kNone);
 		out.live = true;
 		if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineInfo, nullptr, &out.pipeline) != VK_SUCCESS) {
 			vkDestroyPipelineLayout(m_device, pipelineLayout, nullptr);
@@ -1168,6 +1273,15 @@ void main() {
 
 		std::vector<VkDescriptorSetLayout> setLayouts;
 		expandSetLayouts(desc.descriptorSetLayouts, setLayouts);
+		checkLayout(compute->desc.name.c_str(), nullptr, { compute }, desc.descriptorSetLayouts);
+		std::vector<const DescriptorSetLayoutDesc*> layoutDescs;
+		layoutDescs.reserve(desc.descriptorSetLayouts.size());
+		for (const auto handle : desc.descriptorSetLayouts) {
+			const auto* layout = getLive(m_descriptorSetLayouts, handle.id);
+			layoutDescs.push_back(layout ? &layout->desc : nullptr);
+		}
+		auto compat = m_layoutCompat.idsOf(layoutDescs, desc.pushConstantSize, ShaderStage::Compute);
+		auto used = usedResources({ compute });
 
 		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 		{
@@ -1200,6 +1314,10 @@ void main() {
 		out.label = pipelineLabel(compute->desc.name);
 		out.layout = pipelineLayout;
 		out.isCompute = true;
+		out.setCount = static_cast<uint32_t>(setLayouts.size());
+		out.compat = std::move(compat);
+		out.used = std::move(used);
+		out.complete.fill(BoundSets::kNone);
 		out.live = true;
 		if (vkCreateComputePipelines(m_device, m_pipelineCache, 1, &pipelineInfo, nullptr, &out.pipeline) != VK_SUCCESS) {
 			vkDestroyPipelineLayout(m_device, pipelineLayout, nullptr);
@@ -1232,6 +1350,12 @@ void main() {
 			}
 			fresh.emplace_back(id, createVkShaderModule(m_device, code));
 			shader.desc.source = std::move(source);
+			// Before the pipelines below are made again: their checks read the new module's bindings.
+			auto reflection = reflectSpirv(code);
+			if (!reflection.ok) {
+				RhiLog::error("VulkanRHI: cannot read the bindings of %s", shader.desc.name.c_str());
+			}
+			shader.resources = std::move(reflection.resources);
 		}
 		if (fresh.empty()) {
 			return 0;
@@ -1266,6 +1390,13 @@ void main() {
 			vkDestroyPipelineLayout(m_device, pipeline.layout, nullptr);
 			pipeline.pipeline = rebuilt.pipeline;
 			pipeline.layout = rebuilt.layout;
+			// Checked afresh with what the new stages read: a fault the old ones had said once is said again.
+			pipeline.setCount = rebuilt.setCount;
+			pipeline.compat = std::move(rebuilt.compat);
+			pipeline.used = std::move(rebuilt.used);
+			pipeline.complete.fill(BoundSets::kNone);
+			pipeline.warnedSets = false;
+			pipeline.warnedDraw = false;
 		}
 		return remade.size();
 	}
@@ -1436,6 +1567,9 @@ void main() {
 		list->boundLayout = gp->layout;
 		list->boundBindPoint = gp->isCompute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
 		vkCmdBindPipeline(list->cmd, list->boundBindPoint, gp->pipeline);
+		// Its first draw is checked against what is bound by then.
+		list->boundPipeline = pipeline.id;
+		list->drawChecked = false;
 	}
 
 	void VulkanRHI::cmdBindVertexBuffer(const CommandListHandle cmd, const uint32_t slot, const BufferHandle handle, const uint32_t offset) {
@@ -1468,12 +1602,16 @@ void main() {
 
 		VkPipelineLayout layout = VK_NULL_HANDLE;
 		VkPipelineBindPoint bindPoint = list->boundBindPoint;
-		if (const auto* gp = getLive(m_pipelines, pipeline.id)) {
+		// The pipeline whose layout the sets are bound with: the one given, else the one bound last. Written below, so
+		// not const.
+		auto* gp = getLive(m_pipelines, pipeline.id);
+		if (gp) {
 			layout = gp->layout;
 			bindPoint = gp->isCompute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
 		}
 		else {
 			layout = list->boundLayout;
+			gp = getLive(m_pipelines, list->boundPipeline);
 		}
 		if (layout == VK_NULL_HANDLE) {
 			return;
@@ -1484,12 +1622,25 @@ void main() {
 			RhiLog::error("cmdBindDescriptorSets: %u sets, at most %zu", setCount, vkSets.size());
 			return;
 		}
+		// Sets past the pipeline layout's would be bound to nothing its shaders declare: a bind meant for another
+		// pipeline, or a pipeline made without the sets its pass binds (UserFrameSet::extend).
+		if (gp && firstSet + setCount > gp->setCount) {
+			if (!gp->warnedSets) {
+				gp->warnedSets = true;
+				RhiLog::error("VulkanRHI: cmdBindDescriptorSets: sets %u..%u past the %u of %s", firstSet, firstSet + setCount - 1,
+					gp->setCount, gp->label ? gp->label : "a pipeline");
+			}
+			return;
+		}
+		std::array<uint32_t, 8> setIds{};
 		for (uint32_t i = 0; i < setCount; ++i) {
 			const auto* set = getLive(m_descriptorSets, sets[i].id);
 			if (!set) {
 				return;
 			}
 			vkSets[i] = set->set;
+			// The handle's id, not the resource: the pool of sets can grow, and an id carries its generation.
+			setIds[i] = sets[i].id;
 		}
 		if (layout == VK_NULL_HANDLE || list->cmd == VK_NULL_HANDLE || !list->recording) {
 			return;
@@ -1497,6 +1648,10 @@ void main() {
 		vkCmdBindDescriptorSets(list->cmd, bindPoint, layout, firstSet,
 			setCount, vkSets.data(), dynamicOffsets ? dynamicOffsetCount : 0, dynamicOffsets);
 		list->boundSets.insert(list->boundSets.end(), vkSets.begin(), vkSets.begin() + setCount);
+		if (gp) {
+			list->bound[gp->isCompute ? 1 : 0].bind(gp->compat, firstSet, setIds.data(), setCount);
+		}
+		list->drawChecked = false;
 	}
 
 	void VulkanRHI::cmdPushConstants(const CommandListHandle cmd, const PipelineHandle pipeline, const ShaderStage stages, const void* data, const uint32_t size) {
@@ -1517,6 +1672,7 @@ void main() {
 			RhiLog::error("VulkanRHI: %s outside a render pass, dropped", command);
 			return nullptr;
 		}
+		checkDraw(*list, false);
 		return list;
 	}
 
@@ -1569,6 +1725,7 @@ void main() {
 
 	void VulkanRHI::cmdDispatch(const CommandListHandle cmd, const uint32_t groupCountX, const uint32_t groupCountY, const uint32_t groupCountZ) {
 		if (auto* list = getLive(m_commandLists, cmd.id)) {
+			checkDraw(*list, true);
 			vkCmdDispatch(list->cmd, groupCountX, groupCountY, groupCountZ);
 		}
 	}

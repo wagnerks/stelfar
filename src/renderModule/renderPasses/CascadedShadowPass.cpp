@@ -11,6 +11,7 @@
 #include "componentsModule/ModelComponent.h"
 #include "core/Clocks.h"
 #include "core/Engine.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "assetsModule/modelModule/BoundingVolume.h"
@@ -263,6 +264,9 @@ void CascadedShadowPass::initRender() {
 	pipelineDesc.frontFace = FrontFace::CounterClockWise;
 	pipelineDesc.renderPass = renderPass;
 	pipelineDesc.descriptorSetLayouts = { mBufferLayout, mTextureLayout };
+	// Set 3, the application's frame data (UserFrameSet), for what its dissolve hook (sfe_user_dissolve.glsl, in
+	// cascadeShadowMap.fs) reads of its own; the three pipelines below are made from this desc.
+	UserFrameSet::instance().extend(pipelineDesc);
 	pipelineDesc.pushConstantSize = 16u;
 	// The vertex shader applies the cascade matrix now, so it needs the push block too.
 	pipelineDesc.pushConstantStages = ShaderStage::Vertex | ShaderStage::Fragment;
@@ -544,6 +548,8 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 				}
 				const DescriptorSetHandle sets[] = { cascade.set, mMaskSets.get(mTextureLayout, 4, group.maskTexture) };
 				rhi->cmdBindDescriptorSets(cmd, pipeline, 0, sets, 2, &matrices.offset, 1);
+				// The application's frame data, after the pass's own sets (UserFrameSet::bind).
+				UserFrameSet::instance().bind(cmd, pipeline);
 				scene.draw(cmd, cascade.view, group);
 			}
 		};

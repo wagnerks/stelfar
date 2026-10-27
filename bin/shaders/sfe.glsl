@@ -264,17 +264,6 @@ vec4 sfeGBufferEmissive(vec3 emissive, sampler2D map, vec2 uv) {
     return vec4(emissive * pow(texture(map, uv).rgb, vec3(2.2)), 0.0);
 }
 
-// The area tint map (AreaTintFrame) at a world place: how far its foliage (r), water (g) and air (b) have gone towards
-// their tint colours. `area` is the map's min x, min z and 1 / size along each; outside it, or with no map (a zero
-// size), nothing.
-vec3 sfeAreaTint(sampler2D map, vec4 area, vec2 xz) {
-    vec2 uv = (xz - area.xy) * area.zw;
-    if (area.z <= 0.0 || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
-        return vec3(0.0);
-    }
-    return textureLod(map, uv, 0.0).rgb;
-}
-
 #endif
 
 // One definition of the per-frame matrices block. OpenGL links every shader of a program together and
@@ -291,11 +280,11 @@ vec3 sfeAreaTint(sampler2D map, vec4 area, vec2 xz) {
     mat4 invProjection; /* of the jittered projection */ \
     mat4 invView; \
     vec4 style;      /* x the drawn look, GraphicsSettings::stylise */ \
-    vec4 tintArea;   /* the area tint map's place, for sfeAreaTint; the map is SFE_SET(0, 22) */ \
-    vec4 tintShore;  /* xy: the map value where the lake's bank starts to turn to mud, and where it is all mud; z: metres over the water the litter lies up to */ \
-    vec4 marksWindow; /* the ground's marks (sfe_marks.glsl): xy the fine window's least x and z, zw the coarse one's */ \
-    vec4 marksSize;   /* x the fine window's span, y the coarse one's, z the deepest pressed, w how deep grass lies flat; a zero span, no marks */ \
-    vec4 marksLook;   /* x the rims' height of the depth pressed aside within y metres, z how wet churn looks, w ruts' darkening per metre */ \
-    vec4 marksChurn;  /* xy the churn the soil starts and wholly shows at, zw the churn grass starts going and is all gone at */ \
-    vec4 marksGrid;   /* the terrain mesh's vertices: xy the first one's world x and z, z their spacing, w the terrain's height */ \
-    vec4 marksPatch;  /* the ground drawn dense: xy its least x and z, z its side, w its spacing; a zero side, none */
+    vec4 spare0;     /* spare0-4 written 0, read by nobody: an application's frame data is in its user set (UserFrameSet); step 6 takes them out */ \
+    vec4 spare1; \
+    vec4 spare2; \
+    vec4 spare3; \
+    vec4 spare4; \
+    vec4 patchDeepest; /* x TerrainPatch::deepest: metres the application lowers the ground drawn dense at most */ \
+    vec4 marksGrid;   /* TerrainPatch::grid: xy the mesh's first vertex's world x and z, z their spacing, w its base height */ \
+    vec4 marksPatch;  /* TerrainPatch::square: xy its least x and z, z its side, w its spacing; a zero side, none */

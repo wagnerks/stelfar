@@ -16,6 +16,9 @@ layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
 } matrices;
 
 #include "sfe_ground_patch.glsl"
+// The application's offset (sfeUserGroundOffset): included here alone, so no other shader compiles the application's
+// file.
+#include "sfe_user_ground.glsl"
 
 // The terrain's heights, which its pass binds at 35 of set 0. The square is drawn by Utils::drawGroundPatch: a row of
 // quads an instance, a column's vertices two to it.

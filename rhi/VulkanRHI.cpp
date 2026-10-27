@@ -245,6 +245,14 @@ namespace SFE::Render {
 		createDescriptorPool();
 		createPipelineCache();
 
+		// The hole expandSetLayouts puts where a desc has no live layout: no bindings, made once for every pipeline.
+		VkDescriptorSetLayoutCreateInfo emptyLayoutInfo{};
+		emptyLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		if (vkCreateDescriptorSetLayout(m_device, &emptyLayoutInfo, nullptr, &m_emptySetLayout) != VK_SUCCESS) {
+			m_emptySetLayout = VK_NULL_HANDLE;
+			RhiLog::fatal("VulkanRHI: failed to create the empty descriptor set layout");
+		}
+
 		VkCommandPoolCreateInfo uploadPoolInfo{};
 		uploadPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		uploadPoolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -333,6 +341,10 @@ namespace SFE::Render {
 		}
 		m_descriptorSetLayouts.clear();
 		m_freeDescriptorSetLayouts.clear();
+		if (m_emptySetLayout != VK_NULL_HANDLE) {
+			vkDestroyDescriptorSetLayout(m_device, m_emptySetLayout, nullptr);
+			m_emptySetLayout = VK_NULL_HANDLE;
+		}
 		m_descriptorSets.clear();
 		m_freeDescriptorSets.clear();
 		m_commandLists.clear();

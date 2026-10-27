@@ -19,9 +19,6 @@ layout(SFE_SET(0, 15), std140) uniform MistBlock {
     SFE_SKY_PARAMS
     vec4 mist; // x density at the water line per metre, y metres up over which it thins to 1/e, z haze per metre, w water level
     vec4 view; // x the view distance: the far plane
-    vec4 tintArea;    // the area tint map's place, see sfeAreaTint
-    vec4 fumes;       // x the map's water value they rise from, y metres up over which they thin to 1/e
-    vec4 fumesColour; // rgb what the light in them is multiplied by, a density per metre at the water line at worst
 } fog;
 
 const float PI = 3.14159265;

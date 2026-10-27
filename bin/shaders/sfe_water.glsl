@@ -7,8 +7,7 @@
     SFE_SKY_PARAMS       \
     vec4 surface;        /* xz centre, y level, w half size */ \
     vec4 look;           /* x clarity in metres, yz 1 / render size */ \
-    vec4 tintArea;       /* the area tint map's place, see sfeAreaTint */ \
-    vec4 tintWater;      /* rgb the murky water's colour (as kSfeWaterAlbedo), a how murky where the map is full */     vec4 current;        /* xy the surface current on world x/z, metres a second: what floats drifts with it; z the sky's share left in the sun's shade */
+    vec4 current;        /* xy the surface current on world x/z, metres a second: what floats drifts with it; z the sky's share left in the sun's shade */
 
 float sfeCausticLayer(vec2 p, float t) {
     vec2 warp = vec2(sfeValueNoise(p * 0.6 + vec2(t * 0.25, 0.0)), sfeValueNoise(p * 0.6 + vec2(3.7, -t * 0.21))) * 1.8;

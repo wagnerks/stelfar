@@ -7,8 +7,10 @@
 // already lit. glass.fs then takes the glass's alpha towards 0.97 by x, dims its highlight by 1 - y, and takes its
 // colour towards `over` and its alpha towards 1 by y. It is included after sfe.glsl, sfe_material.glsl and
 // sfe_glass.glsl, whose declarations it may read, and before glass.fs's own functions; it may declare inputs of its own
-// at locations the vertex shader writes. An application stands in for this file with one of the same name in its
-// content's shaders/. This default lays nothing: the glass stays clear and uncovered.
+// at locations the vertex shader writes (an entity's words in sfe_words.glsl), and its own frame data in the user frame
+// set, set 3, bindings 40-63 (UserFrameSet.h), which every pipeline compiling this hook lays out and binds. An
+// application stands in for this file with one of the same name in its content's shaders/. This default lays nothing:
+// the glass stays clear and uncovered.
 vec2 sfeUserGlass(vec3 N, vec3 sunCol, float nDotL, inout vec3 trans, out vec3 over) {
     over = vec3(0.0);
     return vec2(0.0);

@@ -9,6 +9,7 @@
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -20,9 +21,6 @@ namespace {
 		SFE::Render::Atmosphere::SkyParams sky;
 		float mist[4]{}; // x density at the water line per metre, y metres up over which it thins to 1/e, z haze per metre, w water level
 		float view[4]{}; // x the view distance
-		SFE::Math::Vec4 tintArea{}; // the area tint (AreaTintFrame); a zero area, no tint
-		SFE::Math::Vec4 fumes{};
-		SFE::Math::Vec4 fumesColour{};
 	};
 }
 
@@ -40,7 +38,6 @@ void MistPass::init(SystemsModule::RenderData&) {
 	layoutDesc.bindings.emplace_back(7, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	layoutDesc.bindings.emplace_back(23, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
@@ -63,6 +60,8 @@ void MistPass::init(SystemsModule::RenderData&) {
 	desc.descriptorSetLayouts = { mLayout };
 	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/atmosphere.vs");
 	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/mist.fs");
+	// What the application's mist hook (sfe_user_mist.glsl) reads of its own is in the user frame set, set 3.
+	UserFrameSet::instance().extend(desc);
 	mPipeline = rhi->createGraphicsPipeline(desc);
 }
 
@@ -90,23 +89,15 @@ void MistPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 		}
 	}
 
-	if (const auto* tint = renderDataHandle.frame.data<AreaTintFrame>(FrameId::AreaTint)) {
-		params.tintArea = tint->area;
-		params.fumes = tint->fumes;
-		params.fumesColour = tint->fumesColour;
-	}
-
 	auto* rhi = Engine::instance()->rhi();
 	const auto block = rhi->allocTransient(params);
 	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
 	const auto skyLut = Render::Atmosphere::skyTexture();
-	const auto tintMap = Utils::areaTintMap(renderDataHandle.frame);
 	rhi->updateDescriptorSets({
 		{ .set = set, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },
 		{ .set = set, .binding = 7, .images{ { position, mNearest } } },
 		{ .set = set, .binding = 15, .buffers{ { block.buffer, 0, sizeof(params) } } },
 		{ .set = set, .binding = 20, .images{ { skyLut.texture, skyLut.sampler } } },
-		{ .set = set, .binding = 23, .images{ { tintMap.first, tintMap.second } } },
 	});
 
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
@@ -118,6 +109,8 @@ void MistPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	rhi->cmdBeginRenderPass(cmd, begin);
 	rhi->cmdBindPipeline(cmd, mPipeline);
 	rhi->cmdBindDescriptorSets(cmd, mPipeline, 0, &set, 1, &block.offset, 1);
+	// The application's frame data, after the pass's own set (UserFrameSet::bind).
+	UserFrameSet::instance().bind(cmd, mPipeline);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 }
