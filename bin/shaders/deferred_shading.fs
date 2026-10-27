@@ -20,7 +20,6 @@ layout(SFE_SET(0, 12)) uniform samplerCube irradianceMap;
 layout(SFE_SET(0, 13)) uniform samplerCube prefilterMap;
 layout(SFE_SET(0, 14)) uniform sampler2D brdfLUT;
 layout(SFE_SET(0, 21)) uniform sampler2D cloudLayer;
-layout(SFE_SET(0, 22)) uniform sampler2D areaTintMap;
 // The sun's shadow over what is drawn, 0 lit and 1 in shadow (SunShadowPass, sun_shadow.fs): looked up there with its
 // disk turned a sixteenth each over a 4x4 block and averaged back over the block, so it leaves no grain.
 layout(SFE_SET(0, 10)) uniform sampler2D sunShadowMask;
@@ -226,6 +225,11 @@ float upsampledAO(vec2 uv) {
     return wsum > 1e-4 ? sum / wsum : nearest;
 }
 
+// What an application changes in the light of what is drawn: the albedo a surface is lit with, and the air between
+// the eye and it over the fogged colour (sfe_user_lighting.glsl, the engine's defaults change nothing). Here, after
+// every declaration above, so its functions may read them.
+#include "sfe_user_lighting.glsl"
+
 void main() {
     const vec3 FragPos = sfeScenePosition(sceneDepth, TexCoords, matrices.invProjection, matrices.invView);
     const vec4 normalSample = texture(gNormal, TexCoords);
@@ -254,15 +258,8 @@ void main() {
     }
     // Leaves and blades let the sun through (see sfeGBufferMaterial).
     const float translucency = clearcoat < 0.01 ? smoothstep(0.1, 1.0, pbr.w) : 0.0;
-    // The area tint: whatever is a plant's colour (by its colour: hair is cut out as leaves are, and is not to wither)
-    // goes where the map says towards its grey times the tint's colour, which keeps its pattern and can darken it. Not
-    // the ground: it turns to mud where it is foul (g_buffer_terrain.fs).
-    const vec3 areaTint = sfeAreaTint(areaTintMap, pc.tintArea, FragPos.xz);
-    const float green = ground ? 0.0 : (1.0 - metallic) * sfePlantColour(albedo);
-    if (green > 0.0 && areaTint.r > 0.0) {
-        vec3 tinted = pc.tintFoliage.rgb * dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-        albedo = mix(albedo, tinted, clamp(areaTint.r * pc.tintFoliage.a, 0.0, 1.0) * green);
-    }
+    // The application's say in the albedo, before anything below reads it (sfeUserLitAlbedo).
+    sfeUserLitAlbedo(FragPos, ground, metallic, albedo);
     float ccRough = max(pbr.w, 0.04);
     const float AmbientOcclusion = upsampledAO(TexCoords);
     // The material's own occlusion map: it darkens the sky's light and the reflections, never the sun or the lamps.
@@ -272,8 +269,8 @@ void main() {
     float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
     float darkDiel = (1.0 - metallic) * (1.0 - smoothstep(0.03, 0.22, luma));
     darkDiel *= 1.0 - smoothstep(0.05, 0.25, clearcoat);
-    // Wet ground (its specular raised over the dry 0.08, g_buffer_terrain.fs) is filmed with water, as glossy however
-    // dark the mud under it.
+    // Ground whose specular factor is raised over a dry ground's 0.08 (sfeGBufferMaterial) is filmed with water: as
+    // glossy, however dark what is under the film.
     if (ground) {
         darkDiel *= 1.0 - smoothstep(0.15, 0.45, specFactor);
     }
@@ -485,13 +482,8 @@ void main() {
         fogFactor = max(fogFactor, smoothstep(40.0, 320.0, Depth) * 0.58 * pc.stylise);
     }
     vec3 color = mix(lighting, fogColor, fogFactor);
-    // The area tint's air: a haze of its colour in the sky's light low towards the horizon, as thick as the air
-    // between the eye and here, taken as the mean of the two ends.
-    const float airDensity = (areaTint.b + sfeAreaTint(areaTintMap, pc.tintArea, pc.viewPos.xz).b) * 0.5 * pc.tintAir.a;
-    if (airDensity > 0.0) {
-        vec3 skyLow = texture(irradianceMap, normalize(vec3(-V.x, 0.08, -V.z))).rgb * pc.iblStrength;
-        color = mix(color, pc.tintAir.rgb * skyLow, 1.0 - exp(-airDensity * Depth));
-    }
+    // The application's air between the eye and here, over the fogged colour (sfeUserAir).
+    color = sfeUserAir(color, FragPos, V, Depth);
     if (pc.stylise > 0.0) {
         // A cartoon's colours are fuller than the world's.
         float grey = dot(color, vec3(0.2126, 0.7152, 0.0722));

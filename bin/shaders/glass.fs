@@ -2,9 +2,8 @@
 #include "sfe.glsl"
 #include "sfe_material.glsl"
 #include "sfe_glass.glsl"
-// Where this is on the model at rest (g_buffer.vs): a piece of litter's look laid over it.
-layout(location = 14) in vec3 vRest;
-#include "sfe_look.glsl"
+// What an application lays on the glass (sfe_user_glass.glsl; the engine's defaults lay nothing).
+#include "sfe_user_glass.glsl"
 
 vec3 fresnelSchlick(float cosTheta, vec3 f0) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
@@ -156,22 +155,16 @@ void main() {
     float spec = (pow(nh, 16.0) * 6.0 + pow(nh, 64.0) * 10.0) * nDotL;
     vec3 highlight = sunCol * spec + sunCol * envSun * 4.0;
 
-    // A piece of litter's glass (sfeLookedGlass): clouded, what shows through it scattered milky; soot, silt and the
-    // ground's dirt over it, lit as a rough surface by the sun and the sky.
-    vec2 look = vec2(0.0);
-    vec3 soil = vec3(0.0);
-    if (vLook.x != 0u) {
-        look = sfeLookedGlass(soil);
-        vec3 sky = textureLod(prefilterMap, N, 4.0).rgb;
-        trans = mix(trans, mix(trans, vec3(sfeLuma(trans)), 0.6) * 0.7 + sky * 0.2, look.x);
-        soil *= sky + sunCol * nDotL / 3.14159;
-    }
+    // What the application lays on the glass (sfe_user_glass.glsl): it may change what shows through (trans); x how
+    // clouded the glass is, y how much of it is hidden under `over`, a colour already lit.
+    vec3 over;
+    vec2 laid = sfeUserGlass(N, sunCol, nDotL, trans, over);
 
     vec3 base = mix(trans, refl, F);
     float alpha = mix(0.70, 0.92, F.x);
     alpha = max(alpha, density * 0.75);
     alpha = max(alpha, clamp(spec * 0.4, 0.0, 1.0));
-    alpha = mix(alpha, 0.97, look.x);
-    vec3 color = max(base * alpha + highlight * (1.0 - look.y), vec3(0.0));
-    FragColor = vec4(mix(color, soil, look.y), mix(alpha, 1.0, look.y));
+    alpha = mix(alpha, 0.97, laid.x);
+    vec3 color = max(base * alpha + highlight * (1.0 - laid.y), vec3(0.0));
+    FragColor = vec4(mix(color, over, laid.y), mix(alpha, 1.0, laid.y));
 }

@@ -7,6 +7,9 @@
 // with nothing shaded at it, or lose the leaf.
 #include "sfe.glsl"
 #include "sfe_material.glsl"
+// Which texels of a dissolving piece stay, and in what colour: the application's (sfe_user_dissolve.glsl). Included
+// for all three, the depth pre-pass too, as it cuts the dissolving pieces as the surface does.
+#include "sfe_user_dissolve.glsl"
 layout(location = 0) in vec3 FragPos;
 layout(location = 1) in vec2 TexCoords;
 layout(location = 2) in mat3 TBN;
@@ -88,12 +91,12 @@ void main() {
 #endif
 
     vec3 linAlb = pow(diff.rgb, vec3(2.2)) * pc.tint;
-    // A plant going bare (sfe_gbuffer_surface.glsl).
+    // A piece dissolving, as in the default surface (sfe_gbuffer_surface.glsl).
     if (vPiece < pc.bare) {
-        if (!sfeBareKeeps(linAlb)) {
+        if (!sfeUserDissolveKeeps(linAlb)) {
             discard;
         }
-        linAlb = mix(linAlb, vec3(sfeLuma(linAlb)), 0.7);
+        linAlb = sfeUserDissolved(linAlb);
     }
     // The pre-pass stops at the last cut: what follows only shades the surface.
 #ifndef SFE_GBUFFER_PREPASS

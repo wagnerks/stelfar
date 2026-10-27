@@ -67,7 +67,7 @@ layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
     SFE_SHARED_MATRICES
 } matrices;
 
-#include "sfe_marks.glsl"
+#include "sfe_ground_patch.glsl"
 
 void main() {
     SfeInstance instance = sfeInstances[SFE_INSTANCE_ID];

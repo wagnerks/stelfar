@@ -15,7 +15,6 @@ layout(location = 8) in vec4 vPrevClip;
 layout(location = 9) in vec3 vSurface;
 layout(location = 12) flat in float vPiece;
 layout(location = 14) in vec3 vRest;
-#include "sfe_look.glsl"
 
 layout(location = 0) out vec4 gMaterial;
 layout(location = 1) out vec4 gNormal;
@@ -35,8 +34,6 @@ layout(SFE_SET(1, 9)) uniform sampler2D triplanarAlbedo2;
 layout(SFE_SET(1, 10)) uniform sampler2D triplanarNormals2;
 layout(SFE_SET(1, 11)) uniform sampler2D texture_occlusion;
 layout(SFE_SET(1, 12)) uniform sampler2D texture_emissive;
-// The vehicles' mud maps (MudMapsFrame), a material's by its mudMap.
-layout(SFE_SET(0, 36)) uniform sampler2DArray sfeMudMaps;
 
 #define pc sfeMaterials[vMaterial]
 
@@ -79,78 +76,16 @@ void sfeTriplanar(sampler2D albedo, sampler2D normals, float repeat, bool rotate
     Nw = normalize(tX.zyx * w.x + tY.xzy * w.y + tZ.xyz * w.z);
 }
 
-// Mud thrown up off the ground by the model's wheels (MaterialComponent::mudWheels), caked on it: on a wheel's tyre
-// round all of it from its tread inward, kSfeMudInward of its radius in once the tread is wholly caked (mudTreads); on
-// the rest where the drops it threw struck it, as its mud map has it (mudMap), in patches and drops where little
-// struck. The surface's own crevices (its occlusion map: a tyre's tread, the seams) fill first. All of it laid on the
-// model as it rests (vRest), so it stays where it struck as the model moves and its parts turn: a wheel's mud goes
-// round with it, a door's swings with it.
-const float kSfeMudInward = 0.75;
-const float kSfeMudGrain = 6.0;                      // splashes a metre, and drops kSfeMudGrain * 4
-const float kSfeMudDepth = 0.015;                    // metres the mud stands out at its thickest, for its relief
-const vec3 kSfeMud = vec3(0.045, 0.032, 0.022);     // wet mud's colour, linear: the ground's (g_buffer_terrain.fs kWetMud)
-// A mud map's cells: as MudMapsFrame::kCell and kCells.
-const float kSfeMudCell = 0.05;
-const vec3 kSfeMudCells = vec3(56.0, 60.0, 128.0);
-
-float sfeMudNoise(float scale, int octaves) {
-    return sfeRestNoise(vec3(0.0), scale, octaves);
-}
-
-// How caked the model is here by the drops that struck it, as its mud map has it (mudMap), 0 none to 1 wholly: the
-// map's cells taken smoothly, across and down within a layer by the sampler, from layer to layer here.
-float sfeMudStruck() {
-    vec3 c = (vRest - pc.mudMap.xyz) / kSfeMudCell;
-    if (pc.mudMap.w <= 0.0 || any(lessThan(c, vec3(0.0))) || any(greaterThan(c, kSfeMudCells))) {
-        return 0.0;
-    }
-    float height = clamp(c.y - 0.5, 0.0, kSfeMudCells.y - 1.0);
-    float below = floor(height);
-    vec2 uv = c.xz / kSfeMudCells.xz;
-    float first = pc.mudMap.w - 1.0;
-    float low = texture(sfeMudMaps, vec3(uv, first + below)).r;
-    float high = texture(sfeMudMaps, vec3(uv, first + min(below + 1.0, kSfeMudCells.y - 1.0))).r;
-    return mix(low, high, height - below);
-}
-
-// How much mud is caked here, 0 none to 1 wholly: on a tyre (and what turns with it, within its radius round its
-// axle, the model's x, and a little more than half a radius aside) by how caked its tread is, from the tread in; on
-// the rest as the drops that struck it caked it.
-float sfeMudThrown() {
-    for (int w = 0; w < 8; ++w) {
-        vec4 wheel = pc.mudWheels[w];
-        if (wheel.w <= 0.0) {
-            continue;
-        }
-        vec3 off = vRest - wheel.xyz;
-        float across = length(off.yz) / wheel.w;
-        if (across <= 1.02 && abs(off.x) < 0.6 * wheel.w) {
-            float tread = pc.mudTreads[w / 4][w % 4];
-            return tread > 0.0 ? smoothstep(-0.12, 0.12, across - 1.0 + kSfeMudInward * tread) : 0.0;
-        }
-    }
-    return sfeMudStruck();
-}
-
-// The mud here: x how much of the surface it hides (0..1, a sharp edge), y how thick it lies (0 at its edge, 1 a full
-// coat), z how high it stands, metres: a liquid's, swelling smoothly up from its edge, so each splash and drop of it is
-// a rounded blob and they run together where they meet. `crevice` how sunk the surface is there, 0..1. Where little was
-// thrown, only the highest of its splashes and drops show.
-vec3 sfeMud(float crevice) {
-    float thrown = sfeMudThrown();
-    if (thrown <= 0.0) {
-        return vec3(0.0);
-    }
-    float splash = 0.65 * sfeMudNoise(kSfeMudGrain, 3) + 0.35 * sfeMudNoise(kSfeMudGrain * 4.0, 2);
-    float caked = splash + 1.3 * thrown - 0.75 + 0.3 * crevice * min(4.0 * thrown, 1.0);
-    float cover = smoothstep(0.47, 0.53, caked);
-    float thick = smoothstep(0.5, 0.9, caked);
-    return vec3(cover, thick, cover * kSfeMudDepth * smoothstep(0.47, 1.1, caked));
-}
-
 vec2 uvOf(uint bit) {
     return ((uint(pc.uvSel + 0.5) & bit) != 0u) ? TexCoords1 : TexCoords;
 }
+
+// The application's own say over the surface (sfe_user_surface.glsl: sfeUserSurface and sfeUserSurfaceLate) and over
+// which texels of a dissolving piece stay (sfe_user_dissolve.glsl), each a file an application stands in for with one
+// of the same name in its content's shaders/. Included here, after everything above, which their bodies may read: the
+// inputs, the material's textures, its entry pc and uvOf.
+#include "sfe_user_surface.glsl"
+#include "sfe_user_dissolve.glsl"
 
 void main() {
     if (sfeNearFaded(gl_FragCoord)) {
@@ -247,25 +182,10 @@ void main() {
     float coatRough = pc.clearcoatRough;
     sfeStyleSurface(texture_diffuse1, uvDiff, diffLod, diff.rgb, Nw, coat, coatRough);
 #else
-    const float coat = pc.clearcoat;
+    float coat = pc.clearcoat;
     const float coatRough = pc.clearcoatRough;
 #endif
     vec3 linAlb = pow(diff.rgb, vec3(2.2)) * pc.tint;
-    // Soaked below a line up the model (MaterialComponent::wetBelow): with water filling the weave, much darker and a
-    // little deeper in colour.
-    float soaked = 1.0 - smoothstep(pc.wetBelow - 0.03, pc.wetBelow + 0.03, vSurface.y);
-    linAlb = mix(linAlb, pow(linAlb, vec3(1.15)) * 0.4, soaked);
-    // Wet mud over it, the same liquid the drops that struck it are: dark, standing out in smooth blobs over the surface,
-    // whose own relief (its normal map) it buries. Worked out over the whole material once it is muddy at all, as the
-    // relief takes the neighbouring pixels' heights.
-    vec3 mud = vec3(0.0);
-    if (pc.mudMap.w > 0.0) {
-        mud = sfeMud(1.0 - texture(texture_occlusion, uvOf(64u)).r);
-        vec3 buried = normalize(mix(Nw, normalize(TBN[2]), mud.y));
-        Nw = normalize(mix(Nw, sfeBumped(buried, mud.z), mud.x));
-        linAlb = mix(linAlb, kSfeMud, mud.x);
-    }
-    float muddy = mud.x;
     float roughness = pc.matRoughness;
     if ((maps & 1u) != 0u) {
         roughness = texture(texture_roughness, uvRough).g;
@@ -276,25 +196,19 @@ void main() {
     if ((maps & 2u) != 0u) {
         metallic = texture(texture_metallic, uvMetal).b;
     }
-    // A piece of litter worn and dirtied (sfeLooked), over what its maps give.
-    if (vLook.x != 0u) {
-        SfeLooked looked = sfeLooked(linAlb, Nw, roughness, metallic, 1.0 - texture(texture_occlusion, uvAo).r);
-        linAlb = looked.albedo;
-        Nw = looked.normal;
-        roughness = looked.rough;
-        metallic = looked.metal;
-    }
-    // A plant going bare (SfeMaterial::bare): its bark greys with it, and a leaf past its point is gone (sfeBareKeeps).
-    float dead = pc.alphaCutoff > 0.0 ? 0.0 : pc.bare;
+    // The application's own look over the surface (sfe_user_surface.glsl): the colour, the normal, the roughness and
+    // the metalness as the maps give them, changed before anything below is worked out from them.
+    sfeUserSurface(linAlb, Nw, roughness, metallic);
 #ifdef SFE_GBUFFER_CUTOUT
+    // A piece of a cut-out material dissolving (SfeMaterial::bare, the pieces whose vPiece is under it): a texel the
+    // application keeps (sfe_user_dissolve.glsl) stays, in the colour it gives it, and the rest are gone.
     if (pc.alphaCutoff > 0.0 && vPiece < pc.bare) {
-        if (!sfeBareKeeps(linAlb)) {
+        if (!sfeUserDissolveKeeps(linAlb)) {
             discard;
         }
-        dead = 1.0;
+        linAlb = sfeUserDissolved(linAlb);
     }
 #endif
-    linAlb = mix(linAlb, vec3(sfeLuma(linAlb)), dead * 0.7);
     const bool cutout = pc.alphaCutoff > 0.0;
     // Cut-out surfaces (leaves, grass cards) scatter nothing under the skin: their subsurface map is not even read.
     float sss = 0.0;
@@ -320,28 +234,29 @@ void main() {
     if (pc.clearcoat > 0.5) {
         roughness = 0.48;
     }
-    // Wet mud: glossy as a liquid's face, over the paint's coat.
-    roughness = mix(roughness, mix(0.25, 0.12, mud.y), muddy);
     metallic *= 1.0 - clamp(pc.clearcoat, 0.0, 1.0);
     if ((maps & 8u) != 0u || cutout) {
         metallic = 0.0;
     }
-    metallic *= 1.0 - muddy;
 
     float specF = pc.specFactor;
     if ((maps & 1u) != 0u && (maps & 4u) != 0u) {
         specF *= texture(texture_specular1, uvSpec).r;
     }
     if (cutout) {
-        roughness = max(roughness, 0.78);
         specF = min(specF, 0.18);
+    }
+    // The application's last word on the roughness, the metalness, the specular factor and the coat
+    // (sfe_user_surface.glsl), before a cut-out's roughness floor and the clamps they are written with.
+    sfeUserSurfaceLate(roughness, metallic, specF, coat);
+    if (cutout) {
+        roughness = max(roughness, 0.78);
     }
 
     gAlbedoSpec.a = clamp(sfeFilteredRoughness(Nw, roughness, normalLen), 0.04, 1.0);
     // Cut-out surfaces are leaves, needles and grass: they let the sun through.
     float lastChannel = cutout && pc.clearcoat < 0.01 ? kSfeTranslucentFoliage : clamp(coatRough, 0.04, 1.0);
-    specF = mix(specF, 0.5, muddy);
-    gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(coat * (1.0 - muddy), 0.0, 1.0), lastChannel);
+    gMaterial = sfeGBufferMaterial(clamp(metallic, 0.0, 1.0), clamp(specF, 0.0, 1.0), clamp(coat, 0.0, 1.0), lastChannel);
     gVelocity = sfeGBufferVelocity(vClip, vPrevClip, 1.0 - texture(texture_occlusion, uvAo).r);
     gEmissive = sfeGBufferEmissive(vec3(pc.emissiveR, pc.emissiveG, pc.emissiveB), texture_emissive, uvOf(128u));
 }

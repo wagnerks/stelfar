@@ -43,20 +43,25 @@ vec3 sfeWaterExtinction(float clarity) {
     return vec3(0.55, 0.45, 0.85) * (4.0 / clarity);
 }
 
-// The area tint's murk at a place of the water: 0 clear, 1 as murky as it gets.
-float sfeWaterMurk(sampler2D tintMap, vec4 tintArea, vec4 tintWater, vec2 xz) {
-    return clamp(sfeAreaTint(tintMap, tintArea, xz).g * tintWater.a, 0.0, 1.0);
-}
-
-// The clarity (metres) murk leaves: a fiftieth at its worst, next to opaque, and clearing evenly as it goes.
-float sfeMurkyClarity(float clarity, float murk) {
-    return clarity * pow(0.02, murk);
-}
-
 // What the water itself scatters back towards the eye in place of the light it took away: this much of it.
 const vec3 kSfeWaterAlbedo = vec3(0.0025, 0.005, 0.004);
 vec3 sfeWaterBody(vec3 sun, vec3 toSun, vec3 skyLight, vec3 albedo) {
     return albedo * (sun * max(toSun.y, 0.0) + skyLight) / 3.14159265;
+}
+
+// The water at one place, as the water's fragment shaders draw it: what an application may change of it
+// (sfe_user_water.glsl) before they do.
+struct SfeWaterPlace {
+    vec3 albedo;     // what the water scatters back of the light that reaches it (sfeWaterBody)
+    float clarity;   // metres, as WaterComponent's clarity (sfeWaterExtinction)
+    float mirror;    // the share of the reflection kept, 1 all of it
+    vec3 foamColour; // the colour of the surf along the shore
+};
+
+// The water at a place as the engine has it: its own albedo, `clarity` metres clear, the whole mirror, and white
+// surf.
+SfeWaterPlace sfeWaterPlace(float clarity) {
+    return SfeWaterPlace(kSfeWaterAlbedo, clarity, 1.0, vec3(0.95));
 }
 
 #endif

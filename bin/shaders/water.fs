@@ -22,7 +22,6 @@ layout(SFE_SET(0, 21)) uniform sampler2D cloudLayer;
 // The fine ripple (scripts/water_ripple_texture.py): rg the slope, over a tile this many metres across.
 layout(SFE_SET(0, 22)) uniform sampler2D rippleMap;
 const float kRippleTile = 4.0;
-layout(SFE_SET(0, 23)) uniform sampler2D areaTintMap;
 // The sun's shadow on the water (sfe_sun_shadow.glsl), on these bindings (WaterPass).
 #define SFE_SUN_SHADOW_DEPTH SFE_SET(0, 8)
 #define SFE_SUN_SHADOW_BLOCK SFE_SET(0, 9)
@@ -130,6 +129,9 @@ vec2 waveSlope(vec2 p, float seconds, float footprint, vec2 stepX, vec2 stepY, v
 
 #include "sfe_reflection.glsl"
 
+// What an application makes of its water (sfe_user_water.glsl; the engine's defaults leave it as it is).
+#include "sfe_user_water.glsl"
+
 void main() {
     // No discard: the quad is the water square exactly, and without one the depth test rejects what stands in front of
     // the water before this runs.
@@ -189,15 +191,18 @@ void main() {
     vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
     vec3 skyLight = sfeSkyRadiance(skyLut, vec3(0.0, 1.0, 0.0)) * brightness * PI;
     // The sun where nothing stands between it and the water, as on the ground: the water a flat plane, its steps across
-    // it known exactly. What the sun lights on it -- the water's own colour, the glitter, foam and scum -- by that.
+    // it known exactly. What the sun lights on it -- the water's own colour, the glitter, the foam and what lies on
+    // the water -- by that.
     float sunLit = 1.0 - cascadedShadow.direction_intensity.w
         * ShadowCascadedCalculation(vWorld, vec3(0.0, 1.0, 0.0), false, 0.0);
     vec3 sunHere = sun * sunLit;
-    // The area tint: murkier water, of its colour, where the map says.
-    float murk = sfeWaterMurk(areaTintMap, water.tintArea, water.tintWater, vWorld.xz);
-    // In the shade the sky is dimmed as well, as on the ground (shadowAmbient): the sun alone was too little of murky
+    // The water here as an application leaves it (sfe_user_water.glsl): its albedo, clarity, mirror and surf colour,
+    // and a value of its own for what it lays on the surface further down.
+    SfeWaterPlace place = sfeWaterPlace(water.look.x);
+    float user = sfeUserWater(vWorld.xz, place);
+    // In the shade the sky is dimmed as well, as on the ground (shadowAmbient): the sun alone was too little of dark
     // water's light for a shadow to show on it.
-    vec3 waterBody = sfeWaterBody(sunHere, toSun, skyLight * mix(water.current.z, 1.0, sunLit), mix(kSfeWaterAlbedo, water.tintWater.rgb, murk));
+    vec3 waterBody = sfeWaterBody(sunHere, toSun, skyLight * mix(water.current.z, 1.0, sunLit), place.albedo);
 
     // Seen from under the water: out through the surface only inside the circle overhead the light bends into (about
     // 49 degrees from straight up), and past it the surface is a mirror of the dim water below. The water between the
@@ -230,7 +235,7 @@ void main() {
     float path = dot(refractBottom, refractBottom) < 1e-6 ? 50.0 : distance(refractBottom, vWorld);
 
     // Light that survives the path through the water, and what the water itself scatters back in its place.
-    vec3 transmitted = exp(-sfeWaterExtinction(sfeMurkyClarity(water.look.x, murk)) * path);
+    vec3 transmitted = exp(-sfeWaterExtinction(place.clarity) * path);
     vec3 refracted = under * transmitted + waterBody * (1.0 - transmitted);
 
     // Reflection: whatever on screen the reflected ray runs into, faded out towards the screen's edge, and the sky
@@ -260,58 +265,16 @@ void main() {
     // A painted lake is one blue that takes some sky, not a mirror that turns clear underfoot: the mix stays much the
     // same wherever you look, which is what makes it read as a flat sheet of water.
     fresnel = mix(fresnel, mix(0.35, 0.85, fresnel), cartoon);
-    // Murk has a film on it that mirrors little.
-    fresnel *= 1.0 - 0.85 * murk;
+    // As much of the mirror as the place keeps.
+    fresnel *= place.mirror;
     vec3 color = mix(refracted, reflected, fresnel);
 
-    // Scum: a film of algae and dirt on water the litter fouls, none on clean water, thicker the fouler it is and
-    // gathered towards the shore. The current draws it into rows along the wind and carries it along, as it does what
-    // floats.
-    vec3 daylight = (sunHere * max(toSun.y, 0.0) + skyLight) / PI;
+    // This point in a frame the surface current carries along: what is laid out by it drifts with the water, as what
+    // floats on it does.
     vec2 drifted = vWorld.xz - water.current.xy * seconds;
-    float scum = 0.0;
-    if (murk > 0.02) {
-        vec2 along = normalize(water.wind.xz + vec2(1e-4));
-        vec2 rows = vec2(dot(drifted, along) * 0.05, dot(drifted, vec2(-along.y, along.x)) * 0.16);
-        float cover = sfeFbm(rows, 4) * 0.75 + sfeFbm(drifted * 1.3, 2) * 0.25
-            + 0.1 * (1.0 - smoothstep(0.0, 1.5, depthBelow));
-        float threshold = mix(0.72, 0.56, murk);
-        scum = smoothstep(threshold, threshold + 0.06, cover) * smoothstep(0.02, 0.3, murk);
-        vec3 algae = mix(vec3(0.16, 0.22, 0.06), vec3(0.2, 0.15, 0.08), sfeFbm(drifted * 0.3 + 7.1, 2));
-        color = mix(color, algae * daylight, scum * 0.9);
-    }
-
-    // Boiling: on the foulest water gas comes up through the muck, a dome of it swelling on the surface here and there
-    // and bursting, a ring spreading where it was. They ride the current with the scum.
-    float boil = smoothstep(0.8, 1.0, murk);
-    if (boil > 0.0) {
-        const float kCell = 0.7;
-        vec2 cell = floor(drifted / kCell);
-        // Fewer spots bubble the less foul the water.
-        if (sfeHash12(cell + 29.1) < boil * 0.7) {
-            vec2 inCell = drifted - cell * kCell;
-            vec2 centre = (0.4 + 0.2 * vec2(sfeHash12(cell + 11.3), sfeHash12(cell + 19.9))) * kCell;
-            float size = kCell * (0.06 + 0.08 * sfeHash12(cell + 23.5));
-            float life = fract(seconds / (1.2 + 2.0 * sfeHash12(cell + 3.1)) + sfeHash12(cell + 7.7));
-            float away = distance(inCell, centre);
-            if (life < 0.8) {
-                float radius = size * sqrt(life / 0.8);
-                float dome = 1.0 - smoothstep(radius * 0.8, radius, away);
-                // A film: darker in the middle where it is thin over the muck, paler round the edge, a glint towards
-                // the sun.
-                vec2 toward = normalize(toSun.xz + vec2(1e-4));
-                float glint = 1.0 - smoothstep(0.0, radius * 0.35, distance(inCell, centre + toward * radius * 0.4));
-                float edge = away / max(radius, 1e-4);
-                vec3 film = mix(vec3(0.3, 0.36, 0.14), vec3(0.7, 0.75, 0.45), edge * edge) * daylight + sunHere * glint * 0.08;
-                color = mix(color, film, dome * 0.9);
-            }
-            else {
-                float burst = (life - 0.8) / 0.2;
-                float line = 1.0 - smoothstep(0.0, size * 0.18, abs(away - size * (1.0 + 0.8 * burst)));
-                color = mix(color, vec3(0.5, 0.55, 0.32) * daylight, line * (1.0 - burst) * 0.7);
-            }
-        }
-    }
+    // What an application lays on the surface (sfe_user_water.glsl), drawn over the water's colour; `film` is how much
+    // of the sun's glitter it hides.
+    float film = sfeUserWaterFilm(user, drifted, depthBelow, toSun, sunHere, skyLight, seconds, color);
 
     if (cartoon > 0.5) {
         // The light's path drawn as a handful of flat streaks lying across the water, the way a picture shows a moon
@@ -344,10 +307,11 @@ void main() {
     float d = nh * nh * (a2 - 1.0) + 1.0;
     float ggx = a2 / (PI * d * d);
     float sunFresnel = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
-    color += sunHere * ggx * sunFresnel * max(dot(N, toSun), 0.0) * 0.07 / max(cosTheta, 0.1) * (1.0 - cartoon) * (1.0 - scum);
+    color += sunHere * ggx * sunFresnel * max(dot(N, toSun), 0.0) * 0.07 / max(cosTheta, 0.1) * (1.0 - cartoon) * (1.0 - film);
 
     // Surf where the waves run up the shore: a strip of froth at the water's edge and lines of foam rolling in onto
-    // it, reaching further out the harder the wind blows, and furthest onto the shore it blows at. Dirty on foul water.
+    // it, reaching further out the harder the wind blows, and furthest onto the shore it blows at. Its colour is
+    // the place's.
     float onshore = dot(toShore, toShore) > 0.5 ? max(dot(normalize(water.wind.xz + vec2(1e-4)), toShore), 0.0) : 0.0;
     float reach = 0.2 + (0.4 + 0.8 * onshore) * water.wind.y;
     if (depthBelow < reach) {
@@ -365,7 +329,7 @@ void main() {
         float foam = max(edge * mix(1.0, lace, 0.5), band);
         // A heap of bubbles takes the light in from any side, so a low sun lights it more than a flat film.
         vec3 foamLight = (sunHere * (0.5 + 0.5 * max(toSun.y, 0.0)) + skyLight) / PI;
-        color = mix(color, mix(vec3(0.95), vec3(0.88, 0.85, 0.75), murk) * foamLight, foam * 0.95);
+        color = mix(color, place.foamColour * foamLight, foam * 0.95);
     }
 
     // The water line itself: fade into the wet ground over the last few centimetres instead of a hard edge.

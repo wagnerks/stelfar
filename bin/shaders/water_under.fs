@@ -17,12 +17,14 @@ layout(SFE_SET(0, 5), std140) uniform SharedMatrices {
     SFE_SHARED_MATRICES
 } matrices;
 layout(SFE_SET(0, 20)) uniform sampler2D skyLut;
-layout(SFE_SET(0, 23)) uniform sampler2D areaTintMap;
 
 const float PI = 3.14159265;
 const float kUnderClear = 0.25;
 // The water's glow around a swimmer, over what sfeWaterBody gives the surface seen from above.
 const float kUnderGlow = 4.0;
+
+// What an application makes of its water (sfe_user_water.glsl; the engine's defaults leave it as it is).
+#include "sfe_user_water.glsl"
 
 void main() {
     float level = water.surface.y;
@@ -47,9 +49,10 @@ void main() {
     float path = min(distanceTo, toSurface);
 
     // Clearer than the stained lake looks from above, where the light crosses it twice: a swimmer sees some metres.
-    // Murky round the eye (the area tint), the swimmer sees next to nothing.
-    float murk = sfeWaterMurk(areaTintMap, water.tintArea, water.tintWater, eye.xz);
-    vec3 extinction = sfeWaterExtinction(sfeMurkyClarity(water.look.x, murk)) * kUnderClear;
+    // The water round the eye as an application leaves it (sfe_user_water.glsl): its albedo and its clarity.
+    SfeWaterPlace place = sfeWaterPlace(water.look.x);
+    sfeUserWater(eye.xz, place);
+    vec3 extinction = sfeWaterExtinction(place.clarity) * kUnderClear;
     if (!nothing && distanceTo < toSurface) {
         // What lies in the water was lit as if in the air: the sunlight reaching it has crossed the water above it
         // (half as dimming as the view through it: light from above comes in scattered from all over the surface).
@@ -58,7 +61,7 @@ void main() {
     }
     vec3 skyLight = sfeSkyRadiance(skyLut, vec3(0.0, 1.0, 0.0)) * water.cameraPos.w * PI;
     // The deeper the eye, the darker the water around it.
-    vec3 body = sfeWaterBody(sun, toSun, skyLight, mix(kSfeWaterAlbedo, water.tintWater.rgb, murk)) * kUnderGlow * exp(-extinction * max(level - eye.y, 0.0) * 0.5);
+    vec3 body = sfeWaterBody(sun, toSun, skyLight, place.albedo) * kUnderGlow * exp(-extinction * max(level - eye.y, 0.0) * 0.5);
     vec3 transmitted = exp(-extinction * path);
     FragColor = vec4(scene * transmitted + body * (1.0 - transmitted), 1.0);
 }
