@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include "assetsModule/TextureHandler.h"
+#include "core/Clocks.h"
 #include "core/Engine.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/IblBaker.h"
@@ -174,11 +175,11 @@ std::array<float, 5> LightingPass::skyLightKey(const SystemsModule::RenderData& 
 void LightingPass::updateSkyLight(SystemsModule::RenderData& renderDataHandle) {
 	// Baked again when the sun or the sky changed: worked out on a worker, as it takes the best part of a second, and
 	// written into the spare maps once it is done and they swapped in, the next started only then. A sun going along its
-	// path never holds a frame up, and the sky's light follows it a bake behind. The maps written are never those a
-	// frame in flight reads: made anew each time (and the old freed), or written over while still read, they held the
-	// driver up for seconds at a time.
+	// path never holds a frame up, and the sky's light follows it a bake behind (when frames step the world, exactly one
+	// frame behind: Clocks::ready). The maps written are never those a frame in flight reads: made anew each time (and
+	// the old freed), or written over while still read, they held the driver up for seconds at a time.
 	if (mIblBaking.valid()) {
-		if (mIblBaking.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+		if (SFE::Clocks::ready(mIblBaking)) {
 			SFE::Render::uploadIbl(Engine::instance()->rhi(), mIblBaking.get(), mIblSpare);
 			std::swap(mIbl, mIblSpare);
 			useSkyLight(renderDataHandle);
