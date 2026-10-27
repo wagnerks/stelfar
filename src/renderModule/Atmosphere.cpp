@@ -2,13 +2,13 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <execution>
 #include <numeric>
 #include <vector>
 
 #include "assetsModule/TextureHandler.h"
+#include "core/Clocks.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
 #include "mathModule/MatrixOperations.h"
@@ -187,17 +187,18 @@ namespace SFE::Render::Atmosphere {
 	SkyTexture skyTexture() {
 		constexpr uint32_t kWidth = 128;
 		constexpr uint32_t kHeight = 32;
-		using Clock = std::chrono::steady_clock;
 		static SkyTexture sky;
 		// Three written in turn, each by then read by no frame still in flight: made anew each time (and the old freed),
 		// or written over while frames still read it, it held the driver up for seconds at a time.
 		static std::array<TextureHandle, 3> ring;
 		static size_t written = 0;
 		static Math::Vec3 bakedFor{ 0.f, -2.f, 0.f };
-		static Clock::time_point bakedAt;
+		// When it was last baked, on the simulation's clock: a sun on the move is baked again at most every 0.1 s of the
+		// world's time, so a frame stepped shows the same sky on every run.
+		static double bakedAt = 0.0;
 
 		auto* rhi = Engine::instance()->rhi();
-		const auto now = Clock::now();
+		const double now = Clocks::simulation();
 		if (!sky.sampler) {
 			SamplerDesc desc;
 			desc.addressU = AddressMode::Repeat;
@@ -207,7 +208,7 @@ namespace SFE::Render::Atmosphere {
 		const auto scene = sceneSky();
 		const Math::Vec3 toSun = scene ? scene->toSun() : Math::Vec3{ 0.f, 1.f, 0.f };
 		const bool moved = toSun.x != bakedFor.x || toSun.y != bakedFor.y || toSun.z != bakedFor.z;
-		if (sky.texture && (!moved || now - bakedAt < std::chrono::milliseconds(100))) {
+		if (sky.texture && (!moved || (now >= bakedAt && now - bakedAt < 0.1))) {
 			return sky;
 		}
 
