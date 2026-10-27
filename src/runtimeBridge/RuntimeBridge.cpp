@@ -3,6 +3,7 @@
 #include "core/Engine.h"
 #include "core/InputHandler.h"
 #include "editorProtocol/TcpSocket.h"
+#include "logsModule/logger.h"
 #include "propertiesModule/PropertiesSystem.h"
 #include "rhi/GraphicsBackend.h"
 #include "rhi/RenderHardwareInterface.h"
@@ -346,9 +347,15 @@ namespace SFE::RuntimeBridge {
 		}
 	}
 
-	void RuntimeBridge::addCommand(const std::string& name, std::string help, Command run)
+	bool RuntimeBridge::addCommand(const std::string& name, std::string help, Command run)
 	{
+		// Two parts of the program answering to one name: only the later is reached, which neither may have meant.
+		const bool replaced = mCommands.contains(name);
+		if (replaced) {
+			LogsModule::Logger::LOG_WARNING("bridge command %s registered again: the later one stands", name.c_str());
+		}
 		mCommands[name] = { std::move(help), std::move(run) };
+		return replaced;
 	}
 
 	std::string RuntimeBridge::runCommand(const std::string& name, const Json::Value& args)

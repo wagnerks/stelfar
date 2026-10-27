@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <filesystem>
@@ -28,9 +29,12 @@
 #include "componentsModule/OutlineComponent.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "core/FileSystem.h"
+#include "core/Params.h"
 #include "debugModule/Benchmark.h"
 #include "debugModule/Profiler.h"
 #include "ecss/Registry.h"
+#include "logsModule/logger.h"
 #include "renderModule/Utils.h"
 #include "renderModule/renderPasses/CascadedShadowPass.h"
 #include "renderModule/renderPasses/LightingPass.h"
@@ -138,13 +142,148 @@ namespace SFE::SystemsModule {
 			std::ofstream mIndex;
 			std::unordered_map<std::string, uint32_t> mLastCrc;
 		};
+
+		// The graphics settings as numbers to tune (Params), bound to the ones this system draws with: those tuned before
+		// under the keys they had, the rest in "Graphics" under their label in the Graphics panel, with its range for the
+		// drag. The grass, the vegetation's reach and the air life are the application's to register, as it reads them.
+		void registerGraphics(GraphicsSettings& gfx) {
+			constexpr const char* kGraphics = "Graphics";
+			Params::bind(kGraphics, "ssao", gfx.ssao, { .help = "The ambient occlusion's pass (SSAOPass) on or off." });
+			Params::bind(kGraphics, "ssr", gfx.ssr, { .help = "The screen-space reflections' pass (SSRPass) on or off." });
+			Params::bind(kGraphics, "volumetric", gfx.volumetric, { .help = "The light in the air (VolumetricPass) on or off." });
+			Params::bind(kGraphics, "taa", gfx.taa, { .help = "The temporal anti-aliasing (TAAPass) on or off; --no-taa holds "
+				"it off for the run." });
+			Params::bind(kGraphics, "dof", gfx.dof, { .help = "The depth of field (DoFPass) on or off." });
+			Params::bind(kGraphics, "bloom", gfx.bloom, { .help = "The bloom (FinalPass) on or off." });
+			Params::bind(kGraphics, "sheen", gfx.sheen, { .help = "The soft sheen on rough dielectrics on or off." });
+			Params::bind(kGraphics, "sss", gfx.sss, { .help = "The light spread under the skin (SSSPass) on or off." });
+			Params::bind(kGraphics, "contact gi", gfx.contactGi, { .help = "The contact GI (ContactGIPass) on or off." });
+
+			Params::bind(kGraphics, "ssr distance", gfx.ssrDistance, { .min = 2.f, .max = 80.f });
+			Params::bind(kGraphics, "vol density", gfx.volumetricDensity, { .min = 0.f, .max = 0.08f });
+			Params::bind(kGraphics, "vol intensity", gfx.volumetricIntensity, { .min = 0.f, .max = 8.f });
+			Params::bind(kGraphics, "vol anisotropy", gfx.volumetricAnisotropy, { .min = -0.9f, .max = 0.9f });
+			Params::bind(kGraphics, "vol distance", gfx.volumetricDistance, { .min = 10.f, .max = 200.f });
+			Params::bind(kGraphics, "history blend", gfx.taaBlend, { .help = "TAA's history weight. Must stay high enough "
+				"that the jitter pattern averages out over its 8 phases: at 0.72 the resolve settles in ~3.6 frames and the "
+				"pattern shows as shimmer.", .min = 0.5f, .max = 0.99f });
+			Params::bind(kGraphics, "dof focus", gfx.dofFocus, { .min = 1.f, .max = 80.f });
+			Params::bind(kGraphics, "dof range", gfx.dofRange, { .min = 1.f, .max = 80.f });
+			Params::bind(kGraphics, "dof blur", gfx.dofBlur, { .min = 0.f, .max = 16.f });
+
+			// Its own name: the Graphics panel has the bloom's pass and its strength both under "bloom".
+			Params::bind(kGraphics, "bloom strength", gfx.bloomStrength, { .min = 0.f, .max = 2.f });
+			Params::bind(kGraphics, "exposure", gfx.exposure, { .min = 0.2f, .max = 2.5f });
+			Params::bind(kGraphics, "ca", gfx.chromaticAberration, { .help = "Chromatic aberration.", .min = 0.f, .max = 0.012f });
+			Params::bind(kGraphics, "sharpness", gfx.sharpness, { .help = "Contrast adaptive sharpening after the tonemap: 0 "
+				"leaves the image as TAA resolved it, 1 is as far as the filter goes before it starts ringing.", .min = 0.f,
+				.max = 1.f });
+			Params::bind(kGraphics, "auto exposure", gfx.autoExposure, { .help = "The eye following the scene's brightness: "
+				"exposure then only nudges it." });
+			Params::bind(kGraphics, "adaptation speed", gfx.adaptationSpeed, { .help = "How fast the eye follows the scene's "
+				"brightness, per second.", .min = 0.1f, .max = 8.f });
+			Params::bind(kGraphics, "lens flare", gfx.flareStrength, { .min = 0.f, .max = 2.f });
+			Params::bind(kGraphics, "warmth", gfx.warmth, { .help = "The grade: -1 cool .. 1 warm.", .min = -1.f, .max = 1.f });
+			Params::bind(kGraphics, "saturation", gfx.saturation, { .help = "The grade's saturation, around 1.", .min = 0.f,
+				.max = 2.f });
+			Params::bind(kGraphics, "contrast", gfx.contrast, { .help = "The grade's contrast, around 1.", .min = 0.5f,
+				.max = 1.5f });
+
+			Params::bind(kGraphics, "fog start", gfx.fogStart, { .help = "The share of the far plane at which the fog begins.",
+				.min = 0.1f, .max = 1.f });
+			Params::bind(kGraphics, "view distance", gfx.viewDistance, { .help = "Metres the camera sees at most: its far "
+				"plane. Past it the scene fades into the haze, and nothing further out is drawn at all.", .min = 100.f,
+				.max = 5000.f });
+			// Below 0 the scene's own: this run's only, or one drag and a save would hold the sun and the wind for good.
+			Params::bind(kGraphics, "time of day", gfx.timeOfDay, { .help = "Hours, 0..24, placing the sun of an outdoor "
+				"scene; below 0 the scene's own sun.", .min = 0.f, .max = 24.f, .transient = true });
+			Params::bind(kGraphics, "wind", gfx.windStrength, { .help = "0 still air, 1 a strong breeze; below 0 the scene's "
+				"own wind.", .min = 0.f, .max = 1.f, .transient = true });
+			Params::bind(kGraphics, "glass roughness", gfx.glassRoughness, { .min = 0.04f, .max = 0.6f });
+
+			// Skin: the sun scattered under it and through it, and the soft light and rim on whatever is rough.
+			Params::bind("Skin", "sheen", gfx.sheenStrength, { .min = 0.f, .max = 3.f });
+			Params::bind("Skin", "rim", gfx.rimStrength, { .min = 0.f, .max = 2.f });
+			Params::bind("Skin", "scatter wrap", gfx.sssWrap, { .min = 0.f, .max = 3.f });
+			Params::bind("Skin", "scatter", gfx.sssStrength, { .min = 0.f, .max = 2.5f });
+			Params::bind("Skin", "scatter radius", gfx.sssRadius, { .help = "Metres a tap of the light spread under the skin "
+				"(sss.fs), the red reaching three taps.", .min = 0.0005f, .max = 0.01f });
+			Params::bind(kGraphics, "contact", gfx.contactStrength, { .min = 0.f, .max = 2.f });
+			Params::bind(kGraphics, "contact dist", gfx.contactDistance, { .min = 0.2f, .max = 4.f });
+			Params::bind(kGraphics, "contact thick", gfx.contactThickness, { .min = 0.01f, .max = 0.5f });
+			Params::bind(kGraphics, "gi", gfx.giStrength, { .min = 0.f, .max = 2.f });
+			Params::bind(kGraphics, "gi radius", gfx.giRadius, { .min = 0.1f, .max = 2.5f });
+
+			Params::bind(kGraphics, "sun intensity", gfx.sunIntensity, { .min = 0.f, .max = 8.f });
+			Params::bind("Light", "sky", gfx.iblStrength, { .help = "The sky's light against the sun's.", .min = 0.f,
+				.max = 2.f });
+			Params::bind("Light", "shadow fill", gfx.shadowAmbient, { .help = "How much of the sky's light is left in the "
+				"sun's shade and on a side turned from the sun.", .min = 0.f, .max = 1.f });
+			Params::bind("AO", "radius", gfx.ssaoRadius, { .help = "Metres round a point the ambient occlusion (ssao.fs, "
+				"horizon based) looks for what covers it." });
+			Params::bind("AO", "thickness", gfx.ssaoThickness, { .help = "Metres thick the ambient occlusion takes what "
+				"stands in front to be." });
+			Params::bind("AO", "intensity", gfx.ssaoIntensity, { .help = "The power the ambient occlusion's visibility is "
+				"raised to." });
+			Params::bind("AO", "sun share", gfx.ssaoSun, { .help = "The share of the ambient occlusion the sun's light takes "
+				"as well (painted: a crease is dark in the sun too)." });
+			Params::bind("AO", "grass floor", gfx.ssaoGrassFloor, { .help = "The least of the ambient occlusion a blade of "
+				"grass keeps." });
+			Params::bind("Shadows", "sun width", gfx.shadowSunWidth, { .help = "The sun's width, as the penumbra's metres a "
+				"metre from the caster: the shadow is sharp where it leaves what casts it, wider the further it falls." });
+			Params::bind("Shadows", "penumbra most", gfx.shadowPenumbraMost, { .help = "The widest penumbra of the sun's "
+				"shadow, metres." });
+			Params::bind("Shadows", "slope bias", gfx.shadowSlopeBias, { .help = "The casters' depth pushed off the sun by "
+				"this many times their own depth's change across a texel (CascadedShadowPass), so a coarse mesh does not "
+				"shadow itself in facets along the edge the light leaves." });
+			Params::bind("Shadows", "slope bias most", gfx.shadowSlopeBiasMost, { .help = "The most the casters' depth is "
+				"pushed off the sun by the slope bias, metres." });
+			Params::bind("Shadows", "leaf light", gfx.shadowLeafLight, { .help = "The share of the sun a tree's or a plant's "
+				"leaves let through to what lies under them (cascadeShadowMap.fs)." });
+			Params::bind("Shadows", "refresh rate", gfx.shadowRefreshRate, { .help = "How many times a second each cascade "
+				"of the sun's shadow is drawn anew at most, 0 every frame (CascadedShadowPass)." });
+
+			Params::bind("Render", "lod pixels", gfx.lodPixels, { .help = "The pixels on screen a coarser level of a model "
+				"may change from the full one for it to be drawn: smaller keeps the detail further.", .min = 0.25f,
+				.max = 8.f });
+			Params::bind("Terrain", "coarser past", gfx.terrainLodDistance, { .help = "Metres from the eye to a chunk of "
+				"the ground past which it is drawn a level coarser (about half its triangles)." });
+			Params::bind("Foliage", "depth prepass", gfx.foliagePrepass, { .help = "The foliage's cut-out leaves drawn for "
+				"their depth alone before they are shaded, so each pixel of them is shaded once (GeometryPass): 1 on, 0 "
+				"off." });
+
+			Params::bind(kGraphics, "stylise", gfx.stylise, { .help = "How far the picture is pushed from what the light "
+				"really does towards a painted one: 0 leaves it, 1 puts the sun's light in steps, takes the highlights off "
+				"and flattens the colour.", .min = 0.f, .max = 1.f });
+			Params::bind(kGraphics, "time of day grade", gfx.timeGrade, { .help = "How much the time of day grades the "
+				"picture (warm low sun, blue night).", .min = 0.f, .max = 2.f });
+			Params::bind(kGraphics, "sun rays", gfx.sunRays, { .help = "Shafts of light from the sun through the gaps in "
+				"the clouds and the trees, gathered over the bloom pass.", .min = 0.f, .max = 3.f });
+		}
+
+		// The passes in draw order, for one start to be put beside another's: to the log, and to load_times.log beside the
+		// executable, after the systems' order (SystemManager.cpp).
+		void writePassOrder(const std::vector<std::string>& names) {
+			std::string line = "passes, in order: ";
+			for (size_t i = 0; i < names.size(); ++i) {
+				line += (i == 0 ? "" : ", ") + names[i];
+			}
+			if (names.empty()) {
+				line += "none";
+			}
+			LogsModule::Logger::LOG_INFO("%s", line.c_str());
+			if (FILE* file = std::fopen((FileSystem::executableDir() / "load_times.log").string().c_str(), "a")) {
+				std::fputs(line.c_str(), file);
+				std::fputs("\n\n", file);
+				std::fclose(file);
+			}
+		}
 	}
 
 	RenderSystem::RenderSystem() : System({ SFE::SystemsModule::TaskType::TRAHSFORM_RELOADED , SFE::SystemsModule::TaskType::ARMATURE_UPDATED, ANIMATION_UPDATED, MATERIAL_UPDATED, MESH_UPDATED, ENTITY_DESTROYED }) {
+		// Before anything reads them: some passes read theirs as they are made, below.
+		registerGraphics(mRenderData.graphics);
 		auto* rhi = Engine::instance()->rhi();
-		if (!Engine::instance()->temporalAccumulation()) {
-			mRenderData.graphics.taa = false;
-		}
 		mGpuFrames = (std::max)(1u, rhi->framesInFlight());
 		mCameraUbo.resize(mGpuFrames);
 		mFrameSet.resize(mGpuFrames);
@@ -941,6 +1080,10 @@ namespace SFE::SystemsModule {
 		// its own so the GPU has actually produced the image before it is read back, which is far
 		// too expensive for a normal frame -- hence the narrow condition.
 		++mRenderedFrames;
+		// Said once, as the first frame finds them, after the systems' order the system manager has just written.
+		if (mRenderedFrames == 1) {
+			writePassOrder(mPassNames);
+		}
 		auto* engine = Engine::instance();
 		const bool dumpPasses = engine->capturingFrame()
 			&& !engine->passDumpDir().empty()
@@ -1103,6 +1246,8 @@ namespace SFE::SystemsModule {
 	}
 
 	RenderSystem::~RenderSystem() {
+		// The settings go with this system; the registry keeps their values until another binds them.
+		Params::unbind(&mRenderData.graphics, &mRenderData.graphics + 1);
 		// A pass is told of no scene once it is going (SceneEvents.h); the passes themselves go with the members.
 		for (const auto& pass : mRenderPasses) {
 			PropertiesModule::forgetSceneListenersOf(pass.get());

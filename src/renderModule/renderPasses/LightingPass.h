@@ -83,7 +83,8 @@ namespace SFE::Render::RenderPasses {
 			// GraphicsSettings::ssaoSun.
 			float ssaoSun = 0.f;
 			float shelterCount = 0.f;
-			float pad2 = 0.f;
+			// ShelterComponent::kSoft: the metres from a shelter's walls and roof over which its inside comes in.
+			float shelterSoft = 0.f;
 			// The area tint (AreaTintFrame); a zero area, no tint.
 			Math::Vec4 tintArea{};
 			Math::Vec4 tintFoliage{};

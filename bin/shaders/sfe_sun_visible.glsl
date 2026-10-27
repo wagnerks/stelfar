@@ -1,7 +1,7 @@
 #ifndef SFE_SUN_VISIBLE_GLSL
 #define SFE_SUN_VISIBLE_GLSL
 // How much of the sun reaches a point in the air, 0 to 1, by the shadow cascades: for what is drawn over the picture
-// after it is lit (AirLifePass's specks, ParticleSpritePass's motes). The includer declares `shadowMap` (a
+// after it is lit (ParticleSpritePass's motes, an application's own specks). The includer declares `shadowMap` (a
 // sampler2DArrayShadow) and `lightSpaceMatrices` (the cascades' matrices) first; `cascades` is how many there are.
 float sfeSunVisible(vec3 world, int cascades) {
     for (int layer = 0; layer < cascades; ++layer) {

@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "core/Engine.h"
+#include "core/Params.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Utils.h"
 #include "renderModule/renderPasses/LightingPass.h"
@@ -17,6 +18,15 @@ SunShadowPass::Settings SunShadowPass::settings{ 8.f, 0.01f };
 
 namespace SFE::Render::RenderPasses {
 namespace {
+	// Numbers to tune (Params), bound once and for good: the settings are static.
+	const bool kSettingsBound = [] {
+		Params::bind("Shadows", "samples", SunShadowPass::settings.samples, { .help = "The samples of the filter's disk at "
+			"each pixel; a 4x4 block of pixels has sixteen times as many.", .min = 4.f, .max = 16.f });
+		Params::bind("Shadows", "blur tolerance", SunShadowPass::settings.tolerance, { .help = "Metres off the centre's "
+			"plane, a metre from the eye, past which a texel counts for little in the blur." });
+		return true;
+	}();
+
 	PipelineHandle fullScreenPipeline(RenderPassHandle pass, DescriptorSetLayoutHandle setLayout, const char* fragment) {
 		auto* rhi = Engine::instance()->rhi();
 		GraphicsPipelineDesc desc;

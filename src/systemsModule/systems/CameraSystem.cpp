@@ -48,12 +48,6 @@ namespace SFE::SystemsModule {
 			return;
 		}
 		auto cam = getCurrentCamera();
-		if (sReproFly.load(std::memory_order_relaxed)) {
-			movementSpeed = 300.f;
-			processKeyboard(cam, FORWARD, dt);
-			processKeyboard(cam, RIGHT, dt);
-			return;
-		}
 		if (keyDown(CoreModule::InputKey::KEY_W)) {
 			processKeyboard(cam, FORWARD, dt);
 		}

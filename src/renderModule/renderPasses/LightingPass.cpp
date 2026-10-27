@@ -331,6 +331,7 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 		}
 	}
 	drawData.shelterCount = static_cast<float>(shelters);
+	drawData.shelterSoft = ShelterComponent::kSoft;
 
 	// Every block every frame: a dynamic binding needs this frame's offset even when its data did not change.
 	static const std::vector<Math::Mat4> noMatrices;

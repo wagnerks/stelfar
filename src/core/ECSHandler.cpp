@@ -30,6 +30,7 @@
 #include "systemsModule/systems/CameraSystem.h"
 #include "systemsModule/systems/LODSystem.h"
 #include "systemsModule/systems/OcTreeSystem.h"
+#include "systemsModule/systems/PhysicsDrawSystem.h"
 #include "systemsModule/systems/PhysicsSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "systemsModule/systems/SkeletalAnimationSystem.h"
@@ -127,10 +128,9 @@ void ECSHandler::initSystems() {
 		mSystemManager.addTickSystems<SFE::SystemsModule::SkeletalAnimationSystem>(24);
 	}
 
-	// In this order: the character takes its pose from the physics thread and places the camera, the litter follows its
-	// bodies, the camera flies (when the character does not hold it), the vegetation around it is brought in, sounds are heard from the camera's
-	// new place, then the frame is drawn from where the camera ended up.
-	// The camera flies (when nothing else holds it), what it hears follows it, then the frame is drawn from where it
-	// ended up. A game adds its own ahead of these, in GameModule::addSystems.
-	mSystemManager.addRootSystems<SFE::SystemsModule::CameraSystem, SFE::SystemsModule::AudioSystem, SFE::SystemsModule::RenderSystem>();
+	// In this order: the physics worlds' shapes are handed to the debug pass (when F3 has them shown), the camera flies
+	// (when nothing else holds it), what it hears follows it, then the frame is drawn from where it ended up. A game adds
+	// its own ahead of these, in GameModule::addSystems.
+	mSystemManager.addRootSystems<SFE::SystemsModule::PhysicsDrawSystem, SFE::SystemsModule::CameraSystem, SFE::SystemsModule::AudioSystem,
+		SFE::SystemsModule::RenderSystem>();
 }

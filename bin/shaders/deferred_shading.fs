@@ -57,7 +57,7 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     float stylise;
     float ssaoSun; // the share of the AO the sun's light takes
     float shelterCount;
-    float pad2;
+    float shelterSoft; // ShelterComponent::kSoft, metres
     // The area tint (AreaTintFrame): the map's place, and the foliage's and the air's colour and strength.
     vec4 tintArea;
     vec4 tintFoliage;
@@ -66,8 +66,8 @@ layout(SFE_SET(1, 15), std140) uniform PushConstants {
     Shelter shelters[4];
 } pc;
 
-// The share of the sky's light that reaches `at` under the shelters (ShelterComponent::inside, kSoft 0.35 m): what is
-// inside one takes only its share, what is out in the open all of it.
+// The share of the sky's light that reaches `at` under the shelters (ShelterComponent::inside, over pc.shelterSoft, its
+// kSoft): what is inside one takes only its share, what is out in the open all of it.
 float skyOpen(vec3 at) {
     float open = 1.0;
     for (int i = 0; i < int(pc.shelterCount + 0.5); ++i) {
@@ -77,7 +77,7 @@ float skyOpen(vec3 at) {
         float across = abs(local.x);
         float roof = box.w + (box.y - box.w) * (1.0 - across / halfWide);
         float depth = min(min(halfWide - across, box.z * 0.5 - abs(local.z)), roof - local.y);
-        open = min(open, mix(1.0, pc.shelters[i].sky.x, smoothstep(0.0, 0.35, depth)));
+        open = min(open, mix(1.0, pc.shelters[i].sky.x, smoothstep(0.0, pc.shelterSoft, depth)));
     }
     return open;
 }

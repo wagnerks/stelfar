@@ -2,9 +2,9 @@
 #include "sfe.glsl"
 #include "sfe_particle.glsl"
 #include "sfe_sky.glsl"
-// A mote or a spark over the picture after TAA (ParticleSpritePass), as AirLifePass's specks are. A mote: a soft puff
-// facing the eye, lit by the sun where the shadows let it and by the sky, thinning out as it grows. A spark: its own
-// light, streaked back along its way and dying down. Chips are not drawn here.
+// A mote or a spark over the picture after TAA (ParticleSpritePass). A mote: a soft puff facing the eye, lit by the sun
+// where the shadows let it and by the sky, thinning out as it grows. A spark: its own light, streaked back along its way
+// and dying down. Chips are not drawn here.
 layout(location = 0) in vec2 aPos;
 
 layout(SFE_SET(0, 1), std430) readonly buffer SfeParticles {

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <functional>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #include <GLFW/glfw3.h>
@@ -12,6 +13,8 @@
 #include "Clocks.h"
 #include "Core.h"
 #include "InputHandler.h"
+#include "KeyNames.h"
+#include "Params.h"
 #include "assetsModule/shaderModule/ShaderBase.h"
 #include "logsModule/logger.h"
 #include "runtimeBridge/RuntimeBridge.h"
@@ -35,12 +38,19 @@
 #include "rhi/RhiFactory.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/FrameCapture.h"
+#include "debugModule/LongFrameSampler.h"
 #include "debugModule/Profiler.h"
 
 namespace SFE {
 	using Render::activeGraphicsBackend;
 	using Render::graphicsBackendName;
 	using Render::GraphicsBackend;
+
+	namespace {
+		// The lighting's debug view as a number of the registry (Params), which --debug-term and the debugTerm command set.
+		constexpr const char* kDebugViewGroup = "Render";
+		constexpr const char* kDebugViewName = "debug view";
+	}
 
 	// Seconds since the first call. Not glfwGetTime: the None backend never initialises GLFW.
 	double Engine::clockSeconds() {
@@ -72,6 +82,17 @@ namespace SFE {
 
 		mMainThreadID = std::this_thread::get_id();
 		Debug::Profiler::nameThread("Main");
+		// On this thread, the one it samples.
+		if (const char* samplesPath = std::getenv("LONG_FRAME_SAMPLES")) {
+			Debug::LongFrameSampler::start(samplesPath);
+		}
+		// The numbers the engine and the application are tuned by, as tweaks.json has them, before any system or pass is
+		// made: what reads a number once, as it is made, gets the file's.
+		Params::bind(kDebugViewGroup, kDebugViewName, mLightingDebugTerm, { .help = "What the lighting draws instead of the "
+			"lit picture (deferred_shading.fs's debugTerm): 0 the picture, 1 shadow, 2 ambient, 3 direct light, 4 albedo, "
+			"5 normals, 6 AO, 7 irradiance, 8 reflection, 9 BRDF, 10-14 the shadow's cascades, 15 the material's AO.",
+			.min = 0.f, .max = 15.f, .transient = true });
+		Params::load();
 		if (activeGraphicsBackend() == GraphicsBackend::OpenGL) {
 			glfwMakeContextCurrent(mWindow->getWindow());
 		}
@@ -356,9 +377,73 @@ namespace SFE {
 				return "entity " + std::to_string(entity) + ": pos " + text(transform->getPos()) + ", rotate "
 					+ text(transform->getRotate()) + ", scale " + text(transform->getScale());
 			});
+		// A number of the registry, the engine's or the application's, read or set for the session: what a script sets so
+		// is never saved, and a reload, which reads the file again, takes it back. The answers are parsed by scripts: the
+		// number after the last '='.
+		bridge->addCommand("tweak",
+			"A number of the Tweaks panel: {\"group\": ..., \"name\": ..., \"value\": a number or true/false, to set it}; then what "
+			"it is. A value set so holds for this run until a reload and is never saved. {\"reload\": true} reads every number "
+			"again from tweaks.json.",
+			[](const Json::Value& args) -> std::string {
+				if (!args.isObject()) {
+					return "give {group, name[, value]} or {reload}";
+				}
+				if (args.get("reload", false).asBool()) {
+					return Params::load() ? "tweaks read again from tweaks.json" : "no tweaks.json to read";
+				}
+				const auto group = args.get("group", "").asString();
+				const auto name = args.get("name", "").asString();
+				Params::Seen seen{};
+				if (!Params::see(group, name, seen)) {
+					return "no tweak " + group + " / " + name;
+				}
+				if (args.isMember("value")) {
+					const auto& value = args["value"];
+					if ((!value.isNumeric() && !value.isBool())
+						|| !Params::setSession(group, name, value.asDouble(), Params::Session::UntilReload)) {
+						return "not a value for " + group + " / " + name;
+					}
+					Params::see(group, name, seen);
+				}
+				// As the number is: a float to six decimals, an int whole, a bool 1 or 0.
+				const auto said = group + " / " + name + " = ";
+				switch (seen.type) {
+				case Params::Type::Int: return said + std::to_string(static_cast<int>(seen.value));
+				case Params::Type::Bool: return said + std::to_string(seen.value != 0.0 ? 1 : 0);
+				default: return said + std::to_string(static_cast<float>(seen.value));
+				}
+			});
+		// What the lighting draws, as --debug-term sets it at the start, changed while it runs; held for the session like a
+		// tweak, so a reload takes it back to what the command line said.
+		bridge->addCommand("debugTerm",
+			"What the lighting draws, as --debug-term: {\"term\": n} (0 the picture, 1 shadow, 4 albedo, 5 normals, 6 AO, 15 "
+			"material AO); then which.",
+			[this](const Json::Value& args) -> std::string {
+				if (args.isObject() && args.isMember("term")) {
+					Params::setSession(kDebugViewGroup, kDebugViewName, args["term"].asInt(), Params::Session::UntilReload);
+				}
+				return "debug term " + std::to_string(lightingDebugTerm());
+			});
+		// Keys held and let go by a command, as from the keyboard, to whatever listens for them.
+		bridge->addCommand("press",
+			"A key held or let go as from the keyboard: {\"key\": " + CoreModule::keyNames() + ", \"down\": true or false (true if "
+			"left out)}.",
+			[](const Json::Value& args) -> std::string {
+				const auto name = args.isObject() ? args.get("key", "").asString() : std::string();
+				const auto key = CoreModule::keyNamed(name);
+				if (key == CoreModule::InputKey::UNKNOWN) {
+					return "give {\"key\": " + CoreModule::keyNames() + ", \"down\": true or false}";
+				}
+				const bool down = args.get("down", true).asBool();
+				CoreModule::InputHandler::injectKey(static_cast<int>(key),
+					static_cast<int>(down ? CoreModule::InputEventType::PRESS : CoreModule::InputEventType::RELEASE));
+				return name + (down ? " held" : " let go");
+			});
 	}
 
 	void Engine::update() {
+		// A frame begins for the long-frame sampler (LONG_FRAME_SAMPLES), so all of it is sampled.
+		Debug::LongFrameSampler::frame();
 		if (!checkNeedClose()) {
 			return;
 		}
@@ -514,6 +599,7 @@ namespace SFE {
 	}
 
 	Engine::~Engine() {
+		Debug::LongFrameSampler::stop();
 		if (mRHI) {
 			if (mWindow && mWindow->getWindow() && activeGraphicsBackend() == GraphicsBackend::OpenGL) {
 				glfwMakeContextCurrent(mWindow->getWindow());
@@ -533,6 +619,8 @@ namespace SFE {
 			mRHI = nullptr;
 		}
 		destroyWindow();
+		// The debug view's storage goes with the engine; the registry keeps its value from here.
+		Params::unbind(&mLightingDebugTerm, &mLightingDebugTerm + 1);
 	}
 
 	void Engine::fpsSync(int fps) const {

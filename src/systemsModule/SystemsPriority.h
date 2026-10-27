@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include "renderModule/renderPasses/AirLifePass.h"
 #include "renderModule/renderPasses/AnimationComputePass.h"
 #include "renderModule/renderPasses/CascadedShadowPass.h"
 #include "renderModule/renderPasses/DebugPass.h"
@@ -58,7 +57,6 @@ namespace SFE::SystemsModule {
 		{ "TAA",            true,  &createRenderPass<Render::RenderPasses::TAAPass> },
 		{ "ParticleClearLiquid", true, &createRenderPass<Render::RenderPasses::ParticleClearLiquidPass> },
 		{ "ParticleSprites", true, &createRenderPass<Render::RenderPasses::ParticleSpritePass> },
-		{ "AirLife",        true,  &createRenderPass<Render::RenderPasses::AirLifePass> },
 		{ "DoF",            true,  &createRenderPass<Render::RenderPasses::DoFPass> },
 		{ "Final",          true,  &createRenderPass<Render::RenderPasses::FinalPass> },
 		{ "GUI",            true,  &createRenderPass<Render::RenderPasses::GUIPass> },

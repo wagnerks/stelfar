@@ -7,6 +7,7 @@
 #include "assetsModule/modelModule/Vertex.h"
 #include "core/Clocks.h"
 #include "core/Engine.h"
+#include "core/Params.h"
 #include "debugModule/ProcessMemory.h"
 #include "rhi/GraphicsBackend.h"
 #include "renderModule/Atmosphere.h"
@@ -28,6 +29,13 @@ namespace {
 	constexpr uint32_t kGlareFrames = 1u << 20;
 	SFE::Render::BufferHandle gGlareSeen{};
 	uint32_t gFrame = 0;
+
+	// A number to tune (Params), read here only: static, it is bound once and for good.
+	const bool kEyeAdaptsBound = [] {
+		SFE::Params::bind("Shelter", "eye adapts", ShelterComponent::eyeAdapts, { .help = "How much of a shelter's dark "
+			"the eye makes up, in stops: 1 all of it, as auto exposure does out in the open." });
+		return true;
+	}();
 }
 
 SFE::Render::PipelineHandle FinalPass::makeFullscreen(SFE::Render::RenderHardwareInterface* rhi, RenderPassHandle renderPass, const char* vsPath, const char* fsPath) {

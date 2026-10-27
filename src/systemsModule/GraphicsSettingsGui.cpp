@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "core/Params.h"
 #include "renderModule/Atmosphere.h"
 #include "systemsModule/systems/AudioSystem.h"
 #include "windowsModule/Window.h"
@@ -97,14 +98,14 @@ namespace SFE::SystemsModule {
 			displaySettings(*window);
 		}
 
+		// Every setting the renderer registered (Params) back to the code's value; one held for the session keeps it.
 		if (ImGui::Button("Reset defaults")) {
-			gfx = GraphicsSettings{};
+			Params::reset(&gfx, &gfx + 1);
 			changed = true;
 		}
 
 		if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
 			changed |= ImGui::SliderFloat("view distance", &gfx.viewDistance, 100.f, 5000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
-			changed |= ImGui::SliderFloat("lod detail", &gfx.lodDetail, 0.3f, 4.f, "%.2f");
 			changed |= ImGui::SliderFloat("lod pixels", &gfx.lodPixels, 0.25f, 8.f, "%.2f");
 			changed |= ImGui::SliderFloat("stylise", &gfx.stylise, 0.f, 1.f, "%.2f");
 			changed |= environmentSliders(gfx);
@@ -138,13 +139,8 @@ namespace SFE::SystemsModule {
 			changed |= ImGui::SliderFloat("bloom", &gfx.bloomStrength, 0.f, 2.f, "%.2f");
 			changed |= ImGui::SliderFloat("time of day grade", &gfx.timeGrade, 0.f, 2.f, "%.2f");
 			changed |= ImGui::SliderFloat("sun rays", &gfx.sunRays, 0.f, 3.f, "%.2f");
-			changed |= ImGui::SliderFloat("air life", &gfx.airLifeAmount, 0.f, 3.f, "%.2f");
 		}
 
-		if (ImGui::CollapsingHeader("Grass", ImGuiTreeNodeFlags_DefaultOpen)) {
-			changed |= ImGui::SliderFloat("grass density", &gfx.grassDensity, 0.2f, 2.f, "%.2f");
-			changed |= ImGui::SliderFloat("grass distance", &gfx.grassDistance, 20.f, 200.f, "%.0f m");
-		}
 		if (ImGui::CollapsingHeader("Fur / skin", ImGuiTreeNodeFlags_DefaultOpen)) {
 			changed |= ImGui::Checkbox("sheen", &gfx.sheen);
 			changed |= ImGui::SliderFloat("sheen strength", &gfx.sheenStrength, 0.f, 3.f, "%.2f");
@@ -162,7 +158,6 @@ namespace SFE::SystemsModule {
 			changed |= ImGui::Checkbox("TAA", &gfx.taa);
 			changed |= ImGui::Checkbox("DoF", &gfx.dof);
 			changed |= ImGui::Checkbox("Bloom", &gfx.bloom);
-			changed |= ImGui::Checkbox("Air life", &gfx.airLife);
 			changed |= ImGui::Checkbox("Contact GI", &gfx.contactGi);
 		}
 

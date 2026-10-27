@@ -84,7 +84,8 @@ namespace SFE::RuntimeBridge {
 			std::string help;
 			Command run;
 		};
-		void addCommand(const std::string& name, std::string help, Command run);
+		// A name already taken goes to the later command, with a warning naming it; true when one was replaced so.
+		bool addCommand(const std::string& name, std::string help, Command run);
 		// What it did, or why it could not.
 		std::string runCommand(const std::string& name, const Json::Value& args = Json::Value());
 		const std::map<std::string, CommandEntry>& commands() const { return mCommands; }

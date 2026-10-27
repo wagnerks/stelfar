@@ -15,6 +15,7 @@
 #include "componentsModule/TransformComponent.h"
 #include "core/ECSHandler.h"
 #include "core/FileSystem.h"
+#include "core/Params.h"
 #include "logsModule/Logger.h"
 #include "mathModule/VectorOperations.h"
 #include "rhi/GraphicsBackend.h"
@@ -27,8 +28,12 @@ namespace SFE::SystemsModule {
 		// Sounds heard through the HRTF at once. One more is panned by miniaudio until an ear is free.
 		constexpr size_t kEars = 48;
 		// The wood's reverb, on verblib's scales of 0 to 1: about a second long, its highs dying first, as among leaves.
-		constexpr float kRoomSize = 0.4f;
-		constexpr float kDamping = 0.5f;
+		// Numbers to tune (Params), read when Steam Audio's part of the mix is made: verblib's parameters are not for
+		// changing under the audio thread.
+		float& kRoomSize = Params::value("Audio", "reverb room size", 0.4f, { .help = "How long the reverb rings, on "
+			"verblib's scale of 0 to 1. Read when the sound starts.", .min = 0.f, .max = 1.f });
+		float& kDamping = Params::value("Audio", "reverb damping", 0.5f, { .help = "How much sooner the reverb's highs die, "
+			"on verblib's scale of 0 to 1. Read when the sound starts.", .min = 0.f, .max = 1.f });
 
 		void setPosition(ma_sound* sound, const Math::Vec3& pos) {
 			ma_sound_set_position(sound, pos.x, pos.y, pos.z);
@@ -272,6 +277,14 @@ namespace SFE::SystemsModule {
 	}
 
 	AudioSystem::AudioSystem() : mEngine(new ma_engine) {
+		// Numbers to tune (Params), read every frame.
+		Params::bind("Audio", "hrtf", settings.hrtf, { .help = "Sounds heard through the HRTF, from where each is: 1 on, 0 "
+			"off (panned, and without the reverb and the air absorption, which come on the same path).", .min = 0.f, .max = 1.f });
+		Params::bind("Audio", "reverb wet", settings.reverb, { .help = "How loud the reverb is under the sounds it follows. "
+			"A voice started without it (VoiceParams::reverb off: music, the UI) has none." });
+		Params::bind("Audio", "air absorption", settings.airAbsorption, { .help = "Far sounds duller, the air taking their "
+			"highs first: 1 on, 0 off.", .min = 0.f, .max = 1.f });
+
 		// Every sound decoded whole is kept (a bird's song, a recording cut into steps): 16-bit at the file's own rate
 		// and channels, half the memory or less of the engine's own float at the device's rate, and turned into that
 		// as it plays.
@@ -338,6 +351,8 @@ namespace SFE::SystemsModule {
 	}
 
 	AudioSystem::~AudioSystem() {
+		// The settings go with this system; the registry keeps their values until another binds them.
+		Params::unbind(&settings, &settings + 1);
 		// Before the engine they are attached to.
 		mVoices.clear();
 	}
