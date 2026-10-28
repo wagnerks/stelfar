@@ -2,6 +2,7 @@
 
 #include "systemsModule/SystemBase.h"
 #include "core/FileSystem.h"
+#include "core/Pacing.h"
 #include "debugModule/Benchmark.h"
 #include "debugModule/Profiler.h"
 #include "logsModule/logger.h"
@@ -21,43 +22,6 @@
 namespace ecss {
 	namespace {
 		using Clock = std::chrono::steady_clock;
-
-		// Waits until a deadline as closely as the platform allows, without asking anything of the platform: it sleeps
-		// in short naps while more time is left than a nap has been seen to overrun, and yields for the rest. The
-		// overrun is measured as it goes, so where the OS wakes a thread on time almost all of the wait is sleep, and
-		// where it wakes it in coarse slices (Windows, ~15.6 ms by default) the last slice is spent yielding.
-		class DeadlineWaiter {
-		public:
-			void waitUntil(Clock::time_point deadline) {
-				using Seconds = std::chrono::duration<double>;
-				while (true) {
-					const auto now = Clock::now();
-					if (Seconds(deadline - now).count() <= mNapEstimate) {
-						break;
-					}
-					std::this_thread::sleep_for(std::chrono::milliseconds(1));
-					observe(Seconds(Clock::now() - now).count());
-				}
-				while (Clock::now() < deadline) {
-					std::this_thread::yield();
-				}
-			}
-
-		private:
-			// A running mean and variance of how long a 1 ms nap really takes; the estimate keeps two deviations of
-			// margin, so a nap rarely carries the thread past its deadline.
-			void observe(double seconds) {
-				constexpr double kWeight = 0.05;
-				const double delta = seconds - mMean;
-				mMean += kWeight * delta;
-				mVariance = (1.0 - kWeight) * (mVariance + kWeight * delta * delta);
-				mNapEstimate = mMean + 2.0 * std::sqrt(mVariance);
-			}
-
-			double mMean = 0.002;
-			double mVariance = 0.0;
-			double mNapEstimate = 0.002;
-		};
 
 		// "A, B, C": the systems by their plain class names.
 		std::string namesOf(const std::vector<System*>& systems) {
@@ -169,7 +133,7 @@ namespace ecss {
 		}
 
 		void schedule() {
-			DeadlineWaiter waiter;
+			SFE::DeadlineWaiter waiter;
 			while (mAlive.load()) {
 				auto earliest = Clock::time_point::max();
 				{

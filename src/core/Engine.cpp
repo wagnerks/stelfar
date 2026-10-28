@@ -15,6 +15,7 @@
 #include "EngineConfig.h"
 #include "InputHandler.h"
 #include "KeyNames.h"
+#include "Pacing.h"
 #include "Params.h"
 #include "assetsModule/shaderModule/ShaderBase.h"
 #include "logsModule/logger.h"
@@ -49,26 +50,9 @@ namespace SFE {
 	using Render::GraphicsBackend;
 
 	namespace {
-		// The rest of a frame of 1 / fps seconds begun at frameStart (Engine::clockSeconds()) waited out; no wait without a
-		// limit.
-		void waitForFrame(int fps, double frameStart) {
-			if (fps <= 0) {
-				return;
-			}
-
-			const double target = 1.0 / static_cast<double>(fps);
-			const double start = frameStart;
-			for (;;) {
-				const double remain = target - (Engine::clockSeconds() - start);
-				if (remain <= 0.0) {
-					break;
-				}
-				// Windows sleep_for(<2ms) often overshoots to 1–15ms and tanks FPS.
-				if (remain > 0.002) {
-					std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				}
-			}
-		}
+		// The frame limit of the one engine a process has (Engine::instance): set by start(), waited out at the end of
+		// every update (core/Pacing.h).
+		FramePacer gPacer;
 	}
 
 	// Seconds since the first call. Not glfwGetTime: the None backend never initialises GLFW.
@@ -169,6 +153,14 @@ namespace SFE {
 		}
 		SFE::LogsModule::Logger::LOG_INFO("engine started (%s backend)",
 			graphicsBackendName(activeGraphicsBackend()));
+		// The frame limit from here: maxFps while the step is the wall clock's, none under a fixed step or a capture
+		// (pacedFps). A frame long enough to nap in has the OS's timer asked for naps of a millisecond, before the first
+		// update makes the tick threads, whose scheduler naps by it too.
+		const int fps = pacedFps(*mConfig);
+		if (napsFit(fps)) {
+			askFineNaps();
+		}
+		gPacer.start(fps);
 	}
 
 
@@ -535,9 +527,9 @@ namespace SFE {
 
 		//getWindow()->swapBuffers();
 
-		if (mConfig->fixedDeltaTime <= 0.f) {
+		if (gPacer.paced()) {
 			SFE_PROFILE_ZONE(Debug::Profiler::kIdle);
-			waitForFrame(mConfig->maxFps, mLastFrame);
+			gPacer.endFrame();
 		}
 	}
 

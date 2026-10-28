@@ -64,6 +64,14 @@ The engine is a library: it makes no world, no systems and no render passes of i
 game's `main.cpp`, an editor that runs the engine in its own process -- puts it together on the main thread, in this
 order:
 
+0. The command line, if it takes the engine's: `RunOptions::fromCommandLine(argc, argv)` (`runtime/RunOptions.h`)
+   chooses the graphics backend and reads the engine's flags -- `--fixed-dt`, `--capture[=]`, `--capture-frame[=]`,
+   `--capture-every`, `--capture-count`, `--capture-passes[=]`, `--no-taa`, `--debug-term[=]`, `--content-dir[=]`,
+   `--scene`, `--camera`, `--camera-rot`, `--frames`, `--serve`, `--serve-port`, `--headless`, `--visible`, `--host`,
+   `--connect`, `--net-lag`, `--net-jitter`, `--net-loss`, `--players`, `--backend[=]` -- leaving the application's
+   own in `rest`, in order. `apply(engineRootFallback)` then sets the roots (step 1) and the numbers held for the run,
+   `engineConfig()` gives step 2's config but its numbers file, and `placeCamera()` the camera after the scene. A
+   backend that draws nothing runs at 60 frames a second, any other at `EngineConfig::maxFps`'s 600.
 1. The roots, before the engine exists: `FileSystem::setRoot` (the application's content, searched first and written
    under) and `FileSystem::setEngineRoot` (`engine/bin`, behind it), and the graphics backend
    (`Render::configureGraphicsBackend`). The application's scene components are registered
@@ -98,8 +106,12 @@ order:
    takes must not meet them (a game laying litter on the ground before its trees' trunks stand): given before, the
    physics, told before the application's systems, lays them in with the scene.
 6. `Engine::start()`: how the tick systems run (on threads, or stepped from the frame under a fixed step or a capture),
-   the input, the engine's own bridge commands after the application's.
-7. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`.
+   the input, the engine's own bridge commands after the application's, and the frame limit.
+7. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`. The engine paces the frames itself, with
+   the same waiter as the tick systems' (`core/Pacing.h`): while the step is the wall clock's, `update()` ends on a grid
+   of 1 / `maxFps` from `start()`, a late frame waiting for nothing and the grid starting again from it; a fixed step or
+   a capture is never held back. When a frame has room to nap in (60 a second, not 600), `start()` asks the OS for
+   naps of a millisecond (`timeBeginPeriod(1)` on Windows). The application adds no wait of its own.
 
 Embedded in an editor, the editor's flags are the bridge's: `RuntimeBridge::setEmbeddedInEditor` and
 `setPublishEditorDisplay` (`runtimeBridge/RuntimeBridge.h`); whether the window shows the picture is

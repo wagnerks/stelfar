@@ -210,10 +210,11 @@ namespace SFE::ModelCacheTests {
 
 	// Real files of each kind the importer reads -- an FBX and a Collada with a skeleton and animations, a glTF with its
 	// buffer and PBR maps, an OBJ with its .mtl and maps beside it -- read and kept by ModelLoader, come back from the
-	// cache as they were kept: written again, byte for byte the same.
+	// cache as they were kept: written again, byte for byte the same. The files are the tests' own (engine/tests/data),
+	// named from the tests' content root, the engine's assets (engine/bin).
 	TEST(ModelCache, RealModelsComeBackAsTheyWereKept) {
-		for (const std::string path : { "models/animatedPeasant.fbx", "models/dance/dancing_vampire.dae",
-			"models/backpack/scene.gltf", "models/gas-tank/Gas Tank.obj" }) {
+		for (const std::string path : { "../tests/data/models/animatedPeasant.fbx", "../tests/data/models/dance/dancing_vampire.dae",
+			"../tests/data/models/backpack/scene.gltf", "../tests/data/models/gas-tank/Gas Tank.obj" }) {
 			// Read from its files, unless the cache has it already.
 			ASSERT_NE(ModelLoader::instance()->load(path), nullptr) << path;
 			const auto file = ModelCache::file(path);
