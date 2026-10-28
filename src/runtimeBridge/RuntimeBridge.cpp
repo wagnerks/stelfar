@@ -287,8 +287,8 @@ namespace SFE::RuntimeBridge {
 				}
 			}
 			mEmbedConfigDirty = true;
-			if (!Engine::instance()->isEmbeddedInEditor() && !mEmbeddedHostMode) {
-				Engine::instance()->setPublishEditorDisplay(true);
+			if (!isEmbeddedInEditor() && !mEmbeddedHostMode) {
+				setPublishEditorDisplay(true);
 			}
 			Json::Value status;
 			status["subscribed"] = true;
@@ -306,8 +306,8 @@ namespace SFE::RuntimeBridge {
 			mSubscribeFrames = false;
 			mEmbeddedHostMode = false;
 			mEmbedConfigDirty = true;
-			if (!Engine::instance()->isEmbeddedInEditor()) {
-				Engine::instance()->setPublishEditorDisplay(false);
+			if (!isEmbeddedInEditor()) {
+				setPublishEditorDisplay(false);
 			}
 			sendPacket(MessageType::Status, R"({"subscribed":false})");
 			break;
@@ -560,7 +560,7 @@ namespace SFE::RuntimeBridge {
 			}
 			else if (window->embedInHost(owner, mEmbedX, mEmbedY, mEmbedW, mEmbedH)) {
 				engine->setPresentToScreen(true);
-				engine->setPublishEditorDisplay(false);
+				setPublishEditorDisplay(false);
 				mAppliedRemoteDisplay = false;
 				return;
 			}
@@ -578,13 +578,13 @@ namespace SFE::RuntimeBridge {
 			return;
 		}
 		if (mHasClient.load() && mSubscribeFrames.load()) {
-			engine->setPublishEditorDisplay(true);
+			setPublishEditorDisplay(true);
 		}
 	}
 
 	void RuntimeBridge::syncDisplayMode()
 	{
-		if (Engine::instance()->isEmbeddedInEditor()) {
+		if (isEmbeddedInEditor()) {
 			return;
 		}
 
@@ -604,10 +604,10 @@ namespace SFE::RuntimeBridge {
 		Render::Window* window = engine->getWindow();
 		if (remoteStream) {
 			engine->setPresentToScreen(false);
-			engine->setPublishEditorDisplay(true);
+			setPublishEditorDisplay(true);
 		}
 		else if (!mHasClient.load()) {
-			engine->setPublishEditorDisplay(false);
+			setPublishEditorDisplay(false);
 			engine->setPresentToScreen(true);
 			if (window && !window->isEmbeddedInHost()) {
 				window->show();

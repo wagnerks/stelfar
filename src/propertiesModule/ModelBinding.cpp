@@ -35,7 +35,8 @@ namespace SFE::PropertiesModule::ModelBinding {
 		}
 
 		// Into `fresh`, what `changed` has that differs from `given`, the material it was made from. Every field of
-		// MaterialComponent, one by one: a new field belongs here too.
+		// MaterialComponent, one by one: a new field belongs here too -- all but name, solidGlass, castsShadow and dissolve,
+		// which a re-bind puts back as the model has them.
 		void keepChanges(const MaterialComponent& given, const MaterialComponent& changed, MaterialComponent& fresh) {
 			const auto keep = [](const auto& was, const auto& now, auto& into) {
 				if (!(now == was)) {
@@ -63,6 +64,8 @@ namespace SFE::PropertiesModule::ModelBinding {
 			keep(given.sway, changed.sway, fresh.sway);
 			keep(given.hidden, changed.hidden, fresh.hidden);
 			keep(given.shadowOnly, changed.shadowOnly, fresh.shadowOnly);
+			keep(given.ground, changed.ground, fresh.ground);
+			keep(given.user, changed.user, fresh.user);
 			if (std::memcmp(given.triplanar, changed.triplanar, sizeof(given.triplanar)) != 0) {
 				std::memcpy(fresh.triplanar, changed.triplanar, sizeof(fresh.triplanar));
 			}

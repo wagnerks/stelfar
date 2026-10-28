@@ -21,6 +21,16 @@ namespace SFE::Render::MaterialRules {
 		return 0.f;
 	}
 
+	// How it is drawn into the G-buffer: the ground as itself, else cut out exactly when its G-buffer shader discards
+	// (the cutoff GpuMaterialTable gives it, or dithered), else solid.
+	inline ComponentsModule::DrawClass drawClass(const ComponentsModule::MaterialComponent& material) {
+		if (material.ground) {
+			return ComponentsModule::DrawClass::Ground;
+		}
+		return material.alphaDither || cutoutCutoff(material.alphaCutoff, material.alphaFromMaps, material.fragmentShader) > 0.f
+			? ComponentsModule::DrawClass::Cutout : ComponentsModule::DrawClass::Solid;
+	}
+
 	// The fragment shader a transparent material is drawn with: its own, or glass when it keeps a G-buffer default.
 	inline std::string glassShader(const ComponentsModule::MaterialComponent& material) {
 		const auto& own = material.fragmentShader;
@@ -144,19 +154,13 @@ namespace SFE::Render::MaterialRules {
 		mix(static_cast<uint64_t>(material.emissive.y * 4096.f));
 		mix(static_cast<uint64_t>(material.emissive.z * 4096.f));
 		mix(static_cast<uint64_t>(material.sway));
-		mix(static_cast<uint64_t>(static_cast<int64_t>(material.wetBelow * 4096.f)));
-		for (const auto& wheel : material.mudWheels) {
+		mix(static_cast<uint64_t>(material.dissolve * 4096.f));
+		mix(material.ground ? 1ull : 0ull);
+		for (const auto& lane : material.user) {
 			for (size_t i = 0; i < 4; ++i) {
-				mix(static_cast<uint64_t>(static_cast<int64_t>(wheel[i] * 4096.f)));
+				mix(static_cast<uint64_t>(static_cast<int64_t>(lane[i] * 4096.f)));
 			}
 		}
-		for (const float tread : material.mudTreads) {
-			mix(static_cast<uint64_t>(tread * 4096.f));
-		}
-		for (size_t i = 0; i < 4; ++i) {
-			mix(static_cast<uint64_t>(static_cast<int64_t>(material.mudMap[i] * 4096.f)));
-		}
-		mix(static_cast<uint64_t>(material.bare * 4096.f));
 		for (const auto& layer : material.triplanar) {
 			for (const float bound : layer.uv) {
 				mix(static_cast<uint64_t>(bound * 4096.f));

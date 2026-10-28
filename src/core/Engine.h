@@ -3,31 +3,39 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <cstdio>
 #include <string>
 #include <thread>
 
 #include "Core.h"
-#include "FileSystem.h"
-#include "InputHandler.h"
 #include "containersModule/Singleton.h"
-#include "networkModule/NetworkSettings.h"
 #include "rhi/GraphicsBackend.h"
 #include "rhi/RenderHardwareInterface.h"
-
-class Camera;
+#include "windowsModule/Window.h"
 
 namespace SFE {
-	class Engine : public Singleton<Engine>, public CoreModule::InputObserver {
+	struct EngineConfig;
+
+	class Engine : public Singleton<Engine> {
 		friend Singleton;
 
 	public:
+		// What this run is (EngineConfig, core/EngineConfig.h): once, before createWindow and initThread. Makes the RHI's
+		// object for the backend chosen (Render::configureGraphicsBackend) and names the application's numbers file; a
+		// second call is said and changes nothing.
+		void init(const EngineConfig& config);
+		const EngineConfig& config() const;
+		// Whether this run is a deterministic frame capture (EngineConfig::capture): passes must drop anything that differs
+		// from one run to the next (FPS counters, timing overlays) so two captures compare pixel for pixel.
+		bool capturingFrame() const;
+
 		Render::Window* createWindow(int width, int height, GLFWwindow* window = nullptr, const std::string& title = "Engine", Render::WindowHints hints = {});
 		void setWindow(Render::Window* window);
 		void destroyWindow();
 
 		void initThread();
-		void initRender();
+		// After every system is made and scheduled: how the tick systems run (EngineConfig), the input, the engine's
+		// commands after the application's (a name both have stays the engine's).
+		void start();
 
 		void update();
 
@@ -43,69 +51,20 @@ namespace SFE {
 		static bool isMainThread();
 		static double clockSeconds();
 
-
-		static void reproTrace(const char* msg) {
-			const auto path = FileSystem::resolve("hang.trace").string();
-			if (FILE* f = nullptr; fopen_s(&f, path.c_str(), "a") == 0 && f) {
-				std::fprintf(f, "%s\n", msg);
-				std::fflush(f);
-				std::fclose(f);
-			}
-		}
-
-		int maxFPS = 600;
-
 		Render::RenderHardwareInterface* rhi() const { return mRHI; }
 
-		void setEmbeddedInEditor(bool embedded) { mEmbeddedInEditor = embedded; }
-		bool isEmbeddedInEditor() const { return mEmbeddedInEditor; }
-		void setPublishEditorDisplay(bool publish) { mPublishEditorDisplay = publish; }
-		bool publishEditorDisplay() const { return mPublishEditorDisplay; }
+		// Whether frames go to the window -- runtime state: RuntimeBridge turns it off while it streams to an editor.
 		void setPresentToScreen(bool present) { mPresentToScreen = present; }
 		bool presentToScreen() const { return mPresentToScreen; }
-		// Escape closes the window, unless the app handles it itself.
-		void setEscapeCloses(bool closes) { mEscapeCloses = closes; }
-		// Set for a deterministic frame capture: passes must drop anything that differs from one
-		// run to the next (FPS counters, timing overlays) so two captures compare pixel for pixel.
-		void setCapturingFrame(bool capturing) { mCapturingFrame = capturing; }
-		bool capturingFrame() const { return mCapturingFrame; }
-		// Frame index the capture lands on, and where per-pass dumps go (empty = no per-pass
-		// dump). RenderSystem needs both to snapshot each pass on exactly that frame.
-		void setCaptureFrame(int frame) { mCaptureFrame = frame; }
-		int captureFrame() const { return mCaptureFrame; }
-		void setPassDumpDir(const std::string& dir) { mPassDumpDir = dir; }
-		const std::string& passDumpDir() const { return mPassDumpDir; }
-		// Non-zero makes the lighting shader output one isolated term (see deferred_shading.fs)
-		// instead of the lit result, so backend parity can be chased term by term.
-		void setLightingDebugTerm(int term) { mLightingDebugTerm = term; }
-		int lightingDebugTerm() const { return mLightingDebugTerm; }
-		// TAA accumulates across frames, so it turns any sub-LSB difference into a moving target.
-		// Turning it off measures what a single frame actually produces.
-		void setTemporalAccumulation(bool enabled) { mTemporalAccumulation = enabled; }
-		bool temporalAccumulation() const { return mTemporalAccumulation; }
-		// World chunks spawn the glass sphere grid instead of the character grid: the scene that has glass.
-		void setProceduralSpheres(bool enabled) { mProceduralSpheres = enabled; }
-		void setProceduralRooms(bool enabled) { mProceduralRooms = enabled; }
-		// Non-zero: every frame advances exactly this many seconds, as fast as it can, and tick systems step
-		// from the frame instead of their own wall-clock threads -- frame N is the same world on every run.
-		// Set before initThread.
-		void setFixedDeltaTime(float seconds) { mFixedDeltaTime = seconds; }
-		float fixedDeltaTime() const { return mFixedDeltaTime; }
-		bool proceduralSpheres() const { return mProceduralSpheres; }
-		// A scene file, relative to the content root, loaded instead of the procedural chunks.
-		void setScenePath(std::string path) { mScenePath = std::move(path); }
-		const std::string& scenePath() const { return mScenePath; }
-		// Online play, read by NetworkSystem as it starts: set before initThread.
-		void setNetwork(Network::Settings settings) { mNetwork = std::move(settings); }
-		const Network::Settings& network() const { return mNetwork; }
-		bool proceduralRooms() const { return mProceduralRooms; }
 
 	protected:
 		Engine();
 		~Engine() override;
 
 	private:
-		void fpsSync(int fps) const;
+		// Singleton's own, for instance(); the engine's is init(config).
+		using Singleton::init;
+
 		void updateDelta();
 		bool checkNeedClose();
 		void addRuntimeCommands();
@@ -124,20 +83,9 @@ namespace SFE {
 
 
 		bool mAlive = false;
-		bool mEmbeddedInEditor = false;
-		bool mPublishEditorDisplay = false;
 		bool mPresentToScreen = false;
-		bool mEscapeCloses = true;
-		bool mCapturingFrame = false;
-		int mCaptureFrame = 0;
-		int mLightingDebugTerm = 0;
-		bool mTemporalAccumulation = true;
-		bool mProceduralSpheres = false;
-		bool mProceduralRooms = false;
-		float mFixedDeltaTime = 0.f;
-		std::string mPassDumpDir;
-		std::string mScenePath;
-		Network::Settings mNetwork;
+		// What init(config) was given; a default one until then.
+		std::unique_ptr<EngineConfig> mConfig;
 
 		CoreModule::Core mCore;
 		

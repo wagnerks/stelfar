@@ -15,6 +15,14 @@ namespace SFE::Render {
 		}
 	}
 
+	DescriptorSetLayoutDesc materialTextureLayout() {
+		DescriptorSetLayoutDesc desc;
+		for (uint32_t binding = SFE::DIFFUSE; binding <= SFE::USER3; ++binding) {
+			desc.bindings.emplace_back(binding, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
+		}
+		return desc;
+	}
+
 	std::vector<WriteDescriptor> materialTextureWrites(const DescriptorSetHandle set, const ComponentsModule::Materials& materials) {
 		static const TextureHandle black = solidTexture(0, 0, 0);
 		static const TextureHandle gray = solidTexture(128, 128, 128);
@@ -38,6 +46,11 @@ namespace SFE::Render {
 			{ .set = set, .binding = SFE::TRIPLANAR2_NORMALS, .images{ { normal->texture, normal->sampler } } },
 			{ .set = set, .binding = SFE::OCCLUSION, .images{ { white->texture, white->sampler } } }, // nothing shut out
 			{ .set = set, .binding = SFE::EMISSIVE, .images{ { white->texture, white->sampler } } }, // all of `emissive`
+			// The application's own: nothing, until its material gives them.
+			{ .set = set, .binding = SFE::USER0, .images{ { clear, sampler } } },
+			{ .set = set, .binding = SFE::USER1, .images{ { clear, sampler } } },
+			{ .set = set, .binding = SFE::USER2, .images{ { clear, sampler } } },
+			{ .set = set, .binding = SFE::USER3, .images{ { clear, sampler } } },
 		};
 		for (uint8_t i = 0; i < materials.materialsCount; ++i) {
 			const auto& slot = materials.material[i];

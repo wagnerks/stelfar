@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -23,6 +24,8 @@
 namespace SFE {
 	namespace Render {
 		class Renderer;
+		class PassList;
+		struct PassEntry;
 	}
 }
 
@@ -51,19 +54,12 @@ namespace SFE::SystemsModule {
 		Math::Mat4 invView = {};
 		// x GraphicsSettings::stylise: a shader drawing in that look can leave out what it would not show.
 		Math::Vec4 style = {};
-		// The area tint (AreaTintFrame): its map's place and the bank's turn to mud, as the frame's passes left them;
-		// the map itself is binding 22 of the frame set. A zero area, no map.
-		Math::Vec4 tintArea = {};
-		Math::Vec4 tintShore = {};
-		// The marks in the ground (GroundMarksFrame): its windows, sizes and look, as the frame's passes left them; the
-		// map itself is binding 34 of the frame set. A zero size, no marks.
-		Math::Vec4 marksWindow = {};
-		Math::Vec4 marksSize = {};
-		Math::Vec4 marksLook = {};
-		Math::Vec4 marksChurn = {};
-		// The ground drawn dense near the camera (GroundMarksFrame::grid, patch); its heights are binding 35.
-		Math::Vec4 marksGrid = {};
-		Math::Vec4 marksPatch = {};
+		// The ground drawn dense near the camera (TerrainPatch) as its producer published it in prepare: x how deep it is
+		// lowered at most, its mesh's grid and its square; its heights are binding 35 of the frame set. Written after every
+		// pass's prepare (updateTerrainPatch). Mirrors SFE_SHARED_MATRICES (sfe.glsl) member for member.
+		Math::Vec4 patchDeepest = {};
+		Math::Vec4 patchGrid = {};
+		Math::Vec4 patchSquare = {};
 	};
 
 	struct GraphicsSettings {
@@ -102,10 +98,10 @@ namespace SFE::SystemsModule {
 		bool autoExposure = true;
 		float adaptationSpeed = 1.5f; // per second
 		float flareStrength = 0.6f;
-		// The grade: -1 cool .. 1 warm, and saturation and contrast around 1.
-		float warmth = 0.2f;
-		float saturation = 1.15f;
-		float contrast = 1.05f;
+		// The grade: -1 cool .. 1 warm, and saturation and contrast around 1; none by default.
+		float warmth = 0.f;
+		float saturation = 1.f;
+		float contrast = 1.f;
 
 		float fogStart = 0.82f;
 		// Metres the camera sees at most: its far plane. Past it the scene fades into the haze, and nothing further
@@ -155,11 +151,6 @@ namespace SFE::SystemsModule {
 		// (CascadedShadowPass).
 		float shadowRefreshRate = 0.f;
 
-		// The grass clumps: how many to a square metre against the default, and metres out to which they grow.
-		float grassDensity = 1.f;
-		float grassDistance = 90.f;
-		// How far the vegetation's layers reach, against their own distances.
-		float lodDetail = 1.8f;
 		// The pixels on screen a coarser level of a model may change from the full one (its simplifier's error, a share of
 		// its extent, times the extent in pixels) for it to be drawn: smaller keeps the detail further.
 		float lodPixels = 2.f;
@@ -170,18 +161,14 @@ namespace SFE::SystemsModule {
 		// once (GeometryPass): 1 on, 0 off.
 		float foliagePrepass = 1.f;
 
-		// How far the picture is pushed from what the light really does towards a painted one: 0 leaves it, 1 puts the
-		// sun's light in steps, takes the highlights off and flattens the colour.
-		float stylise = 1.f;
+		// How far the picture is pushed from what the light really does towards a painted one: 0 leaves it, as it is by
+		// default, 1 puts the sun's light in steps, takes the highlights off and flattens the colour.
+		float stylise = 0.f;
 
-		// How much the time of day grades the picture (warm low sun, blue night).
-		float timeGrade = 1.f;
-		// Shafts of light from the sun through the gaps in the clouds and the trees, gathered over the bloom pass.
-		float sunRays = 0.45f;
-
-		// Dust and pollen in the sunlight, midges and flies: whether, and how many of them show.
-		bool airLife = true;
-		float airLifeAmount = 1.f;
+		// How much the time of day grades the picture (warm low sun, blue night), 0 none.
+		float timeGrade = 0.f;
+		// Shafts of light from the sun through the gaps in the clouds and the trees, gathered over the bloom pass; 0 none.
+		float sunRays = 0.f;
 	};
 
 	struct RenderData {
@@ -280,7 +267,7 @@ namespace SFE::SystemsModule {
 
 	class RenderSystem : public ecss::System {
 	public:
-		RenderSystem();
+		explicit RenderSystem(Render::PassList passes);
 		~RenderSystem() override;
 
 		void update(float_t dt) override;
@@ -316,23 +303,22 @@ namespace SFE::SystemsModule {
 		// ARMATURE_UPDATED, or were destroyed), duplicates possible. Main thread.
 		std::vector<ecss::EntityId> takeDirtyAnimations();
 
-		// Passes from game code or a plugin. The pass is initialised at once and runs every frame in list order,
-		// after the pass named `after`, or last when `after` is empty or names no pass. A name already in the list
-		// is refused. Main thread, between frames.
-		bool addRenderPass(std::string name, std::unique_ptr<Render::RenderPass> pass, std::string_view after = {});
+		// A pass made from `entry` while the renderer runs: initialised at once, run from the next frame in list order
+		// right after the pass named `after`. Refused (false, logged) for an anchor no pass has, a name already in the
+		// list, an entry that is disabled or cannot be made. Main thread, between frames.
+		bool addRenderPass(Render::PassEntry entry, std::string_view after);
 		// Removes and destroys the named pass; false when there is none. Main thread, between frames.
 		bool removeRenderPass(std::string_view name);
 		// The picture drawn at a new size (ViewportData::renderW, renderH): once the device is idle, every pass makes its
 		// targets of the screen's size again (RenderPass::resize). Main thread, between frames.
 		void resize();
 		std::vector<std::string> renderPassNames() const { return mPassNames; }
-		// The named pass, or null. Main thread.
-		Render::RenderPass* renderPass(std::string_view name) const;
 		// Every pass in draw order, for whoever needs to ask them all something.
 		const std::vector<std::unique_ptr<Render::RenderPass>>& renderPasses() const { return mRenderPasses; }
 
-		// Readers skip when a chunk mutate is in flight. Mutate sets the flag first, then
-		// waits for in-flight readers, so a waiting mutate never blocks readers already running.
+		// Readers (AABBSystem, OcTreeSystem) skip a frame while the world is changed off the main thread (a scene reload
+		// destroying entities). Mutate sets the flag first, then waits for in-flight readers, so a waiting mutate never
+		// blocks readers already running.
 		class WorldReadGuard {
 		public:
 			WorldReadGuard() = default;
@@ -420,14 +406,15 @@ namespace SFE::SystemsModule {
 
 		void renderFrame();
 		bool shouldRunPass(size_t passIndex) const;
+		// `pass`, made of `entry`, initialised and put at `index` among the passes with the entry's name and predicate.
+		void placePass(const Render::PassEntry& entry, std::unique_ptr<Render::RenderPass> pass, size_t index);
 		void ensureGpuCapacity(ecss::EntityId id);
 		void bindGpuFrame();
-		// The area tint the passes' prepare left on the blackboard, into this frame's camera block and frame set.
-		void updateAreaTint();
-		void updateGroundMarks();
-		void updateMudMaps();
-		// The entities' looks the game put (FrameId::PieceLooks), or none, put there for the passes after.
-		void updatePieceLooks();
+		// The ground drawn dense (TerrainPatch) as published in prepare: its lanes into this frame's camera block, its
+		// heights at binding 35.
+		void updateTerrainPatch();
+		// Each entity's words (EntityUser) written since the last frame up, and binding 37 the store's buffer.
+		void updateEntityWords();
 		void createGpuFrameResources(uint32_t slot);
 		void createSceneBuffers(size_t capacity);
 		// `previousToo` also as last frame's, for an entity that has no last frame: no motion on its first one.
@@ -438,18 +425,12 @@ namespace SFE::SystemsModule {
 		std::atomic<int> mWorldReaders{ 0 };
 		std::atomic<bool> mWorldMutating{ false };
 
-		// GPU/CPU profiling data
-		int mCurrentGpuQuery = 0;
-		double mLastGpuTimeMs = 0.0; // result from previous frame
-		std::chrono::high_resolution_clock::time_point mCpuFrameStart; // per RenderSystem update
-		double mLastCpuFrameMs = 0.0; // duration of last RenderSystem::update body
-
 		RenderData mRenderData;
 		int mRenderedFrames = 0; // drives the one-shot per-pass dump
 		std::vector<std::unique_ptr<Render::RenderPass>> mRenderPasses;
 		std::vector<std::string> mPassNames; // one per pass, same order
 		std::vector<const char*> mPassZones; // the same names kept for good, the profiler's (Debug::Profiler::intern)
-		std::shared_future<void> updateLock;
+		std::vector<std::function<bool(const RenderData&)>> mPassRuns; // each pass's PassEntry::runs, same order
 
 		Render::BufferHandle cameraMatricesUBO;
 
@@ -457,11 +438,8 @@ namespace SFE::SystemsModule {
 		uint32_t mGpuFrames = 1;
 		std::vector<Render::BufferHandle> mCameraUbo;
 		std::vector<Render::DescriptorSetHandle> mFrameSet;
-		std::unordered_map<uint32_t, uint32_t> mFrameSetTint; // frame set id -> the tint map written to it
-		std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> mFrameSetMarks; // frame set id -> the marks map and heights written to it
-		std::unordered_map<uint32_t, uint32_t> mFrameSetMud; // frame set id -> the mud maps written to it
-		std::unordered_map<uint32_t, uint32_t> mFrameSetLooks; // frame set id -> the looks buffer written to it
-		Render::BufferHandle mNoLooks{}; // one look of nothing, while the game puts none
+		std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> mFrameSetPatchHeights; // frame set id -> the patch's heights written to it
+		std::unordered_map<uint32_t, uint32_t> mFrameSetWords; // frame set id -> the entity words' buffer written to it
 
 		// Scene data lives on the GPU in one buffer each, indexed by entity id. Only entities that changed
 		// since the last frame are uploaded, through the backend's queued upload path.

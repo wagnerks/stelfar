@@ -5,7 +5,6 @@
 
 #include "assetsModule/modelModule/Model.h"
 #include "assetsModule/modelModule/ModelLoader.h"
-#include "assetsModule/modelModule/Terrain.h"
 #include "componentsModule/CameraComponent.h"
 #include "componentsModule/MeshComponent.h"
 #include "core/ECSHandler.h"
@@ -344,6 +343,13 @@ namespace SFE::PropertiesModule {
 		data["mist"] = component.mist;
 		data["mist_height"] = component.mistHeight;
 		data["haze"] = component.haze;
+		data["latitude"] = component.latitude;
+		data["declination"] = component.declination;
+		data["noon"] = component.noon;
+		data["ground_albedo"] = Json::Value(Json::arrayValue);
+		data["ground_albedo"].append(component.groundAlbedo.x);
+		data["ground_albedo"].append(component.groundAlbedo.y);
+		data["ground_albedo"].append(component.groundAlbedo.z);
 	}
 
 	void ComponentSerializer<SkyComponent>::load(ecss::EntityId entity, const Json::Value& data) {
@@ -357,109 +363,12 @@ namespace SFE::PropertiesModule {
 		component->mist = data.get("mist", component->mist).asFloat();
 		component->mistHeight = data.get("mist_height", component->mistHeight).asFloat();
 		component->haze = data.get("haze", component->haze).asFloat();
-	}
-
-	// ===== TerrainComponent ===================================================
-
-	void ComponentSerializer<TerrainComponent>::save(const TerrainComponent& component, Json::Value& data) {
-		data["size"] = component.size;
-		data["resolution"] = component.resolution;
-		data["lake_width"] = component.lakeWidth;
-		data["lake_length"] = component.lakeLength;
-		data["lake_depth"] = component.lakeDepth;
-		data["hill_height"] = component.hillHeight;
-		data["seed"] = component.seed;
-		data["road"] = Json::arrayValue;
-		for (const auto& point : component.road) {
-			Json::Value item = Json::arrayValue;
-			item.append(point.x);
-			item.append(point.y);
-			data["road"].append(item);
+		component->latitude = data.get("latitude", component->latitude).asFloat();
+		component->declination = data.get("declination", component->declination).asFloat();
+		component->noon = data.get("noon", component->noon).asFloat();
+		if (auto val = JsonUtils::getValueArray(data, "ground_albedo")) {
+			component->groundAlbedo = JsonUtils::getVec3(*val);
 		}
-		data["clearings"] = Json::arrayValue;
-		for (const auto& clearing : component.clearings) {
-			Json::Value item = Json::arrayValue;
-			item.append(clearing.x);
-			item.append(clearing.y);
-			item.append(clearing.z);
-			data["clearings"].append(item);
-		}
-		data["paths"] = Json::arrayValue;
-		for (const auto& path : component.paths) {
-			Json::Value item;
-			item["width"] = path.width;
-			item["wear"] = path.wear;
-			item["points"] = Json::arrayValue;
-			for (const auto& point : path.points) {
-				Json::Value at = Json::arrayValue;
-				at.append(point.x);
-				at.append(point.y);
-				item["points"].append(at);
-			}
-			data["paths"].append(item);
-		}
-		data["patches"] = Json::arrayValue;
-		for (const auto& patch : component.patches) {
-			Json::Value item = Json::arrayValue;
-			item.append(patch.x);
-			item.append(patch.y);
-			item.append(patch.z);
-			item.append(patch.w);
-			data["patches"].append(item);
-		}
-	}
-
-	void ComponentSerializer<TerrainComponent>::load(ecss::EntityId entity, const Json::Value& data) {
-		auto component = ECSHandler::registry().addComponent<TerrainComponent>(entity);
-		if (!component) {
-			return;
-		}
-		component->size = data.get("size", component->size).asFloat();
-		component->resolution = data.get("resolution", component->resolution).asInt();
-		component->lakeWidth = data.get("lake_width", component->lakeWidth).asFloat();
-		component->lakeLength = data.get("lake_length", component->lakeLength).asFloat();
-		component->lakeDepth = data.get("lake_depth", component->lakeDepth).asFloat();
-		component->hillHeight = data.get("hill_height", component->hillHeight).asFloat();
-		component->seed = data.get("seed", component->seed).asInt();
-		component->road.clear();
-		for (const auto& point : data["road"]) {
-			component->road.push_back({ point[0].asFloat(), point[1].asFloat() });
-		}
-		component->clearings.clear();
-		for (const auto& clearing : data["clearings"]) {
-			component->clearings.push_back({ clearing[0].asFloat(), clearing[1].asFloat(), clearing[2].asFloat() });
-		}
-		component->paths.clear();
-		for (const auto& item : data["paths"]) {
-			auto& path = component->paths.emplace_back();
-			path.width = item.get("width", path.width).asFloat();
-			path.wear = item.get("wear", path.wear).asFloat();
-			for (const auto& point : item["points"]) {
-				path.points.push_back({ point[0].asFloat(), point[1].asFloat() });
-			}
-		}
-		component->patches.clear();
-		for (const auto& patch : data["patches"]) {
-			component->patches.push_back({ patch[0].asFloat(), patch[1].asFloat(), patch[2].asFloat(),
-				patch.size() > 3 ? patch[3].asFloat() : kDefaultWear });
-		}
-
-		auto* model = AssetsModule::getOrCreateTerrain(*component);
-		auto modelComp = ECSHandler::registry().addComponent<ModelComponent>(entity, entity);
-		if (!model || !modelComp) {
-			return;
-		}
-		modelComp->mPath = model->assetPath;
-		modelComp->setModel(model->getLODs());
-		ModelBinding::bind(entity);
-
-		// Painted by its own shader from world position and height, with the ground materials as texture arrays.
-		if (auto mesh = ECSHandler::registry().pinComponent<MeshComponent>(entity)) {
-			for (auto& material : mesh->meshMaterials) {
-				material.fragmentShader = AssetsModule::kTerrainFS;
-			}
-		}
-		SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::MATERIAL_UPDATED });
 	}
 
 	// ===== WaterComponent =====================================================
@@ -478,35 +387,6 @@ namespace SFE::PropertiesModule {
 		component->size = data.get("size", component->size).asFloat();
 		component->clarity = data.get("clarity", component->clarity).asFloat();
 		component->drift = data.get("drift", component->drift).asFloat();
-	}
-
-	// ===== CharacterComponent =================================================
-
-	// ===== CharacterAppearanceComponent =======================================
-
-	// ===== VegetationComponent ================================================
-
-
-	namespace {
-		constexpr std::pair<std::string_view, Sway> kSways[] = { { "none", Sway::None }, { "tree", Sway::Tree }, { "plant", Sway::Plant } };
-
-		std::string_view swayName(Sway sway) {
-			for (const auto& [name, value] : kSways) {
-				if (value == sway) {
-					return name;
-				}
-			}
-			return kSways[0].first;
-		}
-
-		Sway swayFromName(const std::string& name) {
-			for (const auto& [candidate, value] : kSways) {
-				if (candidate == name) {
-					return value;
-				}
-			}
-			return Sway::None;
-		}
 	}
 
 	// ===== WindComponent ======================================================
@@ -578,12 +458,6 @@ namespace SFE::PropertiesModule {
 		component->mPlaying = data.get("playing", component->mPlaying).asBool();
 	}
 
-	// ===== SoundscapeComponent ================================================
-
-	// ===== GarbageComponent ===================================================
-
-	// ===== GrassComponent =====================================================
-
 	// ===== The table ==========================================================
 
 	namespace {
@@ -616,8 +490,6 @@ namespace SFE::PropertiesModule {
 			// it just built.
 			entryFor<MaterialComponent>(LoadPhase::AfterBind),
 			entryFor<SkyComponent>(LoadPhase::Direct),
-			// After bind: it builds its own mesh and binds it.
-			entryFor<TerrainComponent>(LoadPhase::AfterBind),
 			entryFor<WaterComponent>(LoadPhase::Direct),
 			entryFor<WindComponent>(LoadPhase::Direct),
 			entryFor<ShelterComponent>(LoadPhase::Direct),

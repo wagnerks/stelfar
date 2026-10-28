@@ -27,7 +27,7 @@ namespace SFE::SystemsModule {
 		constexpr ma_uint32 kBlock = 256;
 		// Sounds heard through the HRTF at once. One more is panned by miniaudio until an ear is free.
 		constexpr size_t kEars = 48;
-		// The wood's reverb, on verblib's scales of 0 to 1: about a second long, its highs dying first, as among leaves.
+		// The reverb, on verblib's scales of 0 to 1: about a second long, its highs dying first, as among leaves.
 		// Numbers to tune (Params), read when Steam Audio's part of the mix is made: verblib's parameters are not for
 		// changing under the audio thread.
 		float& kRoomSize = Params::value("Audio", "reverb room size", 0.4f, { .help = "How long the reverb rings, on "
@@ -154,7 +154,7 @@ namespace SFE::SystemsModule {
 	}
 
 	// Steam Audio's part of the mix: its context and the HRTF, the ears, made up front so that a sound that starts makes
-	// nothing, and the wood's reverb they all send to. Only with a device to play to.
+	// nothing, and the reverb they all send to. Only with a device to play to.
 	struct AudioSystem::Spatial {
 		IPLContext context = nullptr;
 		IPLHRTF hrtf = nullptr;

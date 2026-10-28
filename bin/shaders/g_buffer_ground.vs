@@ -39,7 +39,7 @@ float sfeGroundHeight(ivec2 at) {
 
 // A vertex of the terrain's mesh as Terrain.cpp makes it: its height, its normal and tangent from its neighbours'.
 void sfeGroundMeshVertex(ivec2 at, out float height, out vec3 normal, out vec3 tangent) {
-    float spacing = matrices.marksGrid.z;
+    float spacing = matrices.patchGrid.z;
     height = sfeGroundHeight(at);
     float dx = (sfeGroundHeight(at + ivec2(1, 0)) - sfeGroundHeight(at - ivec2(1, 0))) / (2.0 * spacing);
     float dz = (sfeGroundHeight(at + ivec2(0, 1)) - sfeGroundHeight(at - ivec2(0, 1))) / (2.0 * spacing);
@@ -49,8 +49,8 @@ void sfeGroundMeshVertex(ivec2 at, out float height, out vec3 normal, out vec3 t
 
 // The `vertex`th vertex of the `instance`th row: column vertex / 2 on the row's near side, or its far side if odd.
 SfeGroundVertex sfeGroundPatchVertex(int vertex, int instance) {
-    vec4 grid = matrices.marksGrid;
-    vec4 square = matrices.marksPatch;
+    vec4 grid = matrices.patchGrid;
+    vec4 square = matrices.patchSquare;
     ivec2 at = ivec2(vertex >> 1, instance + (vertex & 1));
     int per = max(int(round(grid.z / square.w)), 1);
     ivec2 cell = ivec2(round((square.xy - grid.xy) / grid.z)) + at / per;

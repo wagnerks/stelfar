@@ -19,8 +19,6 @@
 
 namespace SFE::Params {
 	namespace {
-		constexpr const char* kFile = "tweaks.json";
-
 		// A number: where it is kept -- here (own), or where its owner keeps it (bind) -- what the code starts it at, and what
 		// it is for. The live value, through `at`, is always the one in force: the code reads it, and may write it, directly.
 		struct Entry {
@@ -62,8 +60,8 @@ namespace SFE::Params {
 			static std::map<std::string, std::map<std::string, Waiting>> all;
 			return all;
 		}
-		// What the file held, for the numbers that come into being after it was read: a function's own, on its first
-		// call. Not so much as made before then: most numbers are registered before main, and jsoncpp is a library
+		// What the file held as last read or saved, for the numbers that come into being after it: a function's own, on its
+		// first call. Not so much as made before then: most numbers are registered before main, and jsoncpp is a library
 		// loaded late, once main has said where it is.
 		bool gLoaded = false;
 		Json::Value& saved() {
@@ -74,6 +72,11 @@ namespace SFE::Params {
 		std::mutex& guard() {
 			static std::mutex mutex;
 			return mutex;
+		}
+		// The application's numbers file (setFile), none until it names one. Read and written under the guard.
+		std::string& fileName() {
+			static std::string name;
+			return name;
 		}
 
 		void* own(Entry& entry) {
@@ -120,6 +123,28 @@ namespace SFE::Params {
 
 		void put(Entry& entry, double value) {
 			put(entry.at, entry.type, value);
+		}
+
+		// `value` as a number of the type holds it, read back as get() reads it: put()'s one conversion, so a float the file
+		// has as 1.05 is the float 1.05 widened, never the double. Only a value that fits comes here.
+		double typed(Type type, double value) {
+			switch (type) {
+			case Type::Int: {
+				int kept = 0;
+				put(&kept, type, value);
+				return kept;
+			}
+			case Type::Bool: {
+				bool kept = false;
+				put(&kept, type, value);
+				return kept ? 1.0 : 0.0;
+			}
+			default: {
+				float kept = 0.f;
+				put(&kept, type, value);
+				return kept;
+			}
+			}
 		}
 
 		Json::Value toJson(Type type, double value) {
@@ -175,6 +200,17 @@ namespace SFE::Params {
 			}
 			const double value = found.asDouble();
 			return fits(type, value) ? std::optional<double>(value) : std::nullopt;
+		}
+
+		// Where a number stands without this run's changes: the file's value as last read or saved, or the code's where the
+		// file has none; a number of this run only, the code's. Called with the guard held.
+		double standingOf(const std::string& group, const std::string& name, const Entry& entry) {
+			return entry.meta.transient ? entry.initial : savedFor(group, name, entry.type).value_or(entry.initial);
+		}
+
+		// Whether the number is where it stands, compared in its own type. Called with the guard held.
+		bool atStanding(const Entry& entry, const std::string& group, const std::string& name) {
+			return get(entry) == typed(entry.type, standingOf(group, name, entry));
 		}
 
 		// Called with the guard held.
@@ -314,14 +350,25 @@ namespace SFE::Params {
 					continue;
 				}
 				settle(entry);
+				const double to = standingOf(group, name, entry);
 				if (inSession(entry)) {
-					entry.kept = entry.initial;
+					entry.kept = to;
 				}
 				else {
-					put(entry, entry.initial);
+					put(entry, to);
 				}
 			}
 		}
+	}
+
+	bool atStanding(const std::string& group, const std::string& name) {
+		std::lock_guard lock(guard());
+		auto* found = find(group, name);
+		if (!found) {
+			return false;
+		}
+		settle(*found);
+		return atStanding(*found, group, name);
 	}
 
 	bool setSession(const std::string& group, const std::string& name, double value, Session session) {
@@ -366,14 +413,26 @@ namespace SFE::Params {
 		return names;
 	}
 
+	void setFile(std::string path) {
+		std::lock_guard lock(guard());
+		fileName() = std::move(path);
+	}
+
+	std::string file() {
+		std::lock_guard lock(guard());
+		return fileName();
+	}
+
 	bool load() {
 		// Read whole before anything changes: a file that is not there, or does not parse, leaves every number as it was.
-		// None is no news (an application that tunes nothing has none), so it is looked for first rather than missed.
-		if (!FileSystem::isFileExists(kFile)) {
+		// None -- not named, or not there -- is no news (an application that tunes nothing has none), so it is looked for
+		// first rather than missed.
+		const auto path = file();
+		if (path.empty() || !FileSystem::isFileExists(path)) {
 			return false;
 		}
 		Json::Value read;
-		if (!FileSystem::readJson(kFile, read) || !read.isObject()) {
+		if (!FileSystem::readJson(path, read) || !read.isObject()) {
 			return false;
 		}
 		std::lock_guard lock(guard());
@@ -415,11 +474,16 @@ namespace SFE::Params {
 	}
 
 	void save() {
+		const auto path = file();
+		if (path.empty()) {
+			LogsModule::Logger::LOG_WARNING("Params: no numbers file named (Params::setFile): nothing saved");
+			return;
+		}
 		// Into the file as it is: what it holds for a number nothing registered this run (a function's own, not called
 		// yet) stays. A file that does not parse is left alone rather than written over with what is known here.
 		Json::Value root(Json::objectValue);
-		if (FileSystem::isFileExists(kFile) && (!FileSystem::readJson(kFile, root) || !root.isObject())) {
-			LogsModule::Logger::LOG_WARNING("%s is not groups of numbers as it stands: not saved over", kFile);
+		if (FileSystem::isFileExists(path) && (!FileSystem::readJson(path, root) || !root.isObject())) {
+			LogsModule::Logger::LOG_WARNING("%s is not groups of numbers as it stands: not saved over", path.c_str());
 			return;
 		}
 		{
@@ -445,20 +509,32 @@ namespace SFE::Params {
 				root.removeMember(group);
 			}
 		}
-		FileSystem::writeJson(kFile, root);
+		if (FileSystem::writeJson(path, root)) {
+			// What it wrote is where the numbers stand now, as a load of the file would have them: what reset() and the
+			// panel's reset go back to.
+			std::lock_guard lock(guard());
+			saved() = root;
+			gLoaded = true;
+		}
 	}
 
 	void panel() {
 		static char filter[64] = "";
-		if (ImGui::Button("save")) {
-			save();
+		const auto path = file();
+		if (!path.empty()) {
+			if (ImGui::Button("save")) {
+				save();
+			}
+			ImGui::SetItemTooltip("Keep what differs from the code in %s, read back at the next start.", path.c_str());
+			ImGui::SameLine();
+			if (ImGui::Button("reload")) {
+				load();
+			}
+			ImGui::SetItemTooltip("Every number as %s now has it (edited outside), the rest as the code has it.", path.c_str());
 		}
-		ImGui::SetItemTooltip("Keep what differs from the code in content/tweaks.json, read back at the next start.");
-		ImGui::SameLine();
-		if (ImGui::Button("reload")) {
-			load();
+		else {
+			ImGui::TextDisabled("no numbers file");
 		}
-		ImGui::SetItemTooltip("Every number as content/tweaks.json now has it (edited outside the game), the rest as the code has it.");
 		ImGui::SameLine();
 		ImGui::SetNextItemWidth(200.f);
 		ImGui::InputTextWithHint("##filter", "filter", filter, sizeof(filter));
@@ -494,6 +570,10 @@ namespace SFE::Params {
 				settle(entry);
 				const bool held = inSession(entry);
 				const bool changed = get(entry) != entry.initial;
+				// Where it stands without this run's changes (the file's, else the code's), and whether it is not there now,
+				// compared in its own type: what its reset is offered for.
+				const double base = standingOf(group, name, entry);
+				const bool edited = !atStanding(entry, group, name);
 				// Held for the session in blue, differing from the code in orange.
 				if (held || changed) {
 					ImGui::PushStyleColor(ImGuiCol_Text, held ? ImVec4(0.55f, 0.8f, 1.f, 1.f) : ImVec4(1.f, 0.8f, 0.3f, 1.f));
@@ -538,15 +618,20 @@ namespace SFE::Params {
 					ImGui::SameLine();
 					ImGui::TextDisabled("(this run)");
 				}
-				if (changed) {
+				if (edited) {
 					ImGui::SameLine();
 					if (ImGui::SmallButton("reset")) {
-						put(entry, entry.initial);
+						put(entry, base);
 					}
+					// Back to the file's value where it has one, else the code's.
+					const bool fromFile = !entry.meta.transient && savedFor(group, name, entry.type).has_value();
+					const std::string from = !fromFile ? std::string("the code")
+						: path.empty() ? std::string("the file last read") : path;
+					const double shown = typed(entry.type, base);
 					switch (entry.type) {
-					case Type::Int: ImGui::SetItemTooltip("Back to %d, as the code has it.", static_cast<int>(entry.initial)); break;
-					case Type::Bool: ImGui::SetItemTooltip("Back to %s, as the code has it.", entry.initial != 0.0 ? "on" : "off"); break;
-					default: ImGui::SetItemTooltip("Back to %.4g, as the code has it.", entry.initial); break;
+					case Type::Int: ImGui::SetItemTooltip("Back to %d, as %s has it.", static_cast<int>(shown), from.c_str()); break;
+					case Type::Bool: ImGui::SetItemTooltip("Back to %s, as %s has it.", shown != 0.0 ? "on" : "off", from.c_str()); break;
+					default: ImGui::SetItemTooltip("Back to %.4g, as %s has it.", shown, from.c_str()); break;
 					}
 				}
 				// A drag, a click or a reset of a number held for the session ends the session: what it was set to here is

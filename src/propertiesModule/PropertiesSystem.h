@@ -45,17 +45,12 @@ namespace SFE::PropertiesModule {
 
 		static Json::Value serializeEntity(const ecss::EntityId entity);
 
-		static ecss::EntityId spawnDefaultScene();
 		// A model at a place, ready to draw: loaded (once per path), bound and with its render transform seeded.
 		static ecss::EntityId spawnModel(const std::string& path, const Math::Vec3& pos, const Math::Vec3& scale, const Math::Vec3& rotate);
 		// The same with `model`, which `path` names, as it is: one whose textures were let go of drawn with the copies of
 		// their small levels (AssetsModule::releaseModel), where the one above reads them back first.
 		static ecss::EntityId spawnModel(AssetsModule::Model* model, const std::string& path, const Math::Vec3& pos, const Math::Vec3& scale,
 			const Math::Vec3& rotate);
-		static void spawnSphereGrid(int chunkX, int chunkZ, float chunkSize, float spacing);
-		static void spawnVampireGrid(int chunkX, int chunkZ, float chunkSize, float spacing);
-		// Walled rooms with characters inside, for testing occlusion culling.
-		static void spawnRoomGrid(int chunkX, int chunkZ, float chunkSize, float roomSize);
 		static Json::Value serializeEntities(const std::vector<ecss::EntityId>& entities);
 		static Json::Value serializeWorldSnapshot(const Json::Value& request);
 		static std::vector<ecss::EntityId> loadEntities(const Json::Value& root);

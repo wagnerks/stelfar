@@ -11,10 +11,12 @@
 #include "systemsModule/SystemManager.h"
 #include "assetsModule/AssetsManager.h"
 #include "backends/imgui_impl_opengl3.h"
+#include "componentsModule/TransformComponent.h"
 #include "debugModule/Benchmark.h"
 #include "logsModule/logger.h"
 #include "mathModule/Forward.h"
 #include "renderModule/TextRenderer.h"
+#include "systemsModule/TasksManager.h"
 
 namespace SFE::CoreModule {
 	void Core::update(float dt) {
@@ -41,8 +43,16 @@ namespace SFE::CoreModule {
 		});
 		ECSHandler::registry().setAccessTracking(true);
 
-		ECSHandler::instance()->initSystems();
-		CoreModule::InputHandler::init(Engine::instance()->getWindow());
+		// Systems that keep state per entity hear of every destroy, including one made straight on the registry: one
+		// that went unheard left its instances drawn where it stood.
+		ECSHandler::registry().setDestroyListener([](ecss::EntityId entity, void*) {
+			SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::ENTITY_DESTROYED });
+		});
+		// A new transform is reloaded, and its render copy made, once the registry has stored it: TransformSystem's worker
+		// may take the event at once, and one told before the store found nothing there and dropped it.
+		ECSHandler::registry().setAddListener<TransformComponent>([](ecss::EntityId entity, void*) {
+			SFE::SystemsModule::TasksManager::instance()->notify({ entity, SFE::SystemsModule::TaskType::TRANSFORM_UPDATE });
+		});
 	}
 
 	void Core::shutdown() {

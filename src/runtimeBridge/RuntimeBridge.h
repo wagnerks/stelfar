@@ -76,6 +76,15 @@ namespace SFE::RuntimeBridge {
 
 		void streamPresentedFrame();
 
+		// Run inside an editor that shows the frames itself (the editor sets it): the bridge then leaves the window and the
+		// streaming as the editor has them.
+		void setEmbeddedInEditor(bool embedded) { mEmbeddedInEditor = embedded; }
+		bool isEmbeddedInEditor() const { return mEmbeddedInEditor; }
+		// Whether each presented frame goes to the editor (streamPresentedFrame, from RenderSystem): on while an editor
+		// that subscribed to the frames streams them.
+		void setPublishEditorDisplay(bool publish) { mPublishEditorDisplay = publish; }
+		bool publishEditorDisplay() const { return mPublishEditorDisplay; }
+
 		// Things to do in the running game, by name: from a panel's button, or sent from outside (a Command message --
 		// a script, the editor) when the bridge is serving. Each takes its arguments as JSON and says what it did. Run on
 		// the main thread, between frames. The engine adds its own; a game adds its own the same way.
@@ -177,6 +186,8 @@ namespace SFE::RuntimeBridge {
 		bool mAppliedRemoteDisplay = false;
 
 		bool mEmbeddedHostMode = false;
+		bool mEmbeddedInEditor = false;
+		bool mPublishEditorDisplay = false;
 		bool mEmbedConfigDirty = false;
 		uint64_t mEmbedHostHwnd = 0;
 		int mEmbedX = 0;

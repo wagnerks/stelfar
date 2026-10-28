@@ -22,8 +22,8 @@
 #include "CameraSystem.h"
 #include "OcTreeSystem.h"
 #include "systemsModule/SystemManager.h"
-#include "core/GameModule.h"
-#include "systemsModule/SystemsPriority.h"
+#include "renderModule/PassList.h"
+#include "core/EngineConfig.h"
 #include "componentsModule/ArmatureComponent.h"
 #include "componentsModule/CameraComponent.h"
 #include "componentsModule/IsDrawableComponent.h"
@@ -50,7 +50,6 @@
 #include "componentsModule/TransformComponent.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/renderPasses/GUIPass.h"
-#include <debugModule/SystemLoadHelper.h>
 
 #include "componentsModule/MaterialComponent.h"
 #include "componentsModule/MeshComponent.h"
@@ -58,6 +57,8 @@
 #include "renderModule/renderPasses/GeometryPass.h"
 #include "renderModule/renderPasses/AnimationComputePass.h"
 #include "containersModule/Vector.h"
+// Last: it brings <windows.h>, whose near/far macros no header after it may meet (GeometryPass.h's GridDrawData).
+#include <debugModule/SystemLoadHelper.h>
 
 namespace SFE::SystemsModule {
 
@@ -148,7 +149,7 @@ namespace SFE::SystemsModule {
 
 		// The graphics settings as numbers to tune (Params), bound to the ones this system draws with: those tuned before
 		// under the keys they had, the rest in "Graphics" under their label in the Graphics panel, with its range for the
-		// drag. The grass, the vegetation's reach and the air life are the application's to register, as it reads them.
+		// drag.
 		void registerGraphics(GraphicsSettings& gfx) {
 			constexpr const char* kGraphics = "Graphics";
 			Params::bind(kGraphics, "ssao", gfx.ssao, { .help = "The ambient occlusion's pass (SSAOPass) on or off." });
@@ -283,7 +284,7 @@ namespace SFE::SystemsModule {
 		}
 	}
 
-	RenderSystem::RenderSystem() : System({ SFE::SystemsModule::TaskType::TRAHSFORM_RELOADED , SFE::SystemsModule::TaskType::ARMATURE_UPDATED, ANIMATION_UPDATED, MATERIAL_UPDATED, MESH_UPDATED, ENTITY_DESTROYED }) {
+	RenderSystem::RenderSystem(Render::PassList passes) : System({ SFE::SystemsModule::TaskType::TRAHSFORM_RELOADED , SFE::SystemsModule::TaskType::ARMATURE_UPDATED, ANIMATION_UPDATED, MATERIAL_UPDATED, MESH_UPDATED, ENTITY_DESTROYED }) {
 		// Before anything reads them: some passes read theirs as they are made, below.
 		registerGraphics(mRenderData.graphics);
 		auto* rhi = Engine::instance()->rhi();
@@ -326,13 +327,22 @@ namespace SFE::SystemsModule {
 		}
 		bindGpuFrame();
 
-		const auto& passes = GameModule::passes();
-		mRenderPasses.reserve(passes.size());
-		for (const auto& entry : passes) {
-			if (!entry.enabled || !entry.create) {
+		// What the application asked of its list and could not be had is said first, and loud: a pass left out or put
+		// elsewhere draws another picture. Then the passes, made and initialised one by one in the list's order.
+		for (const auto& error : passes.errors()) {
+			LogsModule::Logger::LOG_FATAL(false, "RenderSystem: the pass list was not built as asked: %s", error.c_str());
+		}
+		mRenderPasses.reserve(passes.entries().size());
+		for (const auto& entry : passes.entries()) {
+			if (!entry.enabled) {
 				continue;
 			}
-			addRenderPass(entry.name, std::unique_ptr<Render::RenderPass>(entry.create()));
+			auto pass = entry.make ? entry.make() : std::unique_ptr<Render::RenderPass>();
+			if (!pass) {
+				LogsModule::Logger::LOG_FATAL(false, "RenderSystem: the pass %s cannot be made", entry.name.c_str());
+				continue;
+			}
+			placePass(entry, std::move(pass), mRenderPasses.size());
 		}
 
 		// What is in the world already -- a scene loaded before this ctor -- never reached us through ARMATURE_UPDATED
@@ -517,40 +527,33 @@ namespace SFE::SystemsModule {
 		mRenderData.cameraMatricesUBO = cameraMatricesUBO;
 	}
 
-	void RenderSystem::updateAreaTint() {
-		// Nothing since step 5: an application's frame data is in its user frame set (UserFrameSet); step 6 deletes this.
-	}
-
-	void RenderSystem::updateGroundMarks() {
+	void RenderSystem::updateTerrainPatch() {
 		auto* rhi = Engine::instance()->rhi();
-		// The ground drawn dense near the camera (TerrainPatch): how deep the mesh under it goes in the lane GLSL calls
-		// patchDeepest, its grid and square in marksGrid and marksPatch (renamed in step 6), its heights at binding 35.
+		// The ground drawn dense near the camera (TerrainPatch): how deep the mesh under it goes, its grid and its square in
+		// the camera block's last three lanes, its heights at binding 35.
 		const auto& patch = Render::terrainPatch();
 		const Math::Vec4 lanes[] = { { patch.deepest, 0.f, 0.f, 0.f }, patch.grid, patch.square };
-		static_assert(offsetof(RenderMatrices, marksGrid) == offsetof(RenderMatrices, marksChurn) + sizeof(Math::Vec4)
-			&& offsetof(RenderMatrices, marksPatch) == offsetof(RenderMatrices, marksChurn) + 2 * sizeof(Math::Vec4));
-		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, marksChurn), sizeof(lanes), lanes);
+		static_assert(offsetof(RenderMatrices, patchGrid) == offsetof(RenderMatrices, patchDeepest) + sizeof(Math::Vec4)
+			&& offsetof(RenderMatrices, patchSquare) == offsetof(RenderMatrices, patchDeepest) + 2 * sizeof(Math::Vec4)
+			&& sizeof(RenderMatrices) == 544, "the last three lanes of SFE_SHARED_MATRICES (sfe.glsl), 544 bytes in all");
+		rhi->updateBuffer(cameraMatricesUBO, offsetof(RenderMatrices, patchDeepest), sizeof(lanes), lanes);
 		// Rewritten only when the producer publishes other heights.
 		const auto heights = Render::terrainPatchHeights();
 		const std::pair ids{ heights.first.id, heights.second.id };
-		const auto [written, fresh] = mFrameSetMarks.try_emplace(frameSet.id, ids);
+		const auto [written, fresh] = mFrameSetPatchHeights.try_emplace(frameSet.id, ids);
 		if (fresh || written->second != ids) {
 			written->second = ids;
 			rhi->updateDescriptorSets({ { .set = frameSet, .binding = 35, .images{ { heights.first, heights.second } } } });
 		}
 	}
 
-	void RenderSystem::updateMudMaps() {
-		// Nothing since step 5: an application's frame data is in its user frame set (UserFrameSet); step 6 deletes this.
-	}
-
-	void RenderSystem::updatePieceLooks() {
+	void RenderSystem::updateEntityWords() {
 		// Each entity's words (EntityUser): those written since the last frame go up, then binding 37 is the store's
 		// buffer, written again when a grow has replaced it.
 		auto& words = Render::EntityUser::instance();
 		words.upload();
 		const auto buffer = words.buffer();
-		const auto [written, fresh] = mFrameSetLooks.try_emplace(frameSet.id, buffer.id);
+		const auto [written, fresh] = mFrameSetWords.try_emplace(frameSet.id, buffer.id);
 		if (fresh || written->second != buffer.id) {
 			written->second = buffer.id;
 			Engine::instance()->rhi()->updateDescriptorSets({ { .set = frameSet, .binding = 37, .buffers{ { buffer } } } });
@@ -948,26 +951,34 @@ namespace SFE::SystemsModule {
 		return dirty;
 	}
 
-	bool RenderSystem::addRenderPass(std::string name, std::unique_ptr<Render::RenderPass> pass, const std::string_view after) {
-		if (!pass || std::find(mPassNames.begin(), mPassNames.end(), name) != mPassNames.end()) {
-			return false;
-		}
-		auto position = mPassNames.size();
-		if (!after.empty()) {
-			if (const auto it = std::find(mPassNames.begin(), mPassNames.end(), after); it != mPassNames.end()) {
-				position = static_cast<size_t>(it - mPassNames.begin()) + 1;
-			}
-		}
+	void RenderSystem::placePass(const Render::PassEntry& entry, std::unique_ptr<Render::RenderPass> pass, const size_t index) {
 		pass->init(mRenderData);
-		mRenderPasses.insert(mRenderPasses.begin() + static_cast<std::ptrdiff_t>(position), std::move(pass));
-		mPassZones.insert(mPassZones.begin() + static_cast<std::ptrdiff_t>(position), Debug::Profiler::intern(name));
-		mPassNames.insert(mPassNames.begin() + static_cast<std::ptrdiff_t>(position), std::move(name));
-		return true;
+		const auto at = static_cast<std::ptrdiff_t>(index);
+		mRenderPasses.insert(mRenderPasses.begin() + at, std::move(pass));
+		mPassZones.insert(mPassZones.begin() + at, Debug::Profiler::intern(entry.name));
+		mPassNames.insert(mPassNames.begin() + at, entry.name);
+		mPassRuns.insert(mPassRuns.begin() + at, entry.runs);
 	}
 
-	Render::RenderPass* RenderSystem::renderPass(const std::string_view name) const {
-		const auto it = std::find(mPassNames.begin(), mPassNames.end(), name);
-		return it == mPassNames.end() ? nullptr : mRenderPasses[static_cast<size_t>(it - mPassNames.begin())].get();
+	bool RenderSystem::addRenderPass(Render::PassEntry entry, const std::string_view after) {
+		const auto anchor = std::find(mPassNames.begin(), mPassNames.end(), after);
+		const char* refused = after.empty() ? "no pass named to go after"
+			: anchor == mPassNames.end() ? "no pass of that name to go after"
+			: entry.name.empty() ? "an entry with no name"
+			: std::find(mPassNames.begin(), mPassNames.end(), entry.name) != mPassNames.end() ? "a name already in the list"
+			: !entry.enabled ? "a disabled entry"
+			: !entry.make ? "no way to make it" : nullptr;
+		auto pass = refused ? std::unique_ptr<Render::RenderPass>() : entry.make();
+		if (!refused && !pass) {
+			refused = "it cannot be made";
+		}
+		if (refused) {
+			LogsModule::Logger::LOG_ERROR("RenderSystem: pass \"%s\" not added after \"%s\": %s", entry.name.c_str(),
+				std::string(after).c_str(), refused);
+			return false;
+		}
+		placePass(entry, std::move(pass), static_cast<size_t>(anchor - mPassNames.begin()) + 1);
+		return true;
 	}
 
 	bool RenderSystem::removeRenderPass(const std::string_view name) {
@@ -980,6 +991,7 @@ namespace SFE::SystemsModule {
 		PropertiesModule::forgetSceneListenersOf(mRenderPasses[static_cast<size_t>(index)].get());
 		mRenderPasses.erase(mRenderPasses.begin() + index);
 		mPassZones.erase(mPassZones.begin() + index);
+		mPassRuns.erase(mPassRuns.begin() + index);
 		mPassNames.erase(it);
 		return true;
 	}
@@ -993,45 +1005,8 @@ namespace SFE::SystemsModule {
 
 	bool RenderSystem::shouldRunPass(size_t passIndex) const
 	{
-		if (passIndex >= mPassNames.size()) {
-			return true;
-		}
-
-		const char* name = mPassNames[passIndex].c_str();
-		const auto& gfx = mRenderData.graphics;
-		if (std::strcmp(name, "SSAO") == 0) {
-			return gfx.ssao;
-		}
-		if (std::strcmp(name, "SSR") == 0) {
-			return gfx.ssr;
-		}
-		if (std::strcmp(name, "Volumetric") == 0) {
-			return gfx.volumetric;
-		}
-		if (std::strcmp(name, "TAA") == 0) {
-			return gfx.taa;
-		}
-		if (std::strcmp(name, "DoF") == 0) {
-			return gfx.dof;
-		}
-		if (std::strcmp(name, "SSS") == 0) {
-			return gfx.sss;
-		}
-		if (std::strcmp(name, "ContactGI") == 0) {
-			return gfx.contactGi;
-		}
-
-		if (std::strcmp(name, "ImGui") == 0) {
-			return Engine::instance()->presentToScreen();
-		}
-
-		auto* engine = Engine::instance();
-		if (engine->publishEditorDisplay() && !engine->presentToScreen()) {
-			if (std::strcmp(name, "Debug") == 0) {
-				return false;
-			}
-		}
-		return true;
+		// The pass's own predicate (PassEntry::runs); one with none runs every frame.
+		return passIndex >= mPassRuns.size() || !mPassRuns[passIndex] || mPassRuns[passIndex](mRenderData);
 	}
 
 	void RenderSystem::renderFrame()
@@ -1065,11 +1040,11 @@ namespace SFE::SystemsModule {
 		if (mRenderedFrames == 1) {
 			writePassOrder(mPassNames);
 		}
-		auto* engine = Engine::instance();
-		const bool dumpPasses = engine->capturingFrame()
-			&& !engine->passDumpDir().empty()
-			&& mRenderedFrames == engine->captureFrame();
-		PassDumpWriter passDump(dumpPasses ? engine->passDumpDir() : std::string{});
+		const auto& capture = Engine::instance()->config().capture;
+		const bool dumpPasses = capture.enabled
+			&& !capture.passDumpDir.empty()
+			&& mRenderedFrames == capture.frame;
+		PassDumpWriter passDump(dumpPasses ? capture.passDumpDir : std::string{});
 		passDump.seed(mRenderData.frame);
 
 		// No frame-wide bind here: every pass binds its own sets against its pipeline, as Vulkan requires, and a bind
@@ -1091,8 +1066,8 @@ namespace SFE::SystemsModule {
 		// entities' words, the application's frame data) goes up and into the sets, device-local writes among it queued
 		// in the frame.
 		const auto tChannels = Clock::now();
-		updateGroundMarks();
-		updatePieceLooks();
+		updateTerrainPatch();
+		updateEntityWords();
 		Render::UserFrameSet::instance().write();
 		const auto tBegin = Clock::now();
 		profile("Frame channels", tChannels, tBegin);
@@ -1163,11 +1138,10 @@ namespace SFE::SystemsModule {
 				rhi->setPresentBlitSource(presentTex, presentSampler);
 			}
 		}
-		if (Engine::instance()->publishEditorDisplay()) {
+		// Asked of the bridge only if there is one: instance() would make it.
+		if (RuntimeBridge::RuntimeBridge::isAlive() && RuntimeBridge::RuntimeBridge::instance()->publishEditorDisplay()) {
 			SFE_PROFILE_ZONE("Stream frame");
-			if (RuntimeBridge::RuntimeBridge::isAlive()) {
-				RuntimeBridge::RuntimeBridge::instance()->streamPresentedFrame();
-			}
+			RuntimeBridge::RuntimeBridge::instance()->streamPresentedFrame();
 		}
 
 		const auto tPresent = Clock::now();

@@ -93,8 +93,8 @@ namespace SFE::Render::RenderPasses {
 		SamplerHandle mLinear{};
 	};
 
-	// The motes and the sparks drawn over the resolved picture after TAA, with its depth, as AirLifePass's specks are:
-	// TAA would smear what moves this fast across a pixel to nothing.
+	// The motes and the sparks drawn over the resolved picture after TAA, with its depth: TAA would smear what moves this
+	// fast across a pixel to nothing.
 	class ParticleSpritePass : public RenderPass {
 	public:
 		void init(SystemsModule::RenderData& renderDataHandle) override;

@@ -28,7 +28,7 @@ layout(location = 8) out vec4 vPrevClip;
 // Where on the model this is, in world metres from its origin and before the wind: what a triplanar texture is laid
 // by, so it neither slides as the model moves nor swims as it sways.
 layout(location = 9) out vec3 vSurface;
-// When this triangle of a cut-out surface is gone as the plant goes bare (sfePieceKey).
+// When this triangle of a cut-out surface is gone as its material dissolves (sfePieceKey).
 layout(location = 12) flat out float vPiece;
 // Where this is on the model at rest, in its own metres: what stays put on it as it moves, such as mud thrown on it.
 layout(location = 14) out vec3 vRest;

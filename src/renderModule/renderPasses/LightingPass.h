@@ -141,13 +141,13 @@ namespace SFE::Render::RenderPasses {
 		IblMaps mIbl;
 		IblMaps mIblSpare; // what the next bake is written into, then swapped with mIbl
 		// What the sky light was baked from, and the bake under way on a worker.
-		std::array<float, 5> mIblKey{};
+		std::array<float, 8> mIblKey{};
 		std::future<IblTexels> mIblBaking;
 		void bakeSkyLight(SystemsModule::RenderData& renderDataHandle);
 		// mIbl bound for the frames to come.
 		void useSkyLight(SystemsModule::RenderData& renderDataHandle);
 		void updateSkyLight(SystemsModule::RenderData& renderDataHandle);
-		static std::array<float, 5> skyLightKey(const SystemsModule::RenderData& renderDataHandle);
+		static std::array<float, 8> skyLightKey(const SystemsModule::RenderData& renderDataHandle);
 
 		struct BoundImage {
 			TextureHandle texture;

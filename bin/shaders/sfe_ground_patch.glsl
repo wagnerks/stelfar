@@ -11,13 +11,13 @@
 // (g_buffer_ground.vs) takes at `xz`: all of it but for its outer cell of the terrain's mesh, over which it eases out to
 // none at its edge, where it meets the terrain's own mesh. None outside it, or with none.
 float sfeGroundPatchTake(vec2 xz) {
-    vec4 square = matrices.marksPatch;
+    vec4 square = matrices.patchSquare;
     if (square.z <= 0.0) {
         return 0.0;
     }
     vec2 local = xz - square.xy;
     float edge = min(min(local.x, local.y), min(square.z - local.x, square.z - local.y));
-    return smoothstep(0.0, matrices.marksGrid.z, edge);
+    return smoothstep(0.0, matrices.patchGrid.z, edge);
 }
 
 #ifdef SFE_MATERIAL_TABLE_GLSL
@@ -30,10 +30,10 @@ const float kSfeGroundUnder = 1.0;
 // mesh (bit 128 of its map mask) strictly inside that square; those on its edge stay, so that the mesh round it is
 // whole.
 vec3 sfeGroundUnderPatch(vec3 world, uint material) {
-    vec4 square = matrices.marksPatch;
+    vec4 square = matrices.patchSquare;
     if (square.z > 0.0 && (uint(sfeMaterials[material].mapMask + 0.5) & 128u) != 0u) {
         vec2 local = world.xz - square.xy;
-        float margin = 0.5 * matrices.marksGrid.z;
+        float margin = 0.5 * matrices.patchGrid.z;
         if (all(greaterThan(local, vec2(margin))) && all(lessThan(local, vec2(square.z - margin)))) {
             world.y -= max(kSfeGroundUnder, 2.0 * matrices.patchDeepest.x);
         }

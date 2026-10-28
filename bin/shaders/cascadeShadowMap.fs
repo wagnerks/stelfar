@@ -28,7 +28,7 @@ void main() {
         float a = material.shadowCutoff < 0.0 ? max(t.r, t.g) : t.a;
         a = min(a, TexCoords1 == TexCoords ? t.a : textureLod(texture_diffuse1, TexCoords1, 0.0).a);
         // A texel of a dissolving piece that does not stay (sfe_user_dissolve.glsl) casts no shadow either.
-        if (a < cutoff || (vPiece < material.bare && !sfeUserDissolveKeeps(pow(t.rgb, vec3(2.2)) * material.tint))) {
+        if (a < cutoff || (vPiece < material.dissolve && !sfeUserDissolveKeeps(pow(t.rgb, vec3(2.2)) * material.tint))) {
             discard;
         }
     }

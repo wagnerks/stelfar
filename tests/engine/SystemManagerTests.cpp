@@ -52,6 +52,39 @@ namespace {
 		void debugUpdate(float) override { debugged.push_back("made second"); }
 	};
 
+	// Each says it ran, in the order the frame ran them.
+	std::vector<std::string> ran;
+	struct RootA : ecss::System {
+		void update(float) override { ran.push_back("A"); }
+	};
+	struct RootB : ecss::System {
+		void update(float) override { ran.push_back("B"); }
+	};
+	struct RootX : ecss::System {
+		void update(float) override { ran.push_back("X"); }
+	};
+	struct RootY : ecss::System {
+		void update(float) override { ran.push_back("Y"); }
+	};
+
+	// How many were made.
+	int neverMade = 0;
+	struct Never : ecss::System {
+		Never() { ++neverMade; }
+		void update(float) override {}
+	};
+
+	struct Updating : ecss::System {
+		void update(float) override {}
+	};
+	struct NoUpdate : ecss::System {};
+	struct Rooted : ecss::System {
+		void update(float) override {}
+	};
+	struct Ticked : ecss::System {
+		void update(float) override {}
+	};
+
 	constexpr float kStep = 1.f / 60.f;
 }
 
@@ -70,6 +103,7 @@ TEST(SystemManager, DeletesASystemBeforeWhatItWasMadeOn) {
 // It used to go to a wall-clock thread of its own.
 TEST(SystemManager, TickSystemAddedBeforeStepModeIsStepped) {
 	ecss::SystemManager systems;
+	systems.createSystem<Ticker>();
 	systems.addTickSystems<Ticker>(60);
 	systems.setStepTickSystems(true);
 	const auto* ticker = systems.getSystem<Ticker>();
@@ -86,6 +120,7 @@ TEST(SystemManager, TickSystemAddedAfterTheFirstUpdateKeepsTheMode) {
 	ecss::SystemManager systems;
 	systems.setStepTickSystems(true);
 	systems.update(kStep);
+	systems.createSystem<LateTicker>();
 	systems.addTickSystems<LateTicker>(60);
 	systems.update(kStep);
 	systems.update(kStep);
@@ -105,4 +140,67 @@ TEST(SystemManager, DebugUpdatesRunInCreationOrder) {
 	systems.createSystem<MadeSecond>();
 	systems.update(kStep);
 	EXPECT_EQ(debugged, (std::vector<std::string>{ "made first", "made second" }));
+}
+
+// An application's own go before the engine's: right before the anchor, in the order asked, after what was there.
+TEST(SystemManager, RootsGoBeforeTheirAnchorInTheirOrder) {
+	ran.clear();
+	ecss::SystemManager systems;
+	systems.createSystem<RootA>();
+	systems.createSystem<RootB>();
+	systems.createSystem<RootX>();
+	systems.createSystem<RootY>();
+	systems.addRootSystems<RootA, RootB>();
+	systems.addRootSystemsBefore<RootB, RootX, RootY>();
+	systems.update(kStep);
+	EXPECT_EQ(ran, (std::vector<std::string>{ "A", "X", "Y", "B" }));
+}
+
+// Before an anchor that is not on the main thread -- here never made -- nothing is scheduled: what was to go there is
+// never updated, and is said as made but not scheduled.
+TEST(SystemManager, NoAnchorSchedulesNothing) {
+	ran.clear();
+	ecss::SystemManager systems;
+	auto* x = systems.createSystem<RootX>();
+	systems.addRootSystemsBefore<RootB, RootX>();
+	systems.update(kStep);
+	EXPECT_TRUE(ran.empty()) << "a system went before an anchor that is not there";
+	EXPECT_EQ(systems.unscheduled(), (std::vector<ecss::System*>{ x }));
+}
+
+// Scheduling takes what createSystem made and makes nothing itself: one never made is left out, and stays unmade.
+TEST(SystemManager, SchedulingNeverMakesASystem) {
+	neverMade = 0;
+	ecss::SystemManager systems;
+	systems.addRootSystems<Never>();
+	systems.addTickSystems<Never>(60);
+	systems.update(kStep);
+	EXPECT_EQ(neverMade, 0) << "scheduling made a system";
+	EXPECT_EQ(systems.getSystem<Never>(), nullptr);
+}
+
+// Scheduled again, on the main thread or as a tick system, it is still updated once a frame.
+TEST(SystemManager, ASystemIsScheduledOnce) {
+	ran.clear();
+	ecss::SystemManager systems;
+	systems.createSystem<RootA>();
+	systems.addRootSystems<RootA>();
+	systems.addRootSystems<RootA>();
+	systems.addTickSystems<RootA>(60);
+	systems.update(kStep);
+	EXPECT_EQ(ran, (std::vector<std::string>{ "A" }));
+}
+
+// A system with an update of its own that is neither on the main thread nor ticked would never run: it is the one named.
+// One without an update (a task worker) is not.
+TEST(SystemManager, SaysWhatWasMadeButNotScheduled) {
+	ecss::SystemManager systems;
+	auto* updating = systems.createSystem<Updating>();
+	systems.createSystem<NoUpdate>();
+	systems.createSystem<Rooted>();
+	systems.createSystem<Ticked>();
+	systems.addRootSystems<Rooted>();
+	systems.setStepTickSystems(true);
+	systems.addTickSystems<Ticked>(60);
+	EXPECT_EQ(systems.unscheduled(), (std::vector<ecss::System*>{ updating }));
 }

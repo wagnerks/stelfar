@@ -11,80 +11,8 @@
 #include "mathModule/Quaternion.h"
 #include "systemsModule/SystemManager.h"
 #include "windowsModule/Window.h"
-#include "assetsModule/TextureHandler.h"
-#include "renderModule/FrameBlackboard.h"
 
 using namespace SFE::Render;
-
-std::pair<TextureHandle, SamplerHandle> Utils::areaTintMap(const FrameBlackboard& frame) {
-	if (const auto* tint = frame.data<AreaTintFrame>(FrameId::AreaTint)) {
-		return { tint->map, tint->sampler };
-	}
-	const auto* white = AssetsModule::TextureHandler::instance()->loadTexture("white.png");
-	return { white->texture, white->sampler };
-}
-
-std::pair<TextureHandle, SamplerHandle> Utils::groundMarksMap(const FrameBlackboard& frame) {
-	if (const auto* marks = frame.data<GroundMarksFrame>(FrameId::GroundMarks)) {
-		return { marks->map, marks->sampler };
-	}
-	static const std::pair<TextureHandle, SamplerHandle> unmarked = [] {
-		auto* rhi = Engine::instance()->rhi();
-		TextureDesc desc;
-		desc.width = 1;
-		desc.height = 1;
-		desc.dimension = TextureDimension::Array;
-		desc.format = TextureFormat::RG8;
-		desc.usage = TextureUsage::Sampled | TextureUsage::TransferDst;
-		const auto texture = rhi->createTexture(desc);
-		const uint8_t level[2] = { 0, 0 };
-		rhi->updateTexture(texture, 0, 0, 1, 1, TextureFormat::RG8, level);
-		return std::pair{ texture, rhi->createSampler(SamplerDesc{}) };
-	}();
-	return unmarked;
-}
-
-std::pair<TextureHandle, SamplerHandle> Utils::mudMaps(const FrameBlackboard& frame) {
-	if (const auto* mud = frame.data<MudMapsFrame>(FrameId::MudMaps)) {
-		return { mud->map, mud->sampler };
-	}
-	static const std::pair<TextureHandle, SamplerHandle> clean = [] {
-		auto* rhi = Engine::instance()->rhi();
-		TextureDesc desc;
-		desc.width = 1;
-		desc.height = 1;
-		desc.dimension = TextureDimension::Array;
-		desc.format = TextureFormat::R8;
-		desc.usage = TextureUsage::Sampled | TextureUsage::TransferDst;
-		const auto texture = rhi->createTexture(desc);
-		const uint8_t none = 0;
-		rhi->updateTexture(texture, 0, 0, 1, 1, TextureFormat::R8, &none);
-		return std::pair{ texture, rhi->createSampler(SamplerDesc{}) };
-	}();
-	return clean;
-}
-
-std::pair<TextureHandle, SamplerHandle> Utils::groundHeightsMap(const FrameBlackboard& frame) {
-	static const SamplerHandle nearest = [] {
-		SamplerDesc desc;
-		desc.minFilter = FilterMode::Nearest;
-		desc.magFilter = FilterMode::Nearest;
-		return Engine::instance()->rhi()->createSampler(desc);
-	}();
-	if (const auto* marks = frame.data<GroundMarksFrame>(FrameId::GroundMarks); marks && marks->heights) {
-		return { marks->heights, nearest };
-	}
-	static const TextureHandle flat = [] {
-		TextureDesc desc;
-		desc.width = 1;
-		desc.height = 1;
-		desc.format = TextureFormat::R32F;
-		desc.usage = TextureUsage::Sampled;
-		const float height = 0.f;
-		return Engine::instance()->rhi()->createTexture(desc, &height);
-	}();
-	return { flat, nearest };
-}
 
 void Utils::drawGroundPatch(const CommandListHandle cmd, const Math::Vec4& patch) {
 	constexpr uint32_t kMostColumns = 2048;

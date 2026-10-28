@@ -12,11 +12,12 @@
 #include "componentsModule/OutlineComponent.h"
 #include "componentsModule/Hierarchy.h"
 #include "componentsModule/TransformComponent.h"
+#include "core/EngineConfig.h"
+#include "core/Params.h"
 #include "ecss/Registry.h"
 #include "propertiesModule/PropertiesSystem.h"
 #include "systemsModule/TasksManager.h"
 #include "systemsModule/systems/RenderSystem.h"
-#include "systemsModule/systems/WorldTimeSystem.h"
 
 namespace SFE::EngineTests {
 	using ComponentsModule::AnimationComponent;
@@ -432,51 +433,48 @@ namespace SFE::EngineTests {
 		step();
 	}
 
-	// A pass from outside the engine goes where it is asked to, runs every frame from then on and can be removed.
-	TEST(EngineTest, CustomRenderPassRunsWhereItWasInserted) {
-		struct CountingPass : Render::RenderPass {
-			int* inits = nullptr;
-			int* renders = nullptr;
-			void init(SystemsModule::RenderData&) override { ++*inits; }
-			void render(SystemsModule::RenderData&, Render::CommandListHandle) override { ++*renders; }
+	// Tick systems step from the frame under a fixed step (Engine::start settled it from the config): one ticked once a
+	// second moves in whole ticks, two in 125 frames of 1/60 s.
+	TEST(EngineTest, ATickSystemStepsFromTheFrameStep) {
+		struct Counting : ecss::System {
+			void update(float) override { ++ticks; }
+			std::atomic<int> ticks{ 0 };
 		};
-		auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
-		ASSERT_NE(renderSystem, nullptr);
-
-		int inits = 0;
-		int renders = 0;
-		auto pass = std::make_unique<CountingPass>();
-		pass->inits = &inits;
-		pass->renders = &renders;
-		ASSERT_TRUE(renderSystem->addRenderPass("TestCounting", std::move(pass), "Geometry"));
-		EXPECT_EQ(inits, 1);
-		EXPECT_FALSE(renderSystem->addRenderPass("TestCounting", std::make_unique<CountingPass>())) << "a second pass took a name already in use";
-
-		const auto names = renderSystem->renderPassNames();
-		const auto geometry = std::find(names.begin(), names.end(), "Geometry");
-		ASSERT_NE(geometry, names.end());
-		ASSERT_NE(geometry + 1, names.end());
-		EXPECT_EQ(*(geometry + 1), "TestCounting");
-
-		step(3);
-		EXPECT_EQ(renders, 3);
-
-		EXPECT_TRUE(renderSystem->removeRenderPass("TestCounting"));
-		EXPECT_FALSE(renderSystem->removeRenderPass("TestCounting"));
-		step(2);
-		EXPECT_EQ(renders, 3) << "a removed pass kept running";
+		auto& systems = ECSHandler::systemManager();
+		auto* counting = systems.getSystem<Counting>();
+		if (!counting) {
+			// Made once for the run (a system stays as long as the engine): a repeated run counts on from where it was.
+			counting = systems.createSystem<Counting>();
+			systems.addTickSystems<Counting>(1);
+		}
+		const int before = counting->ticks.load();
+		step(125);
+		const int advanced = counting->ticks.load() - before;
+		// 125 frames are 2.08 s; what the accumulator held before adds at most one more tick.
+		EXPECT_TRUE(advanced == 2 || advanced == 3) << "advanced " << advanced;
 	}
 
-	// Tick systems step from the frame under a fixed step: world time (1 tick a second) moves in whole seconds.
-	TEST(EngineTest, WorldTimeTicksFromTheFrameStep) {
-		auto* worldTime = ECSHandler::getSystem<SystemsModule::WorldTimeSystem>();
-		ASSERT_NE(worldTime, nullptr);
-		const float before = worldTime->getWorldTime();
-		step(125);
-		const float advanced = worldTime->getWorldTime() - before;
-		// 125 frames are 2.08 s; what the accumulator held before adds at most one more tick.
-		EXPECT_TRUE(advanced == 2.f || advanced == 3.f) << "advanced " << advanced;
-		EXPECT_FLOAT_EQ(std::fmod(advanced, 1.f), 0.f);
+	// What the run is is given once: the fixture's config stands, and a second init changes nothing -- not the step, not
+	// the numbers file (none named), not the RHI.
+	TEST(EngineTest, InitTakesTheConfigOnce) {
+		auto* engine = Engine::instance();
+		EXPECT_EQ(engine->config().fixedDeltaTime, kFrameTime);
+		EXPECT_FALSE(engine->config().capture.enabled);
+		EXPECT_FALSE(engine->capturingFrame());
+		EXPECT_TRUE(Params::file().empty()) << "the fixture names no numbers file, yet one is named: " << Params::file();
+
+		auto* rhi = engine->rhi();
+		EngineConfig other;
+		other.fixedDeltaTime = 0.5f;
+		other.maxFps = 30;
+		other.capture.enabled = true;
+		other.numbersFile = "other.json";
+		engine->init(other);
+		EXPECT_EQ(engine->config().fixedDeltaTime, kFrameTime) << "a second init took its config";
+		EXPECT_EQ(engine->config().maxFps, EngineConfig{}.maxFps);
+		EXPECT_FALSE(engine->capturingFrame());
+		EXPECT_TRUE(Params::file().empty()) << "a second init named its numbers file";
+		EXPECT_EQ(engine->rhi(), rhi) << "a second init made another RHI";
 	}
 
 	// The hierarchy is an ecss relation, not a component: a child's transform is its parent's times its own, moving

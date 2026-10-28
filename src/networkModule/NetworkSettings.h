@@ -15,9 +15,9 @@ namespace SFE::Network {
 		bool any() const { return lagMs > 0.f || jitterMs > 0.f || lossPercent > 0.f; }
 	};
 
-	// How this run takes part in online play: set before the systems are made (Engine::setNetwork), read by
-	// NetworkSystem when it starts. A host listens on `port` for up to `maxPlayers` - 1 others; a client joins the
-	// host at `address`:`port`.
+	// How this run takes part in online play: given to NetworkSystem as it is made (Modules::addNetwork), and read by it
+	// as it starts. A host listens on `port` for up to `maxPlayers` - 1 others; a client joins the host at
+	// `address`:`port`.
 	struct Settings {
 		Role role = Role::Offline;
 		std::string address;

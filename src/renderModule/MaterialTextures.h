@@ -7,7 +7,11 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::Render {
-	// The material texture bindings (DIFFUSE..EMISSIVE): the engine's default for every slot first,
+	// The layout of a material's texture set: a combined image sampler a slot, DIFFUSE..USER3, fragment stage; the one
+	// every pass drawing materials makes, so materialTextureWrites' bindings are all its own.
+	DescriptorSetLayoutDesc materialTextureLayout();
+
+	// The material texture bindings (DIFFUSE..USER3): the engine's default for every slot first,
 	// then the material's own textures over them.
 	std::vector<WriteDescriptor> materialTextureWrites(DescriptorSetHandle set, const ComponentsModule::Materials& materials);
 

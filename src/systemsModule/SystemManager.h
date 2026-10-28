@@ -3,7 +3,9 @@
 
 #include "core/LoadTrace.h"
 
+#include <initializer_list>
 #include <memory>
+#include <type_traits>
 
 #include "systemsModule/SystemBase.h"
 
@@ -46,31 +48,56 @@ namespace ecss {
 			}
 			mSystemsMap[index] = system;
 			mMade.push_back(system);
+			// One with an update of its own is one to schedule; one never scheduled is said at the first update.
+			if constexpr (!std::is_same_v<decltype(&T::update), void (System::*)(float)>) {
+				mUpdating.push_back(system);
+			}
 
 			return system;
 		}
 
-		
+		// Each takes a system createSystem made: one never made is an error, said and left out; so is one scheduled
+		// twice, or an anchor not on the main thread.
+		//
+		// On the main thread, after those there already, in this order.
 		template <class... ARGS>
 		void addRootSystems() {
-			(mMainThreadSystems.push_back(createSystem<ARGS>()), ...);
+			addRoots(nullptr, nullptr, { Named{ getSystem<ARGS>(), typeid(ARGS).name() }... });
 		}
 
-		// Tick systems run at their own rate: on a thread each by default, or -- once this is set, before they
-		// are added -- stepped from update() by the frame time, so a fixed frame step makes them deterministic.
+		// On the main thread, right before `Anchor` (one already there), in this order.
+		template <class Anchor, class... ARGS>
+		void addRootSystemsBefore() {
+			addRoots(getSystem<Anchor>(), typeid(Anchor).name(), { Named{ getSystem<ARGS>(), typeid(ARGS).name() }... });
+		}
+
+		// Tick systems run at their own rate: each on a thread of its own, or, when this says so, stepped from
+		// update() by the frame time, so a fixed frame step makes them deterministic. Settled at the first update, for
+		// every tick system whenever it was added (SystemManager.cpp).
 		void setStepTickSystems(bool stepped) { mStepTickSystems = stepped; }
 
 		template <class... ARGS>
 		void addTickSystems(float ticks = 32) {
-			(addTickSystem(createSystem<ARGS>(), ticks), ...);
+			addTicks({ Named{ getSystem<ARGS>(), typeid(ARGS).name() }... }, ticks);
 		}
+
+		// Made, with an update of their own, and neither on the main thread nor ticked: in the order they were made.
+		std::vector<System*> unscheduled() const;
 
 	private:
 		struct SteppedTickSystem {
 			System* system = nullptr;
 			float accumulated = 0.f;
 		};
+		// A system to schedule, and its type's name for what is said of it (null when it was never made).
+		struct Named {
+			System* system;
+			const char* type;
+		};
 
+		// `anchorType` null: appended; else each goes right before `anchor`, which must be on the main thread.
+		void addRoots(System* anchor, const char* anchorType, std::initializer_list<Named> systems);
+		void addTicks(std::initializer_list<Named> systems, float ticks);
 		void addTickSystem(System* system, float ticks);
 
 		std::vector<System*> mSystemsMap;
@@ -79,6 +106,9 @@ namespace ecss {
 		std::vector<System*> mMade;
 
 		std::vector<System*> mMainThreadSystems;
+		// The made ones with an update of their own, and the ticked ones: what unscheduled() tells apart.
+		std::vector<System*> mUpdating;
+		std::vector<System*> mTicked;
 
 		// Tick systems on their own threads, all woken on time by one scheduler. See SystemManager.cpp.
 		class TickScheduler;

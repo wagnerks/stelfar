@@ -18,7 +18,7 @@ namespace SFE::SystemsModule {
 	// without one, the current camera. Runs on the main thread after the camera has moved.
 	//
 	// A sound in the world is heard through Steam Audio from the direction it comes from (an HRTF, for headphones),
-	// duller the further off it is, with the wood's reverb after it: see Settings.
+	// duller the further off it is, with the reverb after it: see Settings.
 	//
 	// On the None backend, or when there is no audio device, it mixes into nothing: sounds start and report
 	// playing, but never advance, so a sound that does not loop never ends there. Steam Audio is not started there.
@@ -29,13 +29,14 @@ namespace SFE::SystemsModule {
 
 		void update(float dt) override;
 
-		// How sounds in the world are heard, to compare by ear: the game binds them to its Tweaks, 1 on and 0 off.
-		// Read every frame.
+		// How sounds in the world are heard, to compare by ear: numbers of the registry (Params, group "Audio", registered
+		// in AudioSystem.cpp), 1 on and 0 off. Read every frame.
 		struct Settings {
 			// Through the HRTF, from where each sound is. Off: as before, panned by miniaudio, and without the reverb
 			// and the air absorption, which come on the same path.
 			float hrtf = 1.f;
-			// How loud the wood's reverb is under the sounds it follows. Music, the radio, the wind and UI have none.
+			// How loud the reverb is under the sounds it follows. A voice started without it (VoiceParams::reverb off)
+			// has none.
 			float reverb = 0.2f;
 			// Far sounds duller: the air takes their highs first.
 			float airAbsorption = 1.f;
@@ -65,7 +66,7 @@ namespace SFE::SystemsModule {
 			float cutoff = 20000.f; // Hz
 			float pitch = 1.f;      // and speed: a wheel's or a motor's turning heard faster
 			bool spatial = true;
-			// Off: none of the wood's reverb on it, for music such as the radio's.
+			// Off: none of the reverb on it, for music and the UI.
 			bool reverb = true;
 		};
 		uint32_t startVoice(std::string_view path, bool loop, bool stream);
@@ -128,7 +129,7 @@ namespace SFE::SystemsModule {
 		std::unique_ptr<Spatial, SpatialDeleter> mSpatial;
 		// One idle sound of every file played decoded. miniaudio shares a file's decoded data between its sounds but
 		// frees it with the last of them, so a bird that sang, stopped and sang again decoded its song again each time:
-		// a few milliseconds on the main thread, a stall every few seconds in a wood.
+		// a few milliseconds on the main thread, a stall every few seconds among many sounds.
 		std::unordered_map<std::string, Sound> mResident;
 		std::unordered_map<ecss::EntityId, Source> mSources;
 		std::vector<OneShot> mOneShots;

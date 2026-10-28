@@ -201,11 +201,11 @@ namespace SFE::Render {
 			if (dir.y >= 0.f) {
 				return sky3({ dir.x, dir.y, dir.z });
 			}
-			// Grass and earth lit by the sun and the sky above them.
+			// The ground (the sky's groundAlbedo) lit by the sun and the sky above it.
 			const auto sun = Atmosphere::sunTransmittance(toSun) * (sunIntensity * (std::max)(toSun.y, 0.f));
 			const F3 zenith = sky3({ 0.f, 1.f, 0.f });
 			const F3 irradiance = add(F3{ sun.x, sun.y, sun.z }, mul(zenith, kPi));
-			const F3 ground = mul(mul(F3{ 0.10f, 0.12f, 0.07f }, irradiance), 1.f / kPi);
+			const F3 ground = mul(mul(F3{ sky.groundAlbedo.x, sky.groundAlbedo.y, sky.groundAlbedo.z }, irradiance), 1.f / kPi);
 			const F3 horizon = sky3({ dir.x, 0.f, dir.z });
 			const float t = std::clamp(-dir.y / 0.08f, 0.f, 1.f);
 			return add(mul(horizon, 1.f - t), mul(ground, t));

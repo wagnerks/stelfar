@@ -62,22 +62,30 @@ namespace SFE::EngineTests {
 		}
 	}
 
-	// Hair hung off a character meets all a moving body meets but the character's own capsule.
-	TEST(PhysicsLayers, HairMeetsAllButTheCapsule) {
+	// Both worlds stand their bodies by the rules of PhysicsLayers.h, the ones a world made elsewhere (a test's) can be
+	// given too: its layer pairs, its broad phase and what it looks for in it are those types.
+	TEST(PhysicsLayers, TheWorldsKeepTheseRules) {
 		for (auto* physics : worlds()) {
 			ASSERT_NE(physics, nullptr);
-			const auto& pairs = physics->layerPairFilter();
-			for (const auto other : { PhysicsSystem::kStatic, PhysicsSystem::kMoving, PhysicsSystem::kHair }) {
-				EXPECT_TRUE(pairs.ShouldCollide(PhysicsSystem::kHair, other)) << "layer " << other;
-				EXPECT_TRUE(pairs.ShouldCollide(other, PhysicsSystem::kHair)) << "layer " << other;
-			}
-			for (const auto other : { PhysicsSystem::kHeld, PhysicsSystem::kCharacter }) {
-				EXPECT_FALSE(pairs.ShouldCollide(PhysicsSystem::kHair, other)) << "layer " << other;
-				EXPECT_FALSE(pairs.ShouldCollide(other, PhysicsSystem::kHair)) << "layer " << other;
-			}
-			EXPECT_TRUE(physics->world().GetBroadPhaseLayerInterface().GetBroadPhaseLayer(PhysicsSystem::kHair) == kMovingPhase);
-			EXPECT_TRUE(physics->broadPhaseFilter().ShouldCollide(PhysicsSystem::kHair, kStaticPhase));
-			EXPECT_TRUE(physics->broadPhaseFilter().ShouldCollide(PhysicsSystem::kHair, kMovingPhase));
+			EXPECT_NE(dynamic_cast<const SystemsModule::PhysicsLayers::ObjectPairs*>(&physics->layerPairFilter()), nullptr);
+			EXPECT_NE(dynamic_cast<const SystemsModule::PhysicsLayers::ObjectVsBroadPhase*>(&physics->broadPhaseFilter()), nullptr);
+			EXPECT_NE(dynamic_cast<const SystemsModule::PhysicsLayers::BroadPhase*>(&physics->world().GetBroadPhaseLayerInterface()), nullptr);
 		}
+		EXPECT_EQ(PhysicsSystem::kStatic, SystemsModule::PhysicsLayers::kStatic);
+		EXPECT_EQ(PhysicsSystem::kMoving, SystemsModule::PhysicsLayers::kMoving);
+		EXPECT_EQ(PhysicsSystem::kHeld, SystemsModule::PhysicsLayers::kHeld);
+		EXPECT_EQ(PhysicsSystem::kCharacter, SystemsModule::PhysicsLayers::kCharacter);
+		EXPECT_TRUE(SystemsModule::PhysicsLayers::kStaticPhase == kStaticPhase);
+		EXPECT_TRUE(SystemsModule::PhysicsLayers::kMovingPhase == kMovingPhase);
+	}
+
+	// A query through the world (a ray, a shape cast) by StaticOrMoving touches what stands and what moves, and looks through
+	// what a hand holds and a character's own capsule.
+	TEST(PhysicsLayers, AQueryTouchesWhatStandsAndWhatMoves) {
+		const SystemsModule::PhysicsLayers::StaticOrMoving touched;
+		EXPECT_TRUE(touched.ShouldCollide(PhysicsSystem::kStatic));
+		EXPECT_TRUE(touched.ShouldCollide(PhysicsSystem::kMoving));
+		EXPECT_FALSE(touched.ShouldCollide(PhysicsSystem::kHeld));
+		EXPECT_FALSE(touched.ShouldCollide(PhysicsSystem::kCharacter));
 	}
 }

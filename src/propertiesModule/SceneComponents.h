@@ -9,7 +9,6 @@
 #include "componentsModule/ModelComponent.h"
 #include "componentsModule/ShelterComponent.h"
 #include "componentsModule/SkyComponent.h"
-#include "componentsModule/TerrainComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "componentsModule/WaterComponent.h"
 #include "componentsModule/WindComponent.h"
@@ -28,7 +27,6 @@ namespace SFE::PropertiesModule {
 	SCENE_COMPONENT_SERIALIZER(CascadeShadowComponent)
 	SCENE_COMPONENT_SERIALIZER(MaterialComponent)
 	SCENE_COMPONENT_SERIALIZER(SkyComponent)
-	SCENE_COMPONENT_SERIALIZER(TerrainComponent)
 	SCENE_COMPONENT_SERIALIZER(WaterComponent)
 	SCENE_COMPONENT_SERIALIZER(WindComponent)
 	SCENE_COMPONENT_SERIALIZER(ShelterComponent)

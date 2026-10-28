@@ -12,6 +12,7 @@
 
 #include "Clocks.h"
 #include "Core.h"
+#include "EngineConfig.h"
 #include "InputHandler.h"
 #include "KeyNames.h"
 #include "Params.h"
@@ -38,6 +39,7 @@
 #include "rhi/RhiFactory.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/FrameCapture.h"
+#include "renderModule/DebugView.h"
 #include "debugModule/LongFrameSampler.h"
 #include "debugModule/Profiler.h"
 
@@ -47,9 +49,26 @@ namespace SFE {
 	using Render::GraphicsBackend;
 
 	namespace {
-		// The lighting's debug view as a number of the registry (Params), which --debug-term and the debugTerm command set.
-		constexpr const char* kDebugViewGroup = "Render";
-		constexpr const char* kDebugViewName = "debug view";
+		// The rest of a frame of 1 / fps seconds begun at frameStart (Engine::clockSeconds()) waited out; no wait without a
+		// limit.
+		void waitForFrame(int fps, double frameStart) {
+			if (fps <= 0) {
+				return;
+			}
+
+			const double target = 1.0 / static_cast<double>(fps);
+			const double start = frameStart;
+			for (;;) {
+				const double remain = target - (Engine::clockSeconds() - start);
+				if (remain <= 0.0) {
+					break;
+				}
+				// Windows sleep_for(<2ms) often overshoots to 1–15ms and tanks FPS.
+				if (remain > 0.002) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			}
+		}
 	}
 
 	// Seconds since the first call. Not glfwGetTime: the None backend never initialises GLFW.
@@ -74,9 +93,41 @@ namespace SFE {
 		}
 	}
 
+	void Engine::init(const EngineConfig& config) {
+		if (mRHI) {
+			LogsModule::Logger::LOG_ERROR("Engine::init: once only");
+			return;
+		}
+		*mConfig = config;
+		Params::setFile(config.numbersFile);
+		Render::setRhiLogSink([](const Render::RhiLogLevel level, const char* message) {
+			switch (level) {
+			case Render::RhiLogLevel::Info: LogsModule::Logger::LOG_INFO("%s", message); break;
+			case Render::RhiLogLevel::Warning: LogsModule::Logger::LOG_WARNING("%s", message); break;
+			case Render::RhiLogLevel::Error: LogsModule::Logger::LOG_ERROR("%s", message); break;
+			case Render::RhiLogLevel::Fatal: LogsModule::Logger::LOG_FATAL(false, "%s", message); break;
+			}
+		});
+		mRHI = Render::createRhi(activeGraphicsBackend()).release();
+		mRHI->setHost(&mRhiHost);
+		LogsModule::Logger::LOG_INFO("Engine backend: %s", graphicsBackendName(activeGraphicsBackend()));
+	}
+
+	const EngineConfig& Engine::config() const {
+		return *mConfig;
+	}
+
+	bool Engine::capturingFrame() const {
+		return mConfig->capture.enabled;
+	}
+
 	void Engine::initThread() {
 		if (!mWindow) {
 			SFE::LogsModule::Logger::LOG_FATAL(false, "Try to initialize thread without a window, forgot to call createWindow?");
+			return;
+		}
+		if (!mRHI) {
+			SFE::LogsModule::Logger::LOG_FATAL(false, "Engine::init(config) before initThread");
 			return;
 		}
 
@@ -86,12 +137,13 @@ namespace SFE {
 		if (const char* samplesPath = std::getenv("LONG_FRAME_SAMPLES")) {
 			Debug::LongFrameSampler::start(samplesPath);
 		}
-		// The numbers the engine and the application are tuned by, as tweaks.json has them, before any system or pass is
-		// made: what reads a number once, as it is made, gets the file's.
-		Params::bind(kDebugViewGroup, kDebugViewName, mLightingDebugTerm, { .help = "What the lighting draws instead of the "
-			"lit picture (deferred_shading.fs's debugTerm): 0 the picture, 1 shadow, 2 ambient, 3 direct light, 4 albedo, "
-			"5 normals, 6 AO, 7 irradiance, 8 reflection, 9 BRDF, 10-14 the shadow's cascades, 15 the material's AO.",
-			.min = 0.f, .max = 15.f, .transient = true });
+		// A capture runs the render tasks on the thread that asks for them, so a frame's work is done in the same order
+		// on every run.
+		ThreadPool::instance()->setRenderTasksInline(mConfig->capture.enabled);
+		// The numbers the engine and the application are tuned by, as the application's numbers file has them
+		// (EngineConfig::numbersFile; none named, none read), before any system or pass is made: what reads a number once,
+		// as it is made, gets the file's. The debug view first, so --debug-term's value is taken now.
+		Render::debugView();
 		Params::load();
 		if (activeGraphicsBackend() == GraphicsBackend::OpenGL) {
 			glfwMakeContextCurrent(mWindow->getWindow());
@@ -100,30 +152,22 @@ namespace SFE {
 			LoadTrace::Step step("graphics device");
 			mRHI->init();
 		}
-		{
-			LoadTrace::Step step("systems");
-			mCore.init();
-		}
-
-		onKeyEvent = [this](CoreModule::InputKey key, CoreModule::InputEventType type) {
-			if (type != CoreModule::InputEventType::PRESS) {
-				return;
-			}
-
-			if (key == CoreModule::InputKey::KEY_ESCAPE && mPresentToScreen && mEscapeCloses) {
-				mWindow->close();
-			}
-		};
+		mCore.init();
 
 		SFE::LogsModule::Logger::LOG_INFO("engine thread initialized");
 	}
 
-	void Engine::initRender() {
+	void Engine::start() {
+		// Settled at the first update, for every tick system whenever it was added: stepped from the frame for a fixed step
+		// or a capture, each on a thread of its own otherwise.
+		ECSHandler::systemManager().setStepTickSystems(mConfig->capture.enabled || mConfig->fixedDeltaTime > 0.f);
+		// After every system: the window's input goes to the observers they are.
+		CoreModule::InputHandler::init(mWindow);
 		addRuntimeCommands();
 		if (activeGraphicsBackend() == GraphicsBackend::OpenGL) {
 			glfwSwapInterval(0);
 		}
-		SFE::LogsModule::Logger::LOG_INFO("engine render initialized (%s backend)",
+		SFE::LogsModule::Logger::LOG_INFO("engine started (%s backend)",
 			graphicsBackendName(activeGraphicsBackend()));
 	}
 
@@ -252,8 +296,7 @@ namespace SFE {
 		bridge->addCommand("reloadScene",
 			"The scene file read again, and what changed in it taken up: an entity moved, turned or scaled, a model "
 			"swapped, an entity new to the file made and one gone from it taken out, colliders with them. What a system "
-			"built once from the scene (the terrain, the litter, the vegetation...) is left as it was, and named: it waits "
-			"for a restart.",
+			"built once from the scene is left as it was, and named: it waits for a restart.",
 			[](const Json::Value&) {
 				return PropertiesModule::PropertiesSystem::reloadScene();
 			});
@@ -383,13 +426,18 @@ namespace SFE {
 		bridge->addCommand("tweak",
 			"A number of the Tweaks panel: {\"group\": ..., \"name\": ..., \"value\": a number or true/false, to set it}; then what "
 			"it is. A value set so holds for this run until a reload and is never saved. {\"reload\": true} reads every number "
-			"again from tweaks.json.",
+			"again from " + (Params::file().empty() ? std::string("the numbers file, once one is named (Params::setFile)")
+				: Params::file()) + ".",
 			[](const Json::Value& args) -> std::string {
 				if (!args.isObject()) {
 					return "give {group, name[, value]} or {reload}";
 				}
 				if (args.get("reload", false).asBool()) {
-					return Params::load() ? "tweaks read again from tweaks.json" : "no tweaks.json to read";
+					const auto named = Params::file();
+					if (named.empty()) {
+						return "no numbers file named";
+					}
+					return Params::load() ? "tweaks read again from " + named : "no " + named + " to read";
 				}
 				const auto group = args.get("group", "").asString();
 				const auto name = args.get("name", "").asString();
@@ -418,11 +466,11 @@ namespace SFE {
 		bridge->addCommand("debugTerm",
 			"What the lighting draws, as --debug-term: {\"term\": n} (0 the picture, 1 shadow, 4 albedo, 5 normals, 6 AO, 15 "
 			"material AO); then which.",
-			[this](const Json::Value& args) -> std::string {
+			[](const Json::Value& args) -> std::string {
 				if (args.isObject() && args.isMember("term")) {
-					Params::setSession(kDebugViewGroup, kDebugViewName, args["term"].asInt(), Params::Session::UntilReload);
+					Params::setSession(Render::kDebugViewGroup, Render::kDebugViewName, args["term"].asInt(), Params::Session::UntilReload);
 				}
-				return "debug term " + std::to_string(lightingDebugTerm());
+				return "debug term " + std::to_string(Render::debugView());
 			});
 		// Keys held and let go by a command, as from the keyboard, to whatever listens for them.
 		bridge->addCommand("press",
@@ -487,9 +535,9 @@ namespace SFE {
 
 		//getWindow()->swapBuffers();
 
-		if (mFixedDeltaTime <= 0.f) {
+		if (mConfig->fixedDeltaTime <= 0.f) {
 			SFE_PROFILE_ZONE(Debug::Profiler::kIdle);
-			fpsSync(maxFPS);
+			waitForFrame(mConfig->maxFps, mLastFrame);
 		}
 	}
 
@@ -505,10 +553,12 @@ namespace SFE {
 		// A capture steps at a fixed rate: wall-clock deltas make everything time-dependent
 		// (TAA history, volumetrics) land differently on a faster or slower run, which would
 		// show up as a backend difference when it is only a timing difference.
-		if (mFixedDeltaTime > 0.f || mCapturingFrame) {
+		const float fixedDeltaTime = mConfig->fixedDeltaTime;
+		const bool capturing = mConfig->capture.enabled;
+		if (fixedDeltaTime > 0.f || capturing) {
 			// Assigned, not derived from an accumulated clock: a float clock loses bits as it grows, and the
 			// difference of two of its values would stop being exactly the step.
-			mDeltaTime = mFixedDeltaTime > 0.f ? mFixedDeltaTime : 1.f / 60.f;
+			mDeltaTime = fixedDeltaTime > 0.f ? fixedDeltaTime : 1.f / 60.f;
 			mLastFrame += mDeltaTime;
 		}
 		else {
@@ -541,8 +591,8 @@ namespace SFE {
 
 		// A capture holds the pose still, unless it runs at a fixed step: then a clip plays the same way on every run. A
 		// hold (Clocks::hold) stands it still at its own time whatever the step.
-		const bool stepped = mFixedDeltaTime > 0.f || mCapturingFrame;
-		mAnimationClock = Clocks::beginFrame(stepped ? mLastFrame : -1.0, !mCapturingFrame || mFixedDeltaTime > 0.f ? mDeltaTime : 0.f);
+		const bool stepped = fixedDeltaTime > 0.f || capturing;
+		mAnimationClock = Clocks::beginFrame(stepped ? mLastFrame : -1.0, !capturing || fixedDeltaTime > 0.f ? mDeltaTime : 0.f);
 
 		mFramesCounter++;
 		mFramesTimer += mDeltaTime;
@@ -583,20 +633,8 @@ namespace SFE {
 		return mMainThreadID == std::this_thread::get_id();
 	}
 
-	Engine::Engine()
-	{
-		Render::setRhiLogSink([](const Render::RhiLogLevel level, const char* message) {
-			switch (level) {
-			case Render::RhiLogLevel::Info: LogsModule::Logger::LOG_INFO("%s", message); break;
-			case Render::RhiLogLevel::Warning: LogsModule::Logger::LOG_WARNING("%s", message); break;
-			case Render::RhiLogLevel::Error: LogsModule::Logger::LOG_ERROR("%s", message); break;
-			case Render::RhiLogLevel::Fatal: LogsModule::Logger::LOG_FATAL(false, "%s", message); break;
-			}
-		});
-		mRHI = Render::createRhi(activeGraphicsBackend()).release();
-		mRHI->setHost(&mRhiHost);
-		LogsModule::Logger::LOG_INFO("Engine backend: %s", graphicsBackendName(activeGraphicsBackend()));
-	}
+	// A default run until init(config) says what this one is; the RHI's object is made there.
+	Engine::Engine() : mConfig(std::make_unique<EngineConfig>()) {}
 
 	Engine::~Engine() {
 		Debug::LongFrameSampler::stop();
@@ -619,27 +657,6 @@ namespace SFE {
 			mRHI = nullptr;
 		}
 		destroyWindow();
-		// The debug view's storage goes with the engine; the registry keeps its value from here.
-		Params::unbind(&mLightingDebugTerm, &mLightingDebugTerm + 1);
-	}
-
-	void Engine::fpsSync(int fps) const {
-		if (fps <= 0) {
-			return;
-		}
-
-		const double target = 1.0 / static_cast<double>(fps);
-		const double start = static_cast<double>(mLastFrame);
-		for (;;) {
-			const double remain = target - (clockSeconds() - start);
-			if (remain <= 0.0) {
-				break;
-			}
-			// Windows sleep_for(<2ms) often overshoots to 1–15ms and tanks FPS.
-			if (remain > 0.002) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			}
-		}
 	}
 
 	Render::RhiSurface Engine::RhiHostAdapter::surface() const {

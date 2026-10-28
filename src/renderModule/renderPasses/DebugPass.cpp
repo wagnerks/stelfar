@@ -16,7 +16,6 @@
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "systemsModule/SystemManager.h"
-#include "systemsModule/SystemsPriority.h"
 
 #include <algorithm>
 

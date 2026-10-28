@@ -11,6 +11,7 @@
 #include "core/InputHandler.h"
 #include "core/KeyNames.h"
 #include "core/Params.h"
+#include "renderModule/DebugView.h"
 #include "runtimeBridge/RuntimeBridge.h"
 
 // The engine's own commands as a script sends them, through the bridge's runCommand: every answer carries the command's
@@ -35,11 +36,13 @@ namespace SFE::EngineTests {
 			return args;
 		}
 
-		// A root of its own for one test, outside every real one, holding this tweaks.json if any, put back as it was when
+		// A root of its own for one test, outside every real one, holding these numbers if any in a file `name`, which it
+		// names the application's numbers file (Params::setFile); the roots and the file named put back as they were when
 		// the test ends.
 		class TempRoot {
 		public:
-			explicit TempRoot(const std::string& tweaks = {}) : mWasRoot(FileSystem::root()), mWasEngine(FileSystem::engineRoot()),
+			explicit TempRoot(const std::string& numbers = {}, std::string name = "numbers.json") : mWasRoot(FileSystem::root()),
+				mWasEngine(FileSystem::engineRoot()), mWasFile(Params::file()),
 				mDir(std::filesystem::temp_directory_path()
 					/ ("sfe_bridge_commands_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
 				ThreadPool::instance()->waitIdle();
@@ -47,13 +50,15 @@ namespace SFE::EngineTests {
 				std::filesystem::create_directories(mDir / "engine");
 				FileSystem::setRoot((mDir / "content").string());
 				FileSystem::setEngineRoot((mDir / "engine").string());
-				if (!tweaks.empty()) {
-					std::ofstream(mDir / "content" / "tweaks.json", std::ios::binary | std::ios::trunc) << tweaks;
+				Params::setFile(name);
+				if (!numbers.empty()) {
+					std::ofstream(mDir / "content" / name, std::ios::binary | std::ios::trunc) << numbers;
 				}
 			}
 
 			~TempRoot() {
 				ThreadPool::instance()->waitIdle();
+				Params::setFile(mWasFile);
 				FileSystem::setRoot(mWasRoot.string());
 				FileSystem::setEngineRoot(mWasEngine.string());
 				std::error_code ec;
@@ -66,6 +71,7 @@ namespace SFE::EngineTests {
 		private:
 			std::filesystem::path mWasRoot;
 			std::filesystem::path mWasEngine;
+			std::string mWasFile;
 			std::filesystem::path mDir;
 		};
 
@@ -118,7 +124,9 @@ namespace SFE::EngineTests {
 		EXPECT_EQ(run("tweak"), "tweak: give {group, name[, value]} or {reload}");
 	}
 
-	// A reload without a file says so and changes nothing; with one, it reads it and takes back what the bridge set.
+	// A reload without a file says so and changes nothing, and so does one with no file named, whatever the root holds;
+	// with one, it reads it and takes back what the bridge set. The file is named in the answer: the game's says
+	// "tweaks.json" there.
 	TEST(BridgeCommands, TweakReloadTakesBackWhatTheBridgeSet) {
 		Json::Value reload;
 		reload["reload"] = true;
@@ -127,12 +135,18 @@ namespace SFE::EngineTests {
 		{
 			// Under a root of no file, whatever root the run has.
 			const TempRoot root;
-			EXPECT_EQ(run("tweak", reload), "tweak: no tweaks.json to read");
+			EXPECT_EQ(run("tweak", reload), "tweak: no numbers.json to read");
 		}
 		EXPECT_EQ(number, 2.f) << "a reload with no file to read changed a number";
 		{
 			const TempRoot root(R"({"Test Bridge": {"reloaded": 3}})");
-			EXPECT_EQ(run("tweak", reload), "tweak: tweaks read again from tweaks.json");
+			Params::setFile("");
+			EXPECT_EQ(run("tweak", reload), "tweak: no numbers file named");
+		}
+		EXPECT_EQ(number, 2.f) << "a reload with no file named changed a number";
+		{
+			const TempRoot root(R"({"Test Bridge": {"reloaded": 3}})");
+			EXPECT_EQ(run("tweak", reload), "tweak: tweaks read again from numbers.json");
 		}
 		EXPECT_EQ(number, 3.f);
 		Params::Seen seen{};
@@ -146,7 +160,7 @@ namespace SFE::EngineTests {
 		Json::Value args;
 		args["term"] = 4;
 		EXPECT_EQ(run("debugTerm", args), "debugTerm: debug term 4");
-		EXPECT_EQ(Engine::instance()->lightingDebugTerm(), 4);
+		EXPECT_EQ(Render::debugView(), 4);
 		Params::Seen seen{};
 		ASSERT_TRUE(Params::see("Render", "debug view", seen));
 		EXPECT_EQ(seen.type, Params::Type::Int);
@@ -154,7 +168,7 @@ namespace SFE::EngineTests {
 		EXPECT_EQ(run("debugTerm"), "debugTerm: debug term 4");
 		args["term"] = 0;
 		EXPECT_EQ(run("debugTerm", args), "debugTerm: debug term 0");
-		EXPECT_EQ(Engine::instance()->lightingDebugTerm(), 0);
+		EXPECT_EQ(Render::debugView(), 0);
 	}
 
 	// The names press knows: today's, every letter and digit, and the keys a script may want besides; a mouse button or a

@@ -8,12 +8,13 @@
 #include <vector>
 
 namespace SFE::BinaryCache {
-	// What was slow to build and is the same every run for the same inputs, kept in cache/ under the content root.
+	// What was slow to build and is the same every run for the same inputs, kept in cache/ under the application's root
+	// (FileSystem::root).
 	// A file is named by a hash of everything it was built from, so changed inputs just miss; a change to the code that
 	// builds it needs that code's own version bumped into the hash.
 
 	uint64_t hash(std::string_view text, uint64_t seed = 14695981039346656037ull);
-	// cache/<name>_<key hex>.bin, resolved.
+	// cache/<name>_<key hex>.bin under FileSystem::root(), never looked for behind it.
 	std::string path(std::string_view name, uint64_t key);
 
 	class Writer {

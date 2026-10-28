@@ -22,8 +22,16 @@ namespace SFE {
 		// The glTF occlusionTexture: its red channel darkens only the ambient and indirect light, never the sun or the lamps.
 		OCCLUSION,
 		// The glTF emissiveTexture: what the surface gives off by itself, times Material::emissive.
-		// Kept last: the material binding loops run DIFFUSE..EMISSIVE.
-		EMISSIVE
+		// Kept after the engine's own: the material binding layout runs DIFFUSE..USER3 (Render::materialTextureLayout).
+		EMISSIVE,
+		// Four textures for an application's own shaders: the engine binds them in a material's set (set 1, 13-16, clear
+		// when not given) and never reads them; what each holds is the shader's that draws the material. The G-buffer's
+		// only: OpenGL drops the set, so a binding is a texture unit, and the lighting and glass passes use 13, 14 and 16-23
+		// in their own set 0.
+		USER0,
+		USER1,
+		USER2,
+		USER3
 	};
 
 	struct MaterialTexture {

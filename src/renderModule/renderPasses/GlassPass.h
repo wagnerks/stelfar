@@ -31,9 +31,8 @@ namespace SFE::Render::RenderPasses {
 			float colorY = 1.f;
 			float colorZ = 1.f;
 			float _pad1 = 0.f;
-			// Spare, so the block keeps the size sfe_glass.glsl gives it.
-			float _pad4[4]{};
 		};
+		static_assert(sizeof(Params) == 64, "sfe_glass.glsl's PushConstants, member for member");
 
 		void ensureTargets(SystemsModule::RenderData& renderDataHandle);
 		// The pipeline drawing with `vertexShader` and `fragmentShader`, made the first time it is asked for.

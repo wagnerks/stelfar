@@ -7,7 +7,6 @@
 #include "renderModule/Utils.h"
 #include "debugModule/Benchmark.h"
 #include "systemsModule/systems/RenderSystem.h"
-#include "systemsModule/SystemsPriority.h"
 
 using namespace SFE::Render::RenderPasses;
 

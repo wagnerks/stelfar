@@ -2,7 +2,6 @@
 #include "containersModule/Singleton.h"
 #include "ecss/Registry.h"
 #include "systemsModule/SystemManager.h"
-#include "systemsModule/systems/RenderSystem.h"
 
 class ECSHandler final : public SFE::Singleton<ECSHandler> {
 public:
@@ -43,11 +42,9 @@ public:
 		instance()->mRegistry.destroyEntities(entities);
 	}
 
-	void initSystems();
-
 private:
-	// Registry must outlive systems: ~SystemManager joins tick threads and
-	// ChunksSystem::saveLoaded() still walks entities.
+	// The registry outlives the systems: ~SystemManager joins the tick threads, and a system's destructor may still
+	// walk entities.
 	ecss::Registry<> mRegistry;
 	ecss::SystemManager mSystemManager;
 };

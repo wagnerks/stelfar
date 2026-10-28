@@ -57,3 +57,48 @@ Which means really big open world, atmospheres, stars, lights, may be some proce
 - [ ] grass  
 
 I will add new goals as soon as find somenew
+
+# Putting the engine together
+
+The engine is a library: it makes no world, no systems and no render passes of its own accord. Whatever runs it -- a
+game's `main.cpp`, an editor that runs the engine in its own process -- puts it together on the main thread, in this
+order:
+
+1. The roots, before the engine exists: `FileSystem::setRoot` (the application's content, searched first and written
+   under) and `FileSystem::setEngineRoot` (`engine/bin`, behind it), and the graphics backend
+   (`Render::configureGraphicsBackend`). The application's scene components are registered
+   (`PropertiesModule::ComponentRegistry`, `propertiesModule/ComponentSerializer.h`) before any scene is read, and its
+   frame data is declared (`Render::UserFrameSet::instance().declare`, `renderModule/UserFrameSet.h`) before the
+   renderer is made.
+2. `Engine::instance()->init(config)` with an `EngineConfig` (`core/EngineConfig.h`): what the run is, the same to its
+   end -- a fixed frame step, the frame cap, a frame capture and where its passes are dumped, the application's numbers
+   file (`SFE::Params`; none named, every number stays as the code has it). Once, before `createWindow`: it makes the
+   RHI's object for the backend chosen.
+3. `createWindow(...)`, then `initThread()`: the graphics device, the numbers read, the registry's listeners.
+4. The systems, from the bricks of `core/DefaultSystems.h` (`SFE::Modules`), those it wants, in this order:
+   `addSceneCore()`, `addCamera()`, `addFreeCamera()` (a free-flying camera, if it wants one), `loadScene(path)`,
+   `addRenderer(passes)`, `addPhysics()`, `addAudio()`, `addNetwork(settings)`. The renderer draws the list it is given:
+   `Render::defaultPasses()` with the application's own passes put in by name (`Render::PassList`,
+   `renderModule/PassList.h`; a name not in the list is an error). Then the application's own systems
+   (`ECSHandler::systemManager().createSystem<T>(...)`) and the frame's order: `Modules::schedule()` roots the engine's
+   systems that were made, and the application puts its own before them
+   (`addRootSystemsBefore<PhysicsDrawSystem, ...>()`, or `addTickSystems<...>(rate)`). Scheduling never makes a system;
+   a system made with an update of its own but in no schedule is named in `load_times.log`. Then what else it brings:
+   bridge commands (`RuntimeBridge::addCommand`), windows in the debug UI (`debugModule/DebugPanels.h`), upright
+   capsules for both physics worlds (`PhysicsSystem::addStaticCapsules`).
+5. `Engine::start()`: how the tick systems run (on threads, or stepped from the frame under a fixed step or a capture),
+   the input, the engine's own bridge commands after the application's.
+6. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`.
+
+Embedded in an editor, the editor's flags are the bridge's: `RuntimeBridge::setEmbeddedInEditor` and
+`setPublishEditorDisplay` (`runtimeBridge/RuntimeBridge.h`); whether the window shows the picture is
+`Engine::setPresentToScreen`.
+
+Gone from `Engine.h`, with no stand-in left there: `setScenePath` (now `Modules::loadScene`), `setFixedDeltaTime`,
+`setCapturingFrame`, `setCaptureFrame`, `setPassDumpDir` and the frame cap (now `EngineConfig`), `setNetwork` (now
+`addNetwork`), `setEmbeddedInEditor`, `isEmbeddedInEditor`, `setPublishEditorDisplay` (now `RuntimeBridge`'s),
+`setLightingDebugTerm` and `setTemporalAccumulation` (numbers of `SFE::Params`: `Render::debugView()`,
+`GraphicsSettings::taa`), `initRender` (now `start`), `setEscapeCloses` and the window closing on Escape (the
+application's to do), `setProceduralSpheres`, `setProceduralRooms` and the demo scenes; besides,
+`ECSHandler::initSystems` (now the modules and the application's own calls) and `GameModule` (now `PassList`,
+`DebugPanels` and the application's own `createSystem` calls).

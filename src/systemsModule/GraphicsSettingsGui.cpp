@@ -5,6 +5,7 @@
 #include "core/Engine.h"
 #include "core/Params.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/DebugView.h"
 #include "systemsModule/systems/AudioSystem.h"
 #include "windowsModule/Window.h"
 
@@ -98,7 +99,8 @@ namespace SFE::SystemsModule {
 			displaySettings(*window);
 		}
 
-		// Every setting the renderer registered (Params) back to the code's value; one held for the session keeps it.
+		// Every setting the renderer registered (Params) back to where it stands: the application's numbers file's value,
+		// the code's where the file has none; one held for the session keeps it.
 		if (ImGui::Button("Reset defaults")) {
 			Params::reset(&gfx, &gfx + 1);
 			changed = true;
@@ -115,9 +117,9 @@ namespace SFE::SystemsModule {
 			// One term of the lighting instead of the lit image: see deferred_shading.fs's debugTerm.
 			static constexpr const char* kViews[] = { "off", "shadow", "ambient", "direct light", "albedo", "normals", "SSAO", "irradiance",
 				"reflection", "BRDF", "cascade", "cascade coverage" };
-			int view = SFE::Engine::instance()->lightingDebugTerm();
+			int view = Render::debugView();
 			if (ImGui::Combo("view", &view, kViews, IM_ARRAYSIZE(kViews))) {
-				SFE::Engine::instance()->setLightingDebugTerm(view);
+				Render::debugView() = view;
 			}
 		}
 
@@ -239,15 +241,10 @@ namespace SFE::SystemsModule {
 		root["sunIntensity"] = gfx.sunIntensity;
 		root["iblStrength"] = gfx.iblStrength;
 		root["shadowAmbient"] = gfx.shadowAmbient;
-		root["grassDensity"] = gfx.grassDensity;
-		root["grassDistance"] = gfx.grassDistance;
-		root["lodDetail"] = gfx.lodDetail;
 		root["lodPixels"] = gfx.lodPixels;
 		root["stylise"] = gfx.stylise;
 		root["timeGrade"] = gfx.timeGrade;
 		root["sunRays"] = gfx.sunRays;
-		root["airLife"] = gfx.airLife;
-		root["airLifeAmount"] = gfx.airLifeAmount;
 		Json::StreamWriterBuilder builder;
 		builder["indentation"] = "";
 		return Json::writeString(builder, root);
@@ -310,15 +307,10 @@ namespace SFE::SystemsModule {
 		f("sunIntensity", gfx.sunIntensity);
 		f("iblStrength", gfx.iblStrength);
 		f("shadowAmbient", gfx.shadowAmbient);
-		f("grassDensity", gfx.grassDensity);
-		f("grassDistance", gfx.grassDistance);
-		f("lodDetail", gfx.lodDetail);
 		f("lodPixels", gfx.lodPixels);
 		f("stylise", gfx.stylise);
 		f("timeGrade", gfx.timeGrade);
 		f("sunRays", gfx.sunRays);
-		b("airLife", gfx.airLife);
-		f("airLifeAmount", gfx.airLifeAmount);
 	}
 
 	bool graphicsFromJson(const std::string& json, GraphicsSettings& gfx) {

@@ -57,10 +57,4 @@ namespace SFE::Render {
 		/// @brief Draw into one cascade, inside its render pass.
 		virtual void drawShadowCasters(const ShadowCascade& cascade) = 0;
 	};
-
-	struct RenderPassEntry {
-		const char* name = "";
-		bool enabled = true;
-		RenderPass* (*create)() = nullptr;
-	};
 }

@@ -9,12 +9,12 @@
 #include "mathModule/Forward.h"
 
 namespace SFE::SystemsModule::TerrainCollider {
-	// The terrain's collider (PhysicsSystem): its heights (AssetsModule::terrainHeights, n x n samples `step` apart
+	// A heightfield's collider (PhysicsSystem): its heights (a HeightfieldComponent's heights, n x n samples `step` apart
 	// from `corner`, the world place of the first, row by row along z, over corner.y) as a Jolt height field on the
 	// very triangles the terrain mesh is drawn with. The mesh splits each cell along the diagonal from its +x corner to
-	// its +z one (terrainSurfaceHeight), Jolt the other way, so the field is laid turned a quarter round about y. Where
-	// something needs finer ground than the terrain's cells, a square of them is cut out of it and a finer field of its
-	// own laid there (fine).
+	// its +z one (AssetsModule::heightfieldHeight), Jolt the other way, so the field is laid turned a quarter round
+	// about y. Where something needs finer ground than the terrain's cells, a square of them is cut out of it and a finer
+	// field of its own laid there (fine).
 	JPH::ShapeRefC shape(const std::vector<float>& heights, int n, float step, const Math::Vec3& corner);
 
 	// Where the terrain of a shape made by `shape` lies.

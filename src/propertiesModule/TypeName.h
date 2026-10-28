@@ -2,7 +2,6 @@
 
 #include <string>
 #include "assert.h"
-#include "componentsModule/ActionComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "componentsModule/ModelComponent.h"
 #include "componentsModule/CascadeShadowComponent.h"
@@ -11,7 +10,6 @@
 #include "componentsModule/PhysicsComponent.h"
 #include "componentsModule/MaterialComponent.h"
 #include "componentsModule/SkyComponent.h"
-#include "componentsModule/TerrainComponent.h"
 #include "componentsModule/WaterComponent.h"
 #include "componentsModule/AudioSourceComponent.h"
 #include "componentsModule/WindComponent.h"
@@ -41,13 +39,11 @@ namespace SFE::PropertiesModule {
 	TYPE_NAME(CascadeShadowComponent);
 	TYPE_NAME(CameraComponent);
 	TYPE_NAME(AnimationComponent);
-	TYPE_NAME(ActionComponent);
 	TYPE_NAME(LightSourceComponent);
 	TYPE_NAME(AABBComponent);
 	TYPE_NAME(PhysicsComponent);
 	TYPE_NAME(MaterialComponent);
 	TYPE_NAME(SkyComponent);
-	TYPE_NAME(TerrainComponent);
 	TYPE_NAME(WaterComponent);
 	TYPE_NAME(WindComponent);
 	TYPE_NAME(ShelterComponent);

@@ -1,8 +1,13 @@
 #include <cmath>
+#include <optional>
+#include <vector>
 
-#include <gtest/gtest.h>
+#include <json/value.h>
 
+#include "EngineTestFixture.h"
 #include "componentsModule/SkyComponent.h"
+#include "propertiesModule/SceneComponents.h"
+#include "renderModule/IblBaker.h"
 
 namespace SFE::EngineTests {
 	namespace {
@@ -13,8 +18,25 @@ namespace SFE::EngineTests {
 
 		ComponentsModule::SkyComponent sunAt(const float hours) {
 			ComponentsModule::SkyComponent sky;
+			sky.latitude = 54.6f;
+			sky.declination = 23.4f;
+			sky.noon = 12.5f;
 			sky.setTimeOfDay(hours);
 			return sky;
+		}
+
+		// How bright, all channels together, the irradiance cube of a bake is in the middle of `face` (+x -x +y -y +z -z):
+		// its four texels round the face's centre.
+		float irradianceAtTheMiddle(const Render::IblTexels& texels, const int face) {
+			const auto side = static_cast<int>(std::lround(std::sqrt(static_cast<double>(texels.irradiance.size()) / 24.0)));
+			float sum = 0.f;
+			for (const int y : { side / 2 - 1, side / 2 }) {
+				for (const int x : { side / 2 - 1, side / 2 }) {
+					const size_t at = ((static_cast<size_t>(face) * side + y) * side + x) * 4;
+					sum += texels.irradiance[at] + texels.irradiance[at + 1] + texels.irradiance[at + 2];
+				}
+			}
+			return sum;
 		}
 
 		struct SunAt {
@@ -73,5 +95,87 @@ namespace SFE::EngineTests {
 		for (const auto& at : kDay) {
 			EXPECT_NEAR(std::remainder(sunAt(at.hours).timeOfDay() - at.hours, 24.f), 0.f, 1e-3f) << at.hours << " o'clock";
 		}
+	}
+
+	// Without a path of the scene's, the equinox on the equator: up due east at 6, overhead at 12, down due west at 18.
+	TEST(SunPath, ByDefaultTheEquinoxOnTheEquator) {
+		const auto at = [](const float hours) {
+			ComponentsModule::SkyComponent sky;
+			sky.setTimeOfDay(hours);
+			return sky;
+		};
+		EXPECT_NEAR(at(12.f).sunElevation, 90.f, kDegrees);
+		EXPECT_NEAR(at(6.f).sunElevation, 0.f, kDegrees);
+		EXPECT_NEAR(at(6.f).sunAzimuth, 90.f, kDegrees);
+		EXPECT_NEAR(at(18.f).sunElevation, 0.f, kDegrees);
+		EXPECT_NEAR(at(18.f).sunAzimuth, 270.f, kDegrees);
+		EXPECT_NEAR(at(9.f).timeOfDay(), 9.f, 1e-3f);
+		const ComponentsModule::SkyComponent sky;
+		EXPECT_EQ(sky.groundAlbedo.x, 0.2f);
+		EXPECT_EQ(sky.groundAlbedo.y, 0.2f);
+		EXPECT_EQ(sky.groundAlbedo.z, 0.2f);
+	}
+
+	// A scene carries the sun's path and the ground's colour under the horizon, read as the very floats its decimals
+	// are and written back under the same names; a scene without them leaves the defaults.
+	TEST(SunPath, ASceneCarriesItsPath) {
+		using Serializer = PropertiesModule::ComponentSerializer<ComponentsModule::SkyComponent>;
+		auto& registry = ECSHandler::registry();
+		const auto entity = registry.takeEntity();
+		const Finally takeOut([&] {
+			ECSHandler::destroyEntity(entity);
+			step();
+		});
+		Json::Value data;
+		data["latitude"] = 54.6;
+		data["declination"] = 23.4;
+		data["noon"] = 12.5;
+		for (const double v : { 0.1, 0.12, 0.07 }) {
+			data["ground_albedo"].append(v);
+		}
+		Serializer::load(entity, data);
+		{
+			const auto sky = registry.pinComponent<const ComponentsModule::SkyComponent>(entity);
+			ASSERT_TRUE(sky);
+			EXPECT_EQ(sky->latitude, 54.6f);
+			EXPECT_EQ(sky->declination, 23.4f);
+			EXPECT_EQ(sky->noon, 12.5f);
+			EXPECT_EQ(sky->groundAlbedo.x, 0.1f);
+			EXPECT_EQ(sky->groundAlbedo.y, 0.12f);
+			EXPECT_EQ(sky->groundAlbedo.z, 0.07f);
+			Json::Value saved;
+			Serializer::save(*sky, saved);
+			EXPECT_EQ(saved["latitude"].asFloat(), 54.6f);
+			EXPECT_EQ(saved["declination"].asFloat(), 23.4f);
+			EXPECT_EQ(saved["noon"].asFloat(), 12.5f);
+			ASSERT_TRUE(saved["ground_albedo"].isArray() && saved["ground_albedo"].size() == 3u);
+			EXPECT_EQ(saved["ground_albedo"][1].asFloat(), 0.12f);
+		}
+		Serializer::load(entity, Json::Value(Json::objectValue));
+		const auto sky = registry.pinComponent<const ComponentsModule::SkyComponent>(entity);
+		ASSERT_TRUE(sky);
+		const ComponentsModule::SkyComponent neutral;
+		EXPECT_EQ(sky->latitude, neutral.latitude);
+		EXPECT_EQ(sky->declination, neutral.declination);
+		EXPECT_EQ(sky->noon, neutral.noon);
+		EXPECT_EQ(sky->groundAlbedo.x, neutral.groundAlbedo.x);
+		EXPECT_EQ(sky->groundAlbedo.y, neutral.groundAlbedo.y);
+		EXPECT_EQ(sky->groundAlbedo.z, neutral.groundAlbedo.z);
+	}
+
+	// The sky's light from below the horizon is the ground's colour lit by the sun and the sky (IblBaker): a brighter
+	// ground lights what faces down more, and leaves what faces up as it was.
+	TEST(SunPath, TheGroundUnderTheHorizonIsTheScenes) {
+		ComponentsModule::SkyComponent dark;
+		dark.sunElevation = 30.f;
+		dark.groundAlbedo = { 0.f, 0.f, 0.f };
+		auto bright = dark;
+		bright.groundAlbedo = { 0.5f, 0.5f, 0.5f };
+		const auto underDark = Render::computeIbl(dark, 1.f);
+		const auto underBright = Render::computeIbl(bright, 1.f);
+		constexpr int kUp = 2;
+		constexpr int kDown = 3;
+		EXPECT_GT(irradianceAtTheMiddle(underBright, kDown), irradianceAtTheMiddle(underDark, kDown));
+		EXPECT_EQ(irradianceAtTheMiddle(underBright, kUp), irradianceAtTheMiddle(underDark, kUp));
 	}
 }

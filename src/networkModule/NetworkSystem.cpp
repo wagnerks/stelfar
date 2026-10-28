@@ -21,8 +21,8 @@ namespace SFE::Network {
 		constexpr double kClockEase = 0.1;   // the share of each new measure the clock offset takes
 	}
 
-	NetworkSystem::NetworkSystem() {
-		mSettings = Engine::instance()->network();
+	NetworkSystem::NetworkSystem(const Settings& settings) {
+		mSettings = settings;
 		if (mSettings.role == Role::Offline) {
 			mLocalPlayer = kHostPlayer;
 			mPlayers = { kHostPlayer };

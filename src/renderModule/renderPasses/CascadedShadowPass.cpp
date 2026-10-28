@@ -44,7 +44,6 @@
 #include "propertiesModule/PropertiesSystem.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/SystemManager.h"
-#include "systemsModule/SystemsPriority.h"
 #include "logsModule/logger.h"
 
 using namespace SFE::Render::RenderPasses;

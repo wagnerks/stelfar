@@ -8,8 +8,8 @@
 LightSourceComponent::LightSourceComponent(ecss::SectorId id, eLightType type) : ComponentInterface(id), mType(type) {
 }
 
-// How far a flickering light's centre wanders, in metres for each unit of mFlicker: the campfire's 0.2 moves it up to
-// 15 cm, enough for the shadows round the fire to tremble at dusk, when the sky still lights most of them.
+// How far a flickering light's centre wanders, in metres for each unit of mFlicker: a flicker of 0.2 moves it up to
+// 15 cm, enough for the shadows round a fire to tremble at dusk, when the sky still lights most of them.
 constexpr float kFlickerSway = 0.75f;
 
 // A few waves of no common period laid over each other, so it never quite repeats.

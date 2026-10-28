@@ -2,23 +2,27 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "EngineTestFixture.h"
 #include "componentsModule/ShelterComponent.h"
 #include "core/Params.h"
+#include "renderModule/DebugView.h"
 #include "renderModule/renderPasses/SunShadowPass.h"
 #include "systemsModule/systems/AudioSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
 
 namespace SFE::EngineTests {
 	namespace {
-		// A root of its own for one test, outside every real one, holding this tweaks.json if any (an engine's root behind
-		// it, empty), set as FileSystem's roots and put back as they were when the test ends. The registry is the one the
+		// A root of its own for one test, outside every real one, holding these numbers if any (an engine's root behind it,
+		// empty) in a file `name`, which it names the application's numbers file (Params::setFile); set as FileSystem's
+		// roots, and the roots and the file named put back as they were when the test ends. The registry is the one the
 		// whole run shares: each test keeps to groups of its own, "Test Params ...".
 		class TempRoot {
 		public:
-			explicit TempRoot(const std::string& tweaks = {}) : mWasRoot(FileSystem::root()), mWasEngine(FileSystem::engineRoot()),
+			explicit TempRoot(const std::string& numbers = {}, std::string name = "numbers.json") : mWasRoot(FileSystem::root()),
+				mWasEngine(FileSystem::engineRoot()), mWasFile(Params::file()), mName(std::move(name)),
 				mDir(std::filesystem::temp_directory_path()
 					/ ("sfe_params_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
 				ThreadPool::instance()->waitIdle();
@@ -26,13 +30,15 @@ namespace SFE::EngineTests {
 				std::filesystem::create_directories(mDir / "engine");
 				FileSystem::setRoot((mDir / "content").string());
 				FileSystem::setEngineRoot((mDir / "engine").string());
-				if (!tweaks.empty()) {
-					std::ofstream(file(), std::ios::binary | std::ios::trunc) << tweaks;
+				Params::setFile(mName);
+				if (!numbers.empty()) {
+					std::ofstream(file(), std::ios::binary | std::ios::trunc) << numbers;
 				}
 			}
 
 			~TempRoot() {
 				ThreadPool::instance()->waitIdle();
+				Params::setFile(mWasFile);
 				FileSystem::setRoot(mWasRoot.string());
 				FileSystem::setEngineRoot(mWasEngine.string());
 				std::error_code ec;
@@ -42,15 +48,24 @@ namespace SFE::EngineTests {
 			TempRoot(const TempRoot&) = delete;
 			TempRoot& operator=(const TempRoot&) = delete;
 
-			std::filesystem::path file() const { return mDir / "content" / "tweaks.json"; }
+			std::filesystem::path content() const { return mDir / "content"; }
+			std::filesystem::path file() const { return content() / mName; }
 			// The file as save left it.
 			Json::Value saved() const { return FileSystem::readJson(file().string()); }
 
 		private:
 			std::filesystem::path mWasRoot;
 			std::filesystem::path mWasEngine;
+			std::string mWasFile;
+			std::string mName;
 			std::filesystem::path mDir;
 		};
+
+		// A file's bytes as they are; empty for none.
+		std::string bytesOf(const std::filesystem::path& path) {
+			std::ifstream in(path, std::ios::binary);
+			return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
 
 		Params::Seen seenOf(const std::string& group, const std::string& name) {
 			Params::Seen seen{};
@@ -310,7 +325,6 @@ namespace SFE::EngineTests {
 	TEST(Params, TheEngineRegistersItsNumbersUnderTheirKeys) {
 		using ComponentsModule::ShelterComponent;
 		using Render::RenderPasses::SunShadowPass;
-		auto* engine = Engine::instance();
 		auto* render = ECSHandler::systemManager().getSystem<SystemsModule::RenderSystem>();
 		auto* audio = ECSHandler::systemManager().getSystem<SystemsModule::AudioSystem>();
 		ASSERT_TRUE(render);
@@ -322,17 +336,17 @@ namespace SFE::EngineTests {
 		const auto wasShadows = SunShadowPass::settings;
 		const float wasEye = ShelterComponent::eyeAdapts;
 		const auto wasAudio = audio->settings;
-		const int wasTerm = engine->lightingDebugTerm();
+		const int wasTerm = Render::debugView();
 		const Finally restore([&] {
 			gfx = wasGfx;
 			SunShadowPass::settings = wasShadows;
 			ShelterComponent::eyeAdapts = wasEye;
 			audio->settings = wasAudio;
-			engine->setLightingDebugTerm(wasTerm);
+			Render::debugView() = wasTerm;
 		});
 		gfx.timeOfDay = 7.f;
 		gfx.windStrength = 0.25f;
-		engine->setLightingDebugTerm(3);
+		Render::debugView() = 3;
 		{
 			const TempRoot root("{}");
 			ASSERT_TRUE(Params::load());
@@ -391,7 +405,7 @@ namespace SFE::EngineTests {
 		EXPECT_TRUE(code.taa);
 		EXPECT_EQ(seenOf("Graphics", "taa").type, Params::Type::Bool);
 		EXPECT_EQ(seenOf("Graphics", "taa").value, 1.0);
-		// --debug-term's: an int, bound to the view the lighting draws.
+		// --debug-term's: an int, the view the lighting draws (Render::debugView).
 		EXPECT_EQ(seenOf("Render", "debug view").type, Params::Type::Int);
 		EXPECT_EQ(seenOf("Render", "debug view").value, 3.0) << "the debug view is not the engine's, or a reload reset it";
 		EXPECT_EQ(Params::findFloat("Graphics", "time of day"), &gfx.timeOfDay);
@@ -407,6 +421,158 @@ namespace SFE::EngineTests {
 		EXPECT_FALSE(gfx.taa) << "the file's taa was not read into the settings";
 		EXPECT_EQ(gfx.timeOfDay, 7.f) << "the time of day was read from the file";
 		EXPECT_EQ(gfx.windStrength, 0.25f) << "the wind was read from the file";
-		EXPECT_EQ(engine->lightingDebugTerm(), 3) << "the debug view was read from the file";
+		EXPECT_EQ(Render::debugView(), 3) << "the debug view was read from the file";
+	}
+
+	// A settings object's "reset defaults" goes back to where each number stands: the file's value as last read where it
+	// has one, the code's where it has none or for a number of this run only, and nothing outside the range; one held for
+	// the session keeps the session's, and what it has besides goes back so -- here the code's, the file having none.
+	TEST(Params, ResetPutsARangeBackAsTheFileHasIt) {
+		const TempRoot root(R"({"Test Params reset file": {"a": 4, "c": false}})");
+		struct Settings {
+			float a = 1.f;
+			int b = 2;
+			bool c = true;
+			float t = 6.f;
+		};
+		static Settings settings;
+		static float outside = 1.f;
+		settings = {};
+		outside = 1.f;
+		Params::bind("Test Params reset file", "a", settings.a);
+		Params::bind("Test Params reset file", "b", settings.b);
+		Params::bind("Test Params reset file", "c", settings.c);
+		Params::bind("Test Params reset file", "t", settings.t, { .transient = true });
+		Params::bind("Test Params reset file", "outside", outside);
+		const Finally unbind([] {
+			Params::unbind(&settings, &settings + 1);
+			Params::unbind(&outside, &outside + 1);
+		});
+		ASSERT_TRUE(Params::load());
+		ASSERT_EQ(settings.a, 4.f);
+		ASSERT_FALSE(settings.c);
+		settings.a = 5.f;
+		settings.b = 7;
+		settings.c = true;
+		settings.t = 2.f;
+		outside = 3.f;
+		ASSERT_TRUE(Params::setSession("Test Params reset file", "b", 9.0, Params::Session::UntilReload));
+		Params::reset(&settings, &settings + 1);
+		EXPECT_EQ(settings.a, 4.f) << "a reset went to the code's value, not the file's";
+		EXPECT_FALSE(settings.c) << "a reset went to the code's value, not the file's";
+		EXPECT_EQ(settings.t, 6.f) << "a number of this run only did not go back to the code's";
+		EXPECT_EQ(settings.b, 9) << "the session's value was reset";
+		EXPECT_EQ(outside, 3.f) << "a number outside the range was reset";
+		Params::save();
+		const auto group = root.saved()["Test Params reset file"];
+		EXPECT_FALSE(group.isMember("b")) << "what the number has besides the session did not go back to the code's";
+		EXPECT_EQ(group["a"].asFloat(), 4.f);
+		EXPECT_EQ(group["outside"].asFloat(), 3.f);
+	}
+
+	// What a save wrote is where the number stands from then on, as a load of the file would have it: a reset after it
+	// goes back to the value saved, not to the one the file had before.
+	TEST(Params, SaveIsWhereTheNumbersStand) {
+		const TempRoot root(R"({"Test Params saved": {"n": 2}})");
+		static float number = 0.f;
+		number = 0.f;
+		Params::bind("Test Params saved", "n", number);
+		const Finally unbind([] { Params::unbind(&number, &number + 1); });
+		ASSERT_TRUE(Params::load());
+		ASSERT_EQ(number, 2.f);
+		number = 3.f;
+		Params::save();
+		ASSERT_EQ(root.saved()["Test Params saved"]["n"].asFloat(), 3.f);
+		EXPECT_TRUE(Params::atStanding("Test Params saved", "n")) << "the value just saved is not where the number stands";
+		number = 5.f;
+		EXPECT_FALSE(Params::atStanding("Test Params saved", "n"));
+		Params::reset(&number, &number + 1);
+		EXPECT_EQ(number, 3.f) << "a reset went back past what was saved";
+	}
+
+	// A number neutral in the code whose look is the file's (an application's grade): read, reset and saved, it stays the
+	// file's. Only set back to the code's value and saved does it leave the file, and a load then gives the code's.
+	TEST(Params, ANeutralCodeKeepsTheFilesLook) {
+		const TempRoot root(R"({"Test Params look": {"grade": 1.0}})");
+		static float grade = 0.f;
+		grade = 0.f;
+		Params::bind("Test Params look", "grade", grade);
+		const Finally unbind([] { Params::unbind(&grade, &grade + 1); });
+		ASSERT_TRUE(Params::load());
+		EXPECT_EQ(grade, 1.f);
+		Params::reset(&grade, &grade + 1);
+		EXPECT_EQ(grade, 1.f) << "a reset took the file's look away";
+		Params::save();
+		EXPECT_EQ(root.saved()["Test Params look"]["grade"].asFloat(), 1.f) << "a save took the file's look away";
+		grade = 0.f;
+		Params::save();
+		EXPECT_FALSE(root.saved().isMember("Test Params look")) << "a value back at the code's was kept in the file";
+		grade = 1.f;
+		ASSERT_TRUE(Params::load());
+		EXPECT_EQ(grade, 0.f) << "the file did not give back what was saved";
+	}
+
+	// The numbers file is the one the application named, whatever else the root holds: a tweaks.json beside it is neither
+	// read nor written.
+	TEST(Params, TheFileIsTheApplications) {
+		const TempRoot root(R"({"Test Params whose": {"n": 2}})");
+		const std::string beside = R"({"Test Params whose": {"n": 7}})";
+		std::ofstream(root.content() / "tweaks.json", std::ios::binary | std::ios::trunc) << beside;
+		float& number = Params::value("Test Params whose", "n", 1.f);
+		const Finally restore([&] { number = 1.f; });
+		ASSERT_EQ(Params::file(), "numbers.json");
+		ASSERT_TRUE(Params::load());
+		EXPECT_EQ(number, 2.f) << "the numbers were not read from the file named";
+		number = 4.f;
+		Params::save();
+		EXPECT_EQ(root.saved()["Test Params whose"]["n"].asFloat(), 4.f) << "the numbers were not saved into the file named";
+		EXPECT_EQ(bytesOf(root.content() / "tweaks.json"), beside) << "a file nobody named was written";
+	}
+
+	// No file named -- an application that names none -- and nothing is read or written, whatever the root holds: load
+	// says so and leaves every number as it was, save leaves every file as it was and makes none.
+	TEST(Params, NoFileNamedReadsAndWritesNothing) {
+		const std::string numbers = R"({"Test Params unnamed": {"n": 2}})";
+		const TempRoot root(numbers);
+		float& number = Params::value("Test Params unnamed", "n", 1.f);
+		const Finally restore([&] { number = 1.f; });
+		Params::setFile("");
+		EXPECT_EQ(Params::file(), "");
+		number = 3.f;
+		EXPECT_FALSE(Params::load());
+		EXPECT_EQ(number, 3.f) << "a load with no file named changed a number";
+		Params::save();
+		EXPECT_EQ(bytesOf(root.file()), numbers) << "a file was written though none was named";
+		size_t files = 0;
+		for (const auto& entry : std::filesystem::directory_iterator(root.content())) {
+			files += entry.is_regular_file() ? 1 : 0;
+		}
+		EXPECT_EQ(files, 1u) << "a save with no file named made one";
+	}
+
+	// Where a number stands is compared in its own type: a float the file has as 1.05 stands at the float 1.05f, never at
+	// the double, so right after the load it is there and the Tweaks window offers no reset that would do nothing.
+	TEST(Params, AFloatAsTheFileHasItIsAtItsStanding) {
+		const TempRoot root(R"({"Test Params standing": {"f": 1.05, "i": 3}})");
+		struct Numbers {
+			float f = 0.f;
+			int i = 0;
+		};
+		static Numbers numbers;
+		numbers = {};
+		Params::bind("Test Params standing", "f", numbers.f);
+		Params::bind("Test Params standing", "i", numbers.i);
+		const Finally unbind([] { Params::unbind(&numbers, &numbers + 1); });
+		ASSERT_TRUE(Params::load());
+		EXPECT_EQ(numbers.f, 1.05f);
+		EXPECT_EQ(numbers.i, 3);
+		EXPECT_TRUE(Params::atStanding("Test Params standing", "f")) << "the file's float was compared as a double";
+		EXPECT_TRUE(Params::atStanding("Test Params standing", "i"));
+		numbers.f = 2.f;
+		EXPECT_FALSE(Params::atStanding("Test Params standing", "f"));
+		Params::reset(&numbers, &numbers + 1);
+		EXPECT_EQ(numbers.f, 1.05f);
+		EXPECT_TRUE(Params::atStanding("Test Params standing", "f"));
+		EXPECT_FALSE(Params::atStanding("Test Params standing", "nobody")) << "a name nobody registered stands somewhere";
 	}
 }

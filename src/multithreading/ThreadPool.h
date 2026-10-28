@@ -10,7 +10,6 @@
 #include <shared_mutex>
 #include <thread>
 #include <vector>
-#include <core/Engine.h>
 
 #include "containersModule/Singleton.h"
 #include "debugModule/Profiler.h"

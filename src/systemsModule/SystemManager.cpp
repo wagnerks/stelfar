@@ -1,5 +1,4 @@
 ﻿#include "SystemManager.h"
-#include "core/Engine.h"
 
 #include "systemsModule/SystemBase.h"
 #include "core/FileSystem.h"
@@ -229,7 +228,70 @@ namespace ecss {
 		}
 	}
 
+	void SystemManager::addRoots(System* anchor, const char* anchorType, std::initializer_list<Named> systems) {
+		auto at = mMainThreadSystems.end();
+		if (anchorType) {
+			at = anchor ? std::find(mMainThreadSystems.begin(), mMainThreadSystems.end(), anchor) : mMainThreadSystems.end();
+			if (at == mMainThreadSystems.end()) {
+				std::string names;
+				for (const auto& named : systems) {
+					names += (names.empty() ? "" : ", ") + SFE::LoadTrace::plainName(named.type);
+				}
+				SFE::LogsModule::Logger::LOG_ERROR("%s is not on the main thread: %s not scheduled",
+					SFE::LoadTrace::plainName(anchorType).c_str(), names.empty() ? "nothing" : names.c_str());
+				return;
+			}
+		}
+		for (const auto& named : systems) {
+			if (!named.system) {
+				SFE::LogsModule::Logger::LOG_ERROR("%s is scheduled but was never made (createSystem first)",
+					SFE::LoadTrace::plainName(named.type).c_str());
+				continue;
+			}
+			if (std::find(mMainThreadSystems.begin(), mMainThreadSystems.end(), named.system) != mMainThreadSystems.end()
+				|| std::find(mTicked.begin(), mTicked.end(), named.system) != mTicked.end()) {
+				SFE::LogsModule::Logger::LOG_ERROR("%s is scheduled twice", SFE::LoadTrace::plainName(named.type).c_str());
+				continue;
+			}
+			if (anchorType) {
+				// Before the anchor, and the next before it again, after this one.
+				at = mMainThreadSystems.insert(at, named.system) + 1;
+			}
+			else {
+				mMainThreadSystems.push_back(named.system);
+			}
+		}
+	}
+
+	void SystemManager::addTicks(std::initializer_list<Named> systems, float ticks) {
+		for (const auto& named : systems) {
+			if (!named.system) {
+				SFE::LogsModule::Logger::LOG_ERROR("%s is scheduled but was never made (createSystem first)",
+					SFE::LoadTrace::plainName(named.type).c_str());
+				continue;
+			}
+			if (std::find(mMainThreadSystems.begin(), mMainThreadSystems.end(), named.system) != mMainThreadSystems.end()
+				|| std::find(mTicked.begin(), mTicked.end(), named.system) != mTicked.end()) {
+				SFE::LogsModule::Logger::LOG_ERROR("%s is scheduled twice", SFE::LoadTrace::plainName(named.type).c_str());
+				continue;
+			}
+			addTickSystem(named.system, ticks);
+		}
+	}
+
+	std::vector<System*> SystemManager::unscheduled() const {
+		std::vector<System*> left;
+		for (const auto system : mUpdating) {
+			if (std::find(mMainThreadSystems.begin(), mMainThreadSystems.end(), system) == mMainThreadSystems.end()
+				&& std::find(mTicked.begin(), mTicked.end(), system) == mTicked.end()) {
+				left.push_back(system);
+			}
+		}
+		return left;
+	}
+
 	void SystemManager::addTickSystem(System* system, float ticks) {
+		mTicked.push_back(system);
 		system->setTick(ticks);
 		// Queued until the first update settles how tick systems run, so one added before setStepTickSystems -- a game's,
 		// made before the engine sets the mode -- runs as the engine's do; one added after runs as settled. Until then
@@ -259,6 +321,7 @@ namespace ecss {
 				"systems on the main thread, in order: " + namesOf(mMainThreadSystems),
 				std::string(mTickScheduler->stepped() ? "tick systems, stepped from the frame: " : "tick systems, each on a thread of its own: ")
 					+ (ticking.empty() ? std::string("none") : ticking),
+				"systems made but not scheduled: " + namesOf(unscheduled()),
 			});
 			if (!mTickScheduler->stepped()) {
 				for (const auto& queued : mSteppedTickSystems) {

@@ -4,6 +4,7 @@
 #include <execution>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <unordered_map>
 #include <thread>
 
@@ -18,9 +19,8 @@
 
 #include "debugModule/Profiler.h"
 #include "assetsModule/modelModule/Model.h"
-#include "assetsModule/modelModule/Terrain.h"
+#include "componentsModule/HeightfieldComponent.h"
 #include "componentsModule/ModelComponent.h"
-#include "componentsModule/TerrainComponent.h"
 #include "componentsModule/TransformComponent.h"
 #include "core/Clocks.h"
 #include "core/ECSHandler.h"
@@ -35,12 +35,6 @@ namespace SFE::SystemsModule {
 		// The main world's workers: a few characters and what they hold move in it, two are plenty. Each world had half
 		// the machine's threads, and the main world's sat idle beside the loose one's on the same cores.
 		constexpr int kMainThreads = 2;
-
-		namespace BroadPhaseLayers {
-			constexpr JPH::BroadPhaseLayer kStatic{ 0 };
-			constexpr JPH::BroadPhaseLayer kMoving{ 1 };
-			constexpr JPH::uint kCount = 2;
-		}
 
 		// Jolt's allocator, factory and type registry are process-wide and set up once.
 		void initJolt() {
@@ -180,19 +174,24 @@ namespace SFE::SystemsModule {
 			return shapes;
 		}
 
-		// An entity's static collider: the terrain's heights as a field (TerrainCollider; it stands unturned and
-		// unscaled, as a terrain is put), a prop's mesh.
-		std::vector<JPH::ShapeRefC> colliderShapes(const ecss::EntityId entity, const ModelComponent& model, const Math::Mat4& world) {
-			if (const auto terrain = ECSHandler::registry().pinComponent<const ComponentsModule::TerrainComponent>(entity)) {
-				const int n = std::clamp(terrain->resolution, 2, 2049);
-				const float half = terrain->size * 0.5f;
-				const Math::Vec3 corner{ world[3][0] - half, world[3][1], world[3][2] - half };
-				if (auto shape = TerrainCollider::shape(AssetsModule::terrainHeights(*terrain.get()), n, terrain->size / static_cast<float>(n - 1), corner)) {
-					return { shape };
+		// An entity's static collider: a heightfield's heights as a field (TerrainCollider; it stands unturned and
+		// unscaled), a prop's mesh.
+		std::vector<JPH::ShapeRefC> colliderShapes(const ecss::EntityId entity, const ModelComponent* model, const Math::Mat4& world) {
+			if (const auto field = ECSHandler::registry().pinComponent<const ComponentsModule::HeightfieldComponent>(entity)) {
+				const int n = field->samples;
+				if (n >= 2 && field->heights && field->heights->size() >= static_cast<size_t>(n) * static_cast<size_t>(n)) {
+					const float half = field->size * 0.5f;
+					const Math::Vec3 corner{ world[3][0] - half, world[3][1], world[3][2] - half };
+					if (auto shape = TerrainCollider::shape(*field->heights, n, field->size / static_cast<float>(n - 1), corner)) {
+						return { shape };
+					}
 				}
 				LogsModule::Logger::LOG_ERROR("terrain collider: no height field, its mesh instead");
 			}
-			return meshShapes(model, world);
+			if (!model) {
+				return {};
+			}
+			return meshShapes(*model, world);
 		}
 
 		// The static colliders of `entities` given to `physics` to take (replaceStatic), each where its render transform
@@ -216,49 +215,14 @@ namespace SFE::SystemsModule {
 		}
 	}
 
-	struct PhysicsSystem::Layers {
-		struct BroadPhase final : JPH::BroadPhaseLayerInterface {
-			JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::kCount; }
-			JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-				return layer == kStatic ? BroadPhaseLayers::kStatic : BroadPhaseLayers::kMoving;
-			}
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-			const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
-				return layer == BroadPhaseLayers::kStatic ? "static" : "moving";
-			}
-#endif
-		} broadPhase;
-
-		struct ObjectVsBroadPhase final : JPH::ObjectVsBroadPhaseLayerFilter {
-			bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broadPhaseLayer) const override {
-				// Static against static is never tested, and what is held against nothing.
-				return layer != kHeld && (layer != kStatic || broadPhaseLayer == BroadPhaseLayers::kMoving);
-			}
-		} objectVsBroadPhase;
-
-		struct ObjectPairs final : JPH::ObjectLayerPairFilter {
-			bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-				return a != kHeld && b != kHeld && (a != kStatic || b != kStatic)
-					&& !((a == kCharacter && b == kHair) || (a == kHair && b == kCharacter));
-			}
-		} objectPairs;
-
-		// Not a layer: whether the world has begun stepping, and the lock its first update and a scene laid in at once take
-		// turns with (the constructor's listener). Here, in the one part of the system this file defines, until
-		// PhysicsSystem.h is next opened (docs/engine_split.md, step 6).
-		std::mutex stepping;
-		std::atomic<bool> stepped{ false };
-	};
-
 	PhysicsSystem::PhysicsSystem() : PhysicsSystem(kMainThreads) {}
 
 	PhysicsSystem::PhysicsSystem(const int threads) {
 		initJolt();
-		mLayers = std::make_unique<Layers>();
 		mTempAllocator = std::make_unique<StackThenHeap>(kTempBytes);
 		mJobs = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
 		mWorld = std::make_unique<JPH::PhysicsSystem>();
-		mWorld->Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContacts, mLayers->broadPhase, mLayers->objectVsBroadPhase, mLayers->objectPairs);
+		mWorld->Init(kMaxBodies, 0, kMaxBodyPairs, kMaxContacts, mBroadPhase, mObjectVsBroadPhase, mObjectPairs);
 		mWorld->SetGravity({ 0.f, -9.81f, 0.f });
 		// Each step listener (a vehicle: its wheels met) a job of its own, so the vehicles go side by side.
 		auto settings = mWorld->GetPhysicsSettings();
@@ -270,17 +234,28 @@ namespace SFE::SystemsModule {
 		// Take what is there (above), and listen for what is loaded after, the same way: replaceStatic. A scene loaded
 		// before the world first steps -- a game loading its scene once its systems are made -- is laid in at once, on the
 		// main thread, for whatever is made on it next; one loaded after goes in between two steps, at the start of the
-		// next update.
+		// next update. The capsule sources are asked again with it: what stands may have come with the scene.
 		PropertiesModule::onSceneLoaded(this, [this](const PropertiesModule::SceneLoaded& scene) {
-			std::unique_lock lock(mLayers->stepping);
-			const bool atOnce = !mLayers->stepped.load(std::memory_order_relaxed);
+			std::unique_lock lock(mStepping);
+			const bool atOnce = !mStepped.load(std::memory_order_relaxed);
 			if (!atOnce) {
 				lock.unlock();
 			}
 			queueStatic(*this, scene.entities);
+			std::optional<std::vector<JPH::ShapeRefC>> capsules;
+			if (!mCapsuleSources.empty()) {
+				capsules = capsuleShapes();
+			}
 			if (atOnce) {
 				swapStatic();
+				if (capsules) {
+					placeCapsules(std::move(*capsules));
+				}
 				mWorld->OptimizeBroadPhase();
+			}
+			else if (capsules) {
+				std::lock_guard replaced(mReplacedMutex);
+				mReplacedCapsules = std::move(*capsules);
 			}
 		});
 	}
@@ -294,11 +269,11 @@ namespace SFE::SystemsModule {
 		: PhysicsSystem((std::max)(1, static_cast<int>(std::thread::hardware_concurrency()) / 2 - 1)) {}
 
 	const JPH::ObjectVsBroadPhaseLayerFilter& PhysicsSystem::broadPhaseFilter() const {
-		return mLayers->objectVsBroadPhase;
+		return mObjectVsBroadPhase;
 	}
 
 	const JPH::ObjectLayerPairFilter& PhysicsSystem::layerPairFilter() const {
-		return mLayers->objectPairs;
+		return mObjectPairs;
 	}
 
 	void PhysicsSystem::addStepCallback(std::function<void(float)> callback) {
@@ -309,9 +284,9 @@ namespace SFE::SystemsModule {
 	void PhysicsSystem::update(float dt) {
 		// From here on the world steps, and a scene loaded after goes in through replaceStatic; one being laid in at once
 		// (the constructor's listener) is finished first.
-		if (!mLayers->stepped.load(std::memory_order_acquire)) {
-			std::lock_guard lock(mLayers->stepping);
-			mLayers->stepped.store(true, std::memory_order_release);
+		if (!mStepped.load(std::memory_order_acquire)) {
+			std::lock_guard lock(mStepping);
+			mStepped.store(true, std::memory_order_release);
 		}
 		{
 			SFE_PROFILE_ZONE("Physics swap static");
@@ -360,12 +335,19 @@ namespace SFE::SystemsModule {
 	}
 
 	void PhysicsSystem::addStaticColliders() {
-		// The terrain, and the props set in the scene with a collider: taken as a scene loaded later is (the constructor's
-		// listener), and laid in at once, as nothing steps a world still being made.
+		// The heightfields, and the props set in the scene with a collider: taken as a scene loaded later is (the
+		// constructor's listener), and laid in at once, as nothing steps a world still being made.
 		auto& registry = ECSHandler::registry();
 		std::vector<ecss::EntityId> entities;
 		for (const auto& [id, model, matrix] : registry.view<const ModelComponent, const ComponentsModule::TransformMatComp>()) {
-			if (model && matrix && (model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(id))) {
+			if (model && matrix && (model->collider || registry.hasComponent<ComponentsModule::HeightfieldComponent>(id))) {
+				entities.push_back(id);
+			}
+		}
+		// Heightfields drawn by no model of their own collide too, after the models, so the models' bodies come first as
+		// ever.
+		for (const auto& [id, field, matrix] : registry.view<const ComponentsModule::HeightfieldComponent, const ComponentsModule::TransformMatComp>()) {
+			if (field && matrix && !registry.hasComponent<ModelComponent>(id)) {
 				entities.push_back(id);
 			}
 		}
@@ -375,11 +357,12 @@ namespace SFE::SystemsModule {
 
 	std::vector<JPH::ShapeRefC> PhysicsSystem::staticShapes(ecss::EntityId entity, const Math::Mat4& world) {
 		auto& registry = ECSHandler::registry();
+		const bool field = registry.hasComponent<ComponentsModule::HeightfieldComponent>(entity);
 		const auto model = registry.pinComponent<const ModelComponent>(entity);
-		if (!model || !(model->collider || registry.hasComponent<ComponentsModule::TerrainComponent>(entity))) {
+		if (!field && !(model && model->collider)) {
 			return {};
 		}
-		return colliderShapes(entity, *model.get(), world);
+		return colliderShapes(entity, model ? model.get() : nullptr, world);
 	}
 
 	void PhysicsSystem::setFineGround(const int x, const int z, const int cells, JPH::ShapeRefC field, const JPH::AABox& lower) {
@@ -482,11 +465,13 @@ namespace SFE::SystemsModule {
 
 	void PhysicsSystem::swapStatic() {
 		std::vector<std::pair<ecss::EntityId, std::vector<JPH::ShapeRefC>>> replaced;
+		std::optional<std::vector<JPH::ShapeRefC>> capsules;
 		{
 			std::lock_guard lock(mReplacedMutex);
 			replaced.swap(mReplaced);
+			capsules.swap(mReplacedCapsules);
 		}
-		if (replaced.empty()) {
+		if (replaced.empty() && !capsules) {
 			return;
 		}
 		auto& bodies = mWorld->GetBodyInterface();
@@ -512,6 +497,18 @@ namespace SFE::SystemsModule {
 				mStatic.erase(entity);
 			}
 		}
+		// The capsules asked for anew (a scene loaded after the world stepped) stand in for the ones before.
+		if (capsules) {
+			for (const auto id : mCapsuleBodies) {
+				changed.Encapsulate(bodies.GetShape(id)->GetLocalBounds());
+			}
+			for (const auto& shape : *capsules) {
+				if (shape) {
+					changed.Encapsulate(shape->GetLocalBounds());
+				}
+			}
+			placeCapsules(std::move(*capsules));
+		}
 		// What lay on a prop taken away falls, and what a prop is put down on is pushed out of it.
 		if (changed.IsValid()) {
 			changed.ExpandBy(JPH::Vec3::sReplicate(kWake));
@@ -519,10 +516,24 @@ namespace SFE::SystemsModule {
 		}
 	}
 
-	void PhysicsSystem::addStaticCapsuleBodies() {
-		auto& bodies = mWorld->GetBodyInterface();
-		// Whatever else stands in the world: a game reports upright capsules -- tree trunks, boulders -- and they are
-		// batched into static compounds here. A body each would be far more than a world takes.
+	void PhysicsSystem::addStaticCapsules(std::function<void(std::vector<StaticCapsule>&)> source) {
+		mCapsuleSources.push_back(std::move(source));
+		std::unique_lock lock(mStepping);
+		if (!mStepped.load(std::memory_order_relaxed)) {
+			// Nothing steps the world yet: in at once, for whatever is made on it next.
+			placeCapsules(capsuleShapes());
+			mWorld->OptimizeBroadPhase();
+			return;
+		}
+		lock.unlock();
+		auto shapes = capsuleShapes();
+		std::lock_guard replaced(mReplacedMutex);
+		mReplacedCapsules = std::move(shapes);
+	}
+
+	std::vector<JPH::ShapeRefC> PhysicsSystem::capsuleShapes() const {
+		// Whatever else stands in the world: an application reports upright capsules -- tree trunks, boulders -- and they
+		// are batched into static compounds here. A body each would be far more than a world takes.
 		std::vector<StaticCapsule> capsules;
 		for (const auto& source : mCapsuleSources) {
 			source(capsules);
@@ -562,13 +573,23 @@ namespace SFE::SystemsModule {
 				}
 				shapes[index] = result.Get();
 			});
-			for (const auto& shape : shapes) {
-				if (shape) {
-					JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
-					bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate);
-				}
+			return shapes;
+		}
+		return {};
+	}
+
+	void PhysicsSystem::placeCapsules(std::vector<JPH::ShapeRefC> shapes) {
+		auto& bodies = mWorld->GetBodyInterface();
+		if (!mCapsuleBodies.empty()) {
+			bodies.RemoveBodies(mCapsuleBodies.data(), static_cast<int>(mCapsuleBodies.size()));
+			bodies.DestroyBodies(mCapsuleBodies.data(), static_cast<int>(mCapsuleBodies.size()));
+			mCapsuleBodies.clear();
+		}
+		for (const auto& shape : shapes) {
+			if (shape) {
+				JPH::BodyCreationSettings body(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static, kStatic);
+				mCapsuleBodies.push_back(bodies.CreateAndAddBody(body, JPH::EActivation::DontActivate));
 			}
 		}
-		mWorld->OptimizeBroadPhase();
 	}
 }

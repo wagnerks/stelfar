@@ -21,7 +21,7 @@ namespace SFE::ComponentsModule {
 	 * changing the entity reads copyTransform, or the TransformMatComp copy the worker publishes.
 	 *
 	 * A new one is dirty and tells no one: the registry's add listener tells TransformSystem once
-	 * it is stored (ECSHandler::initSystems).
+	 * it is stored (Core::init).
 	 */
 	class TransformComponent : public ecss::ComponentInterface {
 	public:

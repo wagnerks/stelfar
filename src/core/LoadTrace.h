@@ -16,7 +16,7 @@ namespace SFE {
 	//         SFE::LoadTrace::Step step("terrain");
 	//         ...
 	//     }                                  // the stage closes here
-	//     SFE::LoadTrace::report("forest_lake.json");
+	//     SFE::LoadTrace::report("scene.json");
 	class LoadTrace {
 	public:
 		// A stage, lasting as long as this object. Nested stages are timed on their own; the time is not taken off

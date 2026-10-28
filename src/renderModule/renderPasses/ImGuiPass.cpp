@@ -1,5 +1,5 @@
 #include "ImGuiPass.h"
-#include "core/GameModule.h"
+#include "debugModule/DebugPanels.h"
 
 #include "backends/imgui_impl_glfw.h"
 #include "core/Clocks.h"
@@ -114,8 +114,9 @@ namespace SFE::Render::RenderPasses {
 			Params::panel();
 		}
 		ImGui::End();
-		// Whatever windows the game brought: the engine has none of its own past the graphics settings and the tweaks.
-		for (const auto& panel : GameModule::panels()) {
+		// Whatever windows the application added (DebugPanels), in the order added: the engine has none of its own past the
+		// graphics settings and the numbers.
+		for (const auto& panel : DebugPanels::list()) {
 			ImGui::SetNextWindowSize(ImVec2(panel.size.x, panel.size.y), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin(panel.title.c_str())) {
 				panel.draw();

@@ -19,6 +19,9 @@ namespace SFE::SystemsModule {
 		CAMERA_UPDATED,
 		ARMATURE_UPDATED,
 		MESH_UPDATED,
+		// An entity's material or mesh changed (MeshComponent::meshMaterials, its MaterialComponent): any thread; the renderer
+		// reads the entity again on its next frame. Its listeners run on the caller's thread, which may hold the entity's
+		// components pinned.
 		MATERIAL_UPDATED,
 		ANIMATION_UPDATED,
 		// Sent before the entity is destroyed; its id is reused right after.

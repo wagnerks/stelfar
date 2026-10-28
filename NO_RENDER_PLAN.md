@@ -1,5 +1,7 @@
 # No-render mode plan
 
+Status: done. Since then the engine's own executable (`StelForgeRuntime`) and the tick systems WorldTime and SkeletalAnimation are gone, the fixed step is `EngineConfig::fixedDeltaTime` (given once to `Engine::init`), and Escape is the application's: the engine no longer closes the window on it.
+
 Goal: run the engine with no window and no GPU, to run engine unit tests without a picture (game tests will later be part of the runtime itself). What must work:
 - game systems and ECS;
 - asset loading on the CPU;

@@ -31,8 +31,6 @@ layout(SFE_SET(0, 15), std140) uniform PushConstants {
     float _pad0;
     vec3 lightColor;
     float _pad1;
-    // Spare, so the block keeps its size; GlassPass::Params mirrors it.
-    vec4 _pad4;
 } params;
 
 #endif

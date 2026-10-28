@@ -11,6 +11,7 @@
 #include "debugModule/ProcessMemory.h"
 #include "rhi/GraphicsBackend.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/DebugView.h"
 #include "renderModule/TextRenderer.h"
 #include "renderModule/Utils.h"
 #include "componentsModule/ShelterComponent.h"
@@ -412,7 +413,7 @@ void FinalPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	}
 	// A debug term carries a value to be read off the image, not a picture to be graded. Exposure
 	// silently rescales it, which turns any absolute reading into nonsense.
-	if (Engine::instance()->lightingDebugTerm() != 0) {
+	if (Render::debugView() != 0) {
 		mPostParams.bloomStrength = 0.f;
 		mPostParams.exposure = 1.f;
 		mPostParams.ca = 0.f;

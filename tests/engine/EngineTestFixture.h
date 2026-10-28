@@ -5,10 +5,14 @@
 
 #include <gtest/gtest.h>
 
+#include "core/DefaultSystems.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "core/EngineConfig.h"
 #include "core/FileSystem.h"
 #include "multithreading/ThreadPool.h"
+#include "networkModule/NetworkSettings.h"
+#include "renderModule/PassList.h"
 #include "rhi/GraphicsBackend.h"
 
 namespace SFE::EngineTests {
@@ -32,8 +36,9 @@ namespace SFE::EngineTests {
 	// Every frame advances exactly this much.
 	inline constexpr float kFrameTime = 1.f / 60.f;
 
-	// One engine for the whole run, the way the runtime starts it but on the None backend: no window, no GPU,
-	// a fixed frame step. The engine is a process-wide singleton, so it cannot be brought up per test.
+	// One engine for the whole run, put together as an application puts it together but on the None backend: no window,
+	// no GPU, a fixed frame step, no numbers file, every module of the engine's. The engine is a process-wide singleton,
+	// so it cannot be brought up per test.
 	class EngineEnvironment : public testing::Environment {
 	public:
 		void SetUp() override {
@@ -47,10 +52,20 @@ namespace SFE::EngineTests {
 			FileSystem::setRoot(content ? std::string(content) : FileSystem::guessContentRoot().string());
 
 			auto* engine = Engine::instance();
+			EngineConfig config;
+			config.fixedDeltaTime = kFrameTime;
+			engine->init(config);
 			engine->createWindow(1280, 720, nullptr, "engine tests");
-			engine->setFixedDeltaTime(kFrameTime);
 			engine->initThread();
-			engine->initRender();
+			Modules::addSceneCore();
+			Modules::addCamera();
+			Modules::addFreeCamera();
+			Modules::addRenderer(Render::defaultPasses());
+			Modules::addPhysics();
+			Modules::addAudio();
+			Modules::addNetwork({});
+			Modules::schedule();
+			engine->start();
 			ASSERT_TRUE(engine->isAlive());
 		}
 

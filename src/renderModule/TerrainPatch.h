@@ -7,9 +7,9 @@ namespace SFE::Render {
 	// The ground drawn dense near the camera (g_buffer_ground.vs, sfe_ground_patch.glsl): a square of a heightfield mesh's
 	// vertices cut finer, at the mesh's heights raised or lowered by the application (sfeUserGroundOffset) and eased out
 	// to the mesh at its edge; the mesh itself put out of sight under it. Where and how fine is its producer's; the
-	// engine draws it (GeometryPass, with the first kTerrainFS group's textures, until step 6's DrawClass).
+	// engine draws it (GeometryPass, with the first Ground group's (DrawClass::Ground) textures and fragment shader).
 	struct TerrainPatch {
-		TextureHandle heights{}; // R32F, a texel a mesh vertex, rows along z (AssetsModule::terrainHeightsTexture)
+		TextureHandle heights{}; // R32F, a texel a mesh vertex, rows along z (its producer's)
 		Math::Vec4 grid{};       // xy the world x and z of the mesh's first vertex, z its vertices' spacing, w its base height
 		Math::Vec4 square{};     // xy its least world x and z, on mesh vertices; z its side, whole mesh cells (0: none);
 		                         // w its vertices' spacing, the mesh's divided by a whole number
@@ -21,8 +21,8 @@ namespace SFE::Render {
 	const TerrainPatch& terrainPatch();
 	// RenderSystem only: create (a nearest sampler and one R32F texel of 0) in its constructor; destroy in its destructor
 	// frees those two alone and resets the published patch to {} -- never the published heights, which are the
-	// producer's (AssetsModule::terrainHeightsTexture's cached asset, Terrain.cpp:554-568, GrassPass's binding 17 too);
-	// heights() the published heights with the nearest sampler, or the texel of 0.
+	// producer's: a texture it keeps for as long as it publishes it; heights() the published heights with the nearest
+	// sampler, or the texel of 0.
 	void createTerrainPatch(RenderHardwareInterface& rhi);
 	void destroyTerrainPatch();
 	std::pair<TextureHandle, SamplerHandle> terrainPatchHeights();

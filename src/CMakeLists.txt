@@ -37,8 +37,8 @@ if(EDITOR)
 	target_compile_definitions(${ENGINE_NAME} PRIVATE EDITOR_ENABLED)
 endif()
 
-# The engine is a library. Whoever builds a game with it brings its own executable, links this and calls its
-# registration before Engine::init; see core/GameModule.h.
+# The engine is a library. Whoever builds a game with it brings its own executable, links this and puts the engine
+# together: Engine::init(config), the modules it wants (core/DefaultSystems.h), its own systems, Engine::start().
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SRC})
 
 add_subdirectory(submodules/ecss)
@@ -49,7 +49,7 @@ add_subdirectory(submodules/meshoptimizer)
 target_link_libraries(${ENGINE_NAME} PRIVATE meshoptimizer)
 
 # Audio. miniaudio is one C file; its own CMakeLists also looks for libvorbis/libopus and builds extra nodes, of
-# which the engine takes only the reverb, for AudioSystem's echo of the wood.
+# which the engine takes only the reverb, for AudioSystem's reverb.
 add_library(miniaudio STATIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio/miniaudio.c"
 	"${CMAKE_CURRENT_SOURCE_DIR}/submodules/miniaudio/extras/nodes/ma_reverb_node/ma_reverb_node.c"

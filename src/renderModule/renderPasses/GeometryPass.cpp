@@ -7,7 +7,6 @@
 #include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
 #include "assetsModule/modelModule/ModelLoader.h"
-#include "assetsModule/modelModule/Terrain.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/GBuffer.h"
 #include "renderModule/MaterialTextures.h"
@@ -24,6 +23,7 @@
 #include "componentsModule/OutlineComponent.h"
 #include "containersModule/Vector.h"
 #include "core/ECSHandler.h"
+#include "core/Engine.h"
 #include "multithreading/ThreadPool.h"
 #include "debugModule/Benchmark.h"
 #include "ecss/Registry.h"
@@ -32,7 +32,6 @@
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/systems/RenderSystem.h"
 #include "systemsModule/SystemManager.h"
-#include "systemsModule/SystemsPriority.h"
 
 using namespace SFE::Render::RenderPasses;
 
@@ -93,10 +92,7 @@ void GeometryPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.shaders.vertex = Engine::instance()->rhi()->loadShader(ShaderStage::Vertex, "shaders/g_buffer.vs");
 	pipelineDesc.shaders.fragment = Engine::instance()->rhi()->loadShader(ShaderStage::Fragment, "shaders/g_buffer.fs");
 
-	Render::DescriptorSetLayoutDesc texLayoutDescGBuf;
-	for (uint32_t binding = SFE::DIFFUSE; binding <= SFE::EMISSIVE; ++binding) {
-		texLayoutDescGBuf.bindings.emplace_back(binding, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	}
+	const Render::DescriptorSetLayoutDesc texLayoutDescGBuf = materialTextureLayout();
 	gBuffetLayout = rhi->createDescriptorSetLayout(texLayoutDescGBuf);
 	gBuffetLayoutSet = rhi->allocateDescriptorSet(gBuffetLayout);
 	if (frameLayout) {
@@ -417,7 +413,8 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 	for (const auto& group : scene.groups(GpuScene::List::GBuffer)) {
 		const bool laid = prepass && group.cutout && group.vertexShader == ComponentsModule::DefaultGBufferVS
 			&& group.fragmentShader == ComponentsModule::DefaultGBufferMaskedFS;
-		const auto its = group.fragmentShader == AssetsModule::kTerrainFS ? Turn::Ground : group.cutout ? Turn::Cutout : Turn::Solid;
+		const auto its = group.drawClass == ComponentsModule::DrawClass::Ground ? Turn::Ground
+			: group.drawClass == ComponentsModule::DrawClass::Cutout ? Turn::Cutout : Turn::Solid;
 		if (group.batchCount == 0 || (its != turn && !(laid && turn == Turn::Prepass))) {
 			continue;
 		}
@@ -439,7 +436,7 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 			patched = true;
 			const auto& patch = terrainPatch();
 			if (patch.square.z > 0.f) {
-				if (const auto ground = groundPatchPipeline(fillMode)) {
+				if (const auto ground = groundPatchPipeline(fillMode, group.fragmentShader)) {
 					bound = ground;
 					rhi->cmdBindPipeline(cmd, ground);
 					rhi->cmdBindDescriptorSets(cmd, ground, 0, sets, 2);
@@ -450,7 +447,8 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 		}
 
 		const auto pipeline = getGBufferPipeline(group.vertexShader,
-			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode, group.oneSided);
+			!laid ? group.fragmentShader : turn == Turn::Prepass ? kMaskedDepthFS : kMaskedEarlyFS, fillMode,
+			group.oneSided || group.drawClass == ComponentsModule::DrawClass::Ground);
 		if (pipeline.id != bound.id) {
 			bound = pipeline;
 			rhi->cmdBindPipeline(cmd, pipeline);
@@ -465,13 +463,13 @@ void GeometryPass::drawGBuffer(const CommandListHandle cmd, const GpuScene::View
 	}
 }
 
-SFE::Render::PipelineHandle GeometryPass::groundPatchPipeline(const Render::PolygonFillMode fillMode) {
-	auto& pipeline = mGroundPatchPipelines[fillMode == PolygonFillMode::Line ? 1 : 0];
+SFE::Render::PipelineHandle GeometryPass::groundPatchPipeline(const Render::PolygonFillMode fillMode, const std::string& fragmentShader) {
+	auto& pipeline = mGroundPatchPipelines[fragmentShader + (fillMode == PolygonFillMode::Line ? "|line" : "|fill")];
 	if (!pipeline) {
 		auto* rhi = Engine::instance()->rhi();
 		auto desc = mGBufferPipelineDesc;
 		desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer_ground.vs");
-		desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, AssetsModule::kTerrainFS);
+		desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, fragmentShader);
 		if (!desc.shaders.vertex || !desc.shaders.fragment) {
 			return {};
 		}
@@ -485,10 +483,10 @@ SFE::Render::PipelineHandle GeometryPass::groundPatchPipeline(const Render::Poly
 }
 
 SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,
-	const Render::PolygonFillMode fillMode, const bool oneSided) {
+	const Render::PolygonFillMode fillMode, const bool cullBack) {
 	const std::string vs = vertexShader.empty() ? ComponentsModule::DefaultGBufferVS : vertexShader;
 	const std::string fs = fragmentShader.empty() ? ComponentsModule::DefaultGBufferFS : fragmentShader;
-	const auto key = vs + "|" + fs + (fillMode == PolygonFillMode::Line ? "|line" : "|fill") + (oneSided ? "|one" : "");
+	const auto key = vs + "|" + fs + (fillMode == PolygonFillMode::Line ? "|line" : "|fill") + (cullBack ? "|back" : "");
 	if (const auto it = mGBufferPipelines.find(key); it != mGBufferPipelines.end()) {
 		return it->second;
 	}
@@ -512,7 +510,7 @@ SFE::Render::PipelineHandle GeometryPass::getGBufferPipeline(const std::string& 
 	// So is a mesh whose back side is never seen (Mesh::oneSided), and then where a coarser level's thin walls cross,
 	// what shows is still the side facing the eye. Its instances are taken to keep the winding: a mirroring transform
 	// would show it inside out, and nothing in the content mirrors.
-	if (fs == AssetsModule::kTerrainFS || oneSided) {
+	if (cullBack) {
 		desc.cullMode = CullMode::Back;
 	}
 	// The foliage pre-pass (drawGBuffer): the cut into the depth alone; then the leaves shaded over it where it is

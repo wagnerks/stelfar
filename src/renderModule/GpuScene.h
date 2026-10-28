@@ -36,6 +36,7 @@ namespace SFE::Render {
 			ComponentsModule::Materials textures;
 			uint64_t textureKey = 0;
 			bool oneSided = false;     // its meshes' back faces culled (Mesh::oneSided)
+			ComponentsModule::DrawClass drawClass = ComponentsModule::DrawClass::Solid; // the turn it is drawn in (MaterialRules::drawClass)
 			// Shadow
 			TextureHandle maskTexture; // empty: no mask, bind the default
 			bool cutout = false;       // needs the fragment shader: alpha cutout, mask or dithered opacity

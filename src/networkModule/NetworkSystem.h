@@ -21,8 +21,8 @@ namespace SFE::Network {
 
 	// Online play: a session of players, one of them the host, and messages between them. The host is the authority
 	// over the shared world; each player is a number the host hands out as they join (the host itself is 0). A client
-	// talks to the host alone: what the others should hear, the host passes on. Without Engine::setNetwork the game
-	// plays offline, as the one player 0, the host of nobody.
+	// talks to the host alone: what the others should hear, the host passes on. With the default Settings it plays
+	// offline, as the one player 0, the host of nobody.
 	//
 	// Main thread. Messages that arrived are handed to their handlers at the start of each frame (this system runs
 	// first); what is sent during the frame goes out at the start of the next.
@@ -32,7 +32,7 @@ namespace SFE::Network {
 		using Handler = std::function<void(PlayerId from, NetReader& message)>;
 		using PlayerHandler = std::function<void(PlayerId player)>;
 
-		NetworkSystem();
+		explicit NetworkSystem(const Settings& settings);
 		~NetworkSystem() override;
 
 		void update(float dt) override;

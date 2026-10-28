@@ -6,7 +6,9 @@
 #include "assetsModule/TextureHandler.h"
 #include "core/Clocks.h"
 #include "core/Engine.h"
+#include "core/Params.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/DebugView.h"
 #include "renderModule/IblBaker.h"
 #include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
@@ -21,10 +23,18 @@
 #include "logsModule/logger.h"
 #include "debugModule/Benchmark.h"
 #include "ecss/Registry.h"
-#include "systemsModule/SystemsPriority.h"
 #include "renderModule/renderPasses/SunShadowPass.h"
 
 using namespace SFE::Render::RenderPasses;
+
+// The lighting's debug view, a number of the registry: --debug-term, the debugTerm command and the Graphics panel set it.
+int& SFE::Render::debugView() {
+	static int& view = SFE::Params::value(kDebugViewGroup, kDebugViewName, 0, { .help = "What the lighting draws instead of the "
+		"lit picture (deferred_shading.fs's debugTerm): 0 the picture, 1 shadow, 2 ambient, 3 direct light, 4 albedo, "
+		"5 normals, 6 AO, 7 irradiance, 8 reflection, 9 BRDF, 10-14 the shadow's cascades, 15 the material's AO.",
+		.min = 0.f, .max = 15.f, .transient = true });
+	return view;
+}
 
 
 LightingPass::LightingPass() {
@@ -164,12 +174,13 @@ void LightingPass::useSkyLight(SystemsModule::RenderData& renderDataHandle) {
 	}
 }
 
-std::array<float, 5> LightingPass::skyLightKey(const SystemsModule::RenderData& renderDataHandle) {
+std::array<float, 8> LightingPass::skyLightKey(const SystemsModule::RenderData& renderDataHandle) {
 	const auto sky = SFE::Render::Atmosphere::sceneSky();
 	if (!sky) {
 		return {};
 	}
-	return { sky->sunElevation, sky->sunAzimuth, sky->cloudCoverage, renderDataHandle.graphics.sunIntensity, 1.f };
+	return { sky->sunElevation, sky->sunAzimuth, sky->cloudCoverage, renderDataHandle.graphics.sunIntensity, 1.f,
+		sky->groundAlbedo.x, sky->groundAlbedo.y, sky->groundAlbedo.z };
 }
 
 void LightingPass::updateSkyLight(SystemsModule::RenderData& renderDataHandle) {
@@ -310,7 +321,7 @@ void LightingPass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	drawData.shadowAmbient = renderDataHandle.graphics.shadowAmbient;
 	drawData.padLook0 = renderDataHandle.graphics.sssWrap;
 	drawData.padLook1 = renderDataHandle.graphics.sssStrength;
-	drawData.debugTerm = static_cast<float>(Engine::instance()->lightingDebugTerm());
+	drawData.debugTerm = static_cast<float>(Render::debugView());
 	drawData.sheenStrength = renderDataHandle.graphics.sheen ? renderDataHandle.graphics.sheenStrength : 0.f;
 	drawData.rimStrength = renderDataHandle.graphics.rimStrength;
 	drawData.taaFrame = renderDataHandle.graphics.taa ? static_cast<float>(renderDataHandle.taaFrame % 4096) : -1.f;

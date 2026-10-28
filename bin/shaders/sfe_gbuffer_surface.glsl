@@ -200,9 +200,9 @@ void main() {
     // the metalness as the maps give them, changed before anything below is worked out from them.
     sfeUserSurface(linAlb, Nw, roughness, metallic);
 #ifdef SFE_GBUFFER_CUTOUT
-    // A piece of a cut-out material dissolving (SfeMaterial::bare, the pieces whose vPiece is under it): a texel the
+    // A piece of a cut-out material dissolving (SfeMaterial::dissolve, the pieces whose vPiece is under it): a texel the
     // application keeps (sfe_user_dissolve.glsl) stays, in the colour it gives it, and the rest are gone.
-    if (pc.alphaCutoff > 0.0 && vPiece < pc.bare) {
+    if (pc.alphaCutoff > 0.0 && vPiece < pc.dissolve) {
         if (!sfeUserDissolveKeeps(linAlb)) {
             discard;
         }

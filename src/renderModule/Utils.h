@@ -10,19 +10,9 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::Render {
-	class FrameBlackboard;
-
 	class Utils {
 	public:
-		// The area tint map (AreaTintFrame); without one white, under the zero area the shaders read as no tint.
-		static std::pair<TextureHandle, SamplerHandle> areaTintMap(const FrameBlackboard& frame);
-		// The marks in the ground (GroundMarksFrame); without them a one-texel array of unmarked ground.
-		static std::pair<TextureHandle, SamplerHandle> groundMarksMap(const FrameBlackboard& frame);
-		// The vehicles' mud maps (MudMapsFrame); without them a one-texel array of nothing caked.
-		static std::pair<TextureHandle, SamplerHandle> mudMaps(const FrameBlackboard& frame);
-		// The terrain's heights under the ground drawn dense (GroundMarksFrame::heights); without them one texel of 0.
-		static std::pair<TextureHandle, SamplerHandle> groundHeightsMap(const FrameBlackboard& frame);
-		// Draws the ground drawn dense over `patch` (GroundMarksFrame::patch) with the pipeline bound, its vertex shader
+		// Draws the ground drawn dense over `patch` (TerrainPatch::square) with the pipeline bound, its vertex shader
 		// g_buffer_ground.vs's sfeGroundPatchVertex: a row of quads an instance, from its own index buffer.
 		static void drawGroundPatch(CommandListHandle cmd, const Math::Vec4& patch);
 

@@ -7,7 +7,6 @@
 #include <unordered_map>
 
 #include "assetsModule/modelModule/MeshVaoRegistry.h"
-#include "assetsModule/modelModule/Terrain.h"
 #include "componentsModule/MeshComponent.h"
 #include "componentsModule/OutlineComponent.h"
 #include "componentsModule/TransformComponent.h"
@@ -516,6 +515,7 @@ namespace SFE::Render {
 			group.fragmentShader = material.fragmentShader.empty() ? std::string(ComponentsModule::DefaultGBufferFS) : material.fragmentShader;
 			// Whether the G-buffer shader discards: GpuMaterialTable gives it a cutoff exactly then.
 			group.cutout = material.alphaDither || MaterialRules::cutoutCutoff(material.alphaCutoff, material.alphaFromMaps, material.fragmentShader) > 0.f;
+			group.drawClass = MaterialRules::drawClass(material);
 			if (!group.cutout && group.fragmentShader == ComponentsModule::DefaultGBufferFS) {
 				group.fragmentShader = ComponentsModule::DefaultGBufferSolidFS;
 			}
@@ -523,7 +523,7 @@ namespace SFE::Render {
 			group.textureKey = MaterialRules::textureKey(material.materials);
 			group.oneSided = mesh.oneSided;
 			const auto key = group.vertexShader + '|' + group.fragmentShader + '|' + std::to_string(group.textureKey)
-				+ (group.oneSided ? "|one" : "|two");
+				+ (group.oneSided ? "|one" : "|two") + (group.drawClass == ComponentsModule::DrawClass::Ground ? "|ground" : "");
 			const auto index = groupFor(List::GBuffer, key, std::move(group));
 			// Once under every level of the chain. The levels are consecutive mesh ids, they share the draw
 			// group, and the culling keeps the one whose level matches the size on screen, so this costs a
@@ -1002,7 +1002,7 @@ namespace SFE::Render {
 		// The G-buffer only: the shadow views draw the ground a level or two coarser already.
 		if (list == List::GBuffer) {
 			for (const auto& group : data.groups) {
-				if (group.fragmentShader == AssetsModule::kTerrainFS) {
+				if (group.drawClass == ComponentsModule::DrawClass::Ground) {
 					params.groundFirst = group.firstBatch;
 					params.groundEnd = group.firstBatch + group.batchCount;
 					params.groundLodDistance = renderSystem->getRenderData().graphics.terrainLodDistance;

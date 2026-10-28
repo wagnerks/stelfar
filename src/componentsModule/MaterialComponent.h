@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 #include "assetsModule/modelModule/Material.h"
@@ -10,7 +11,8 @@
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE::ComponentsModule {
-	constexpr int MaxMaterialTexturesCount = 12;
+	constexpr int MaxMaterialTexturesCount = 16;
+	static_assert(MaxMaterialTexturesCount >= SFE::USER3, "a slot each, DIFFUSE..USER3");
 	inline constexpr const char* DefaultGBufferVS = "shaders/g_buffer.vs";
 	inline constexpr const char* DefaultGBufferFS = "shaders/g_buffer.fs";
 	inline constexpr const char* DefaultGBufferMaskedFS = "shaders/g_buffer_masked.fs";
@@ -18,6 +20,9 @@ namespace SFE::ComponentsModule {
 	inline constexpr const char* DefaultGBufferSolidFS = "shaders/g_buffer_solid.fs";
 	// A transparent material's, unless it names one of its own (GlassPass).
 	inline constexpr const char* DefaultGlassFS = "shaders/glass.fs";
+	// How a material is drawn into the G-buffer (MaterialRules::drawClass): Solid, Cutout where its shader discards by its
+	// alpha (the cut-out turn, after the solid surfaces), Ground the ground (last, and under the dense patch).
+	enum class DrawClass : uint8_t { Solid, Cutout, Ground };
 
 	struct MaterialData {
 		int slot = 0;
@@ -27,7 +32,9 @@ namespace SFE::ComponentsModule {
 
 	struct Materials {
 		void addMaterial(MaterialData data) {
-			material[materialsCount++] = std::move(data);
+			if (materialsCount < MaxMaterialTexturesCount) {
+				material[materialsCount++] = std::move(data);
+			}
 		}
 		void clearMaterials() {
 			materialsCount = 0;
@@ -71,21 +78,16 @@ namespace SFE::ComponentsModule {
 		bool shadowOnly = false;
 		// Drawn, but casting no shadow: a flame.
 		bool castsShadow = true;
-		// Soaked below this many metres over the model's origin, straight up: darker, cloth and skin with water in
-		// them. kDry, far below any model, when dry.
-		static constexpr float kDry = -1000.f;
-		float wetBelow = kDry;
-		// Caked with mud, in the model as it rests: up to kMudWheels wheels' tyres, each one's hub (xyz) and radius (w, 0
-		// for none) and how caked its tread is (mudTreads, 0 clean to 1 wholly), from the tread inward, turning with it;
-		// the rest as its mud map has it (MudMapsFrame), the drops that struck it: the map's low corner in the model (xyz)
-		// and its first layer + 1 (w, 0 for none).
-		static constexpr size_t kMudWheels = 8;
-		Math::Vec4 mudWheels[kMudWheels]{};
-		float mudTreads[kMudWheels]{};
-		Math::Vec4 mudMap{};
-		// How far a plant has gone bare, 0 not at all to 1 dead: each triangle of a cut-out surface (a leaf) is gone
-		// from its own point on the way (sfePieceKey), and the rest of it, the bark, greys.
-		float bare = 0.f;
+		// A ground seen from above (DrawClass::Ground): drawn after everything else, its back faces culled, its own mesh put
+		// out of sight under the dense patch near the camera (TerrainPatch) and a level coarser past
+		// GraphicsSettings::terrainLodDistance. Set by whoever makes the ground's material.
+		bool ground = false;
+		// The application's own numbers for its shaders, eight a material (SfeMaterial::user): the engine passes them on and
+		// never reads them; what each lane means is the shader's that draws the material.
+		std::array<Math::Vec4, 2> user{};
+		// How much of its cut-out surface is gone, 0 none to 1 all: each triangle (a leaf) goes at its own point on the way
+		// (sfePieceKey), and what of a gone piece stays, and in what colour, is the application's (sfe_user_dissolve.glsl).
+		float dissolve = 0.f;
 		// Where the texture coordinates fall inside `uv` (u min, v min, u max, v max), the surface takes the
 		// TRIPLANAR_ALBEDO and TRIPLANAR_NORMALS textures instead (the second: TRIPLANAR2_*), projected along the
 		// model's axes, a repeat every `metres`: bark on a trunk, or stone and moss on a rock, whose coordinates only

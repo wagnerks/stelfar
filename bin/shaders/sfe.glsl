@@ -41,8 +41,8 @@ bool sfeLeafHole(float mapMask, vec2 across, float leafLight) {
 }
 
 // 0..1 for a vertex of a model standing at `origin`, passed on flat so each triangle takes its first (or, on OpenGL,
-// last) vertex's: the point on the way to bare (SfeMaterial::bare) at which that triangle of a cut-out surface, a leaf,
-// is gone. Where the model stands tells two trees of one model apart, so they do not lose the same leaves.
+// last) vertex's: the point at which that triangle of a cut-out surface, a leaf, dissolves (SfeMaterial::dissolve).
+// Where the model stands tells two trees of one model apart, so they do not lose the same leaves.
 float sfePieceKey(uint vertex, vec3 origin) {
     uvec3 v = uvec3(vertex, uvec2(ivec2(floor(origin.xz * 4.0))));
     v = v * 1664525u + 1013904223u;
@@ -126,7 +126,8 @@ bool sfeIsFoliage(vec4 material) {
 // A clearcoat of exactly this is no coat but a glint: the surface is shaded as it is, and where it mirrors the sun into
 // the eye it flashes, blinding (a bald crown). Too thin for any coat to use.
 const float kSfeGlint = 1.0 / 255.0;
-// And this, the ground: shaded as it is, and known for what stains it (the area tint).
+// And this, the ground: shaded as it is, and told apart as the ground by the lighting, the particles and an
+// application's hooks (sfeUserLitAlbedo's `ground`).
 const float kSfeGround = 3.0 / 255.0;
 bool sfeIsGround(float clearcoat) {
     return abs(clearcoat - kSfeGround) < 0.5 / 255.0;
@@ -204,25 +205,6 @@ float sfeLuma(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
-// How much a colour is a plant's: its hue from a yellow green through green (about 50 to 180 degrees; straw, blond
-// hair and skin are below it), and not near grey.
-float sfePlantColour(vec3 c) {
-    const float hi = max(c.r, max(c.g, c.b));
-    const float chroma = hi - min(c.r, min(c.g, c.b));
-    if (chroma <= 1e-5) {
-        return 0.0;
-    }
-    float hue = hi == c.r ? (c.g - c.b) / chroma : (hi == c.g ? 2.0 + (c.b - c.r) / chroma : 4.0 + (c.r - c.g) / chroma);
-    hue *= 60.0;
-    return smoothstep(45.0, 58.0, hue) * (1.0 - smoothstep(170.0, 190.0, hue)) * smoothstep(0.15, 0.3, chroma / hi);
-}
-
-// A plant going bare (SfeMaterial::bare) at a texel of a triangle of its cut-out surface whose point on the way
-// (sfePieceKey) it has passed: false where that is a leaf, gone; the twigs painted between the leaves stay, dead.
-bool sfeBareKeeps(vec3 linearColour) {
-    return sfePlantColour(linearColour) < 0.5;
-}
-
 // How much the surface scatters light under it, 0 to 1, from the G-buffer's normal (shortened by up to half for it) and
 // its metalness (gMaterial.r).
 float sfeScatters(vec3 gNormalSample, float metallic) {
@@ -280,11 +262,6 @@ vec4 sfeGBufferEmissive(vec3 emissive, sampler2D map, vec2 uv) {
     mat4 invProjection; /* of the jittered projection */ \
     mat4 invView; \
     vec4 style;      /* x the drawn look, GraphicsSettings::stylise */ \
-    vec4 spare0;     /* spare0-4 written 0, read by nobody: an application's frame data is in its user set (UserFrameSet); step 6 takes them out */ \
-    vec4 spare1; \
-    vec4 spare2; \
-    vec4 spare3; \
-    vec4 spare4; \
     vec4 patchDeepest; /* x TerrainPatch::deepest: metres the application lowers the ground drawn dense at most */ \
-    vec4 marksGrid;   /* TerrainPatch::grid: xy the mesh's first vertex's world x and z, z their spacing, w its base height */ \
-    vec4 marksPatch;  /* TerrainPatch::square: xy its least x and z, z its side, w its spacing; a zero side, none */
+    vec4 patchGrid;    /* TerrainPatch::grid: xy the mesh's first vertex's world x and z, z their spacing, w its base height */ \
+    vec4 patchSquare;  /* TerrainPatch::square: xy its least x and z, z its side, w its spacing; a zero side, none */

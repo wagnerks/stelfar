@@ -92,7 +92,7 @@ void main() {
 
     vec3 linAlb = pow(diff.rgb, vec3(2.2)) * pc.tint;
     // A piece dissolving, as in the default surface (sfe_gbuffer_surface.glsl).
-    if (vPiece < pc.bare) {
+    if (vPiece < pc.dissolve) {
         if (!sfeUserDissolveKeeps(linAlb)) {
             discard;
         }

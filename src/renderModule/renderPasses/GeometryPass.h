@@ -66,12 +66,12 @@ namespace SFE::Render::RenderPasses {
 	private:
 		// The fill mode is part of the key: wireframe is a second pipeline, not a state change. The
 		// RHI has no dynamic polygon mode -- Vulkan bakes it into the PSO and cannot override it. So is whether back faces
-		// are culled (DrawGroup::oneSided).
+		// are culled: a one-sided mesh, the ground.
 		Render::PipelineHandle getGBufferPipeline(const std::string& vertexShader, const std::string& fragmentShader,
-			Render::PolygonFillMode fillMode = Render::PolygonFillMode::Fill, bool oneSided = false);
-		// The ground drawn dense near the camera (GroundMarksFrame::patch): g_buffer_ground.vs with the terrain's own
-		// fragment shader, no vertex input. None if its shaders are missing.
-		Render::PipelineHandle groundPatchPipeline(Render::PolygonFillMode fillMode);
+			Render::PolygonFillMode fillMode = Render::PolygonFillMode::Fill, bool cullBack = false);
+		// The ground drawn dense near the camera (TerrainPatch): g_buffer_ground.vs with the first Ground group's fragment
+		// shader, no vertex input. None if its shaders are missing.
+		Render::PipelineHandle groundPatchPipeline(Render::PolygonFillMode fillMode, const std::string& fragmentShader);
 		void initGrid(Render::DescriptorSetLayoutHandle frameLayout);
 		void drawGrid(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd);
 
@@ -97,7 +97,7 @@ namespace SFE::Render::RenderPasses {
 
 		GraphicsPipelineDesc mGBufferPipelineDesc;
 		std::unordered_map<std::string, PipelineHandle> mGBufferPipelines;
-		PipelineHandle mGroundPatchPipelines[2]{}; // filled, wireframe
+		std::unordered_map<std::string, PipelineHandle> mGroundPatchPipelines; // by fragment shader and fill mode
 
 		PipelineHandle mGridPipeline;
 		BufferHandle mGridVBO;

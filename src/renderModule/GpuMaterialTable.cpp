@@ -2,10 +2,10 @@
 
 #include <algorithm>
 
-#include "assetsModule/modelModule/Terrain.h"
 #include "core/ECSHandler.h"
 #include "core/Engine.h"
 #include "logsModule/logger.h"
+#include "renderModule/GpuMaterial.h"
 #include "renderModule/MaterialRules.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -21,7 +21,7 @@ namespace SFE::Render {
 			// How it moves in the wind, for the vertex shaders: bit 32 a tree, bit 64 a plant.
 			m.mapMask += src.sway == ComponentsModule::Sway::Tree ? 32.f : src.sway == ComponentsModule::Sway::Plant ? 64.f : 0.f;
 			// Bit 128 the ground, whose mesh is put out of sight where it is drawn dense (sfeGroundUnderPatch).
-			m.mapMask += src.fragmentShader == AssetsModule::kTerrainFS ? 128.f : 0.f;
+			m.mapMask += src.ground ? 128.f : 0.f;
 			m.alphaCutoff = src.alphaDither ? 1.78f : cutoff;
 			m.uvSel = MaterialRules::gBufferUvSel(src.materials);
 			m.specFactor = src.specFactor;
@@ -40,23 +40,21 @@ namespace SFE::Render {
 				m.triplanarRepeat[i] = src.triplanar[i].metres > 0.f ? 1.f / src.triplanar[i].metres : 0.f;
 				m.triplanarRotated += src.triplanar[i].rotated ? static_cast<float>(1u << i) : 0.f;
 			}
-			m.wetBelow = src.wetBelow;
-			for (size_t w = 0; w < ComponentsModule::MaterialComponent::kMudWheels; ++w) {
-				for (size_t i = 0; i < 4; ++i) {
-					m.mudWheels[4 * w + i] = src.mudWheels[w][i];
-				}
-				m.mudTreads[w] = src.mudTreads[w];
-			}
-			for (size_t i = 0; i < 4; ++i) {
-				m.mudMap[i] = src.mudMap[i];
-			}
-			m.bare = src.bare;
+			m.dissolve = src.dissolve;
 			m.emissive[0] = src.emissive.x;
 			m.emissive[1] = src.emissive.y;
 			m.emissive[2] = src.emissive.z;
+			for (size_t lane = 0; lane < src.user.size(); ++lane) {
+				for (size_t i = 0; i < 4; ++i) {
+					m.user[4 * lane + i] = src.user[lane][i];
+				}
+			}
 			return m;
 		}
 	}
+
+	GpuMaterialTable::GpuMaterialTable() = default;
+	GpuMaterialTable::~GpuMaterialTable() = default;
 
 	uint32_t GpuMaterialTable::acquire(const ComponentsModule::MaterialComponent& material) {
 		const auto hash = MaterialRules::materialHash(material);
@@ -118,6 +116,11 @@ namespace SFE::Render {
 	size_t GpuMaterialTable::liveEntries() {
 		std::lock_guard lock(mMutex);
 		return mIndexByHash.size();
+	}
+
+	GpuMaterial GpuMaterialTable::entry(const uint32_t index) {
+		std::lock_guard lock(mMutex);
+		return index < mEntries.size() ? mEntries[index] : GpuMaterial{};
 	}
 
 	uint32_t GpuMaterialTable::acquireGlassSlot(const TextureHandle albedo) {

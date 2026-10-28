@@ -51,55 +51,6 @@ namespace SFE::Render {
 		std::vector<Math::Mat4> matrices;
 	};
 
-	// A world map (x, z) of how far each place has gone towards a tint: r its foliage, g its water, b its air. Put by
-	// the game (under FrameId::AreaTint); without it nothing is tinted.
-	struct AreaTintFrame {
-		TextureHandle map;
-		SamplerHandle sampler;
-		Math::Vec4 area;    // min x, min z, 1 / size along x and z
-		Math::Vec4 foliage; // rgb what the foliage's grey is multiplied by, a how far a full map value takes it
-		Math::Vec4 water;
-		Math::Vec4 air;
-		// The land by its map value: from x it is foul, the bank turning to mud and the grass's ground with it, wholly
-		// by y; z the metres over the water the litter lies up to, all the bank that turns.
-		Math::Vec4 shore;
-		// Fumes off the water: a low mist over it where its map value is past fumes.x, thickest at 1, thinning to 1/e
-		// fumes.y metres up; fumesColour.rgb what the light in it is multiplied by, .a its density per metre at the
-		// water line over the foulest water. A zero density, none.
-		Math::Vec4 fumes;
-		Math::Vec4 fumesColour;
-	};
-
-	// The marks in the ground round the camera (the game's GroundMarks): a 2D array, layer 0 a fine window and layer 1 a
-	// coarse one, each wrapping round as the camera moves on, so a place at xz is at xz / span in its layer; r how deep
-	// the ground is pressed there, of size.z metres, g how churned up. Put by the game (under FrameId::GroundMarks);
-	// without it the ground is unmarked.
-	struct GroundMarksFrame {
-		TextureHandle map;
-		SamplerHandle sampler;
-		Math::Vec4 window; // xy the fine window's least x and z, zw the coarse one's, metres
-		Math::Vec4 size;   // x the fine window's span, y the coarse one's, z the deepest pressed, metres; w how deep grass lies flat
-		Math::Vec4 look;   // x spare; y how far round a mark the grass lies flat and its walls are read, metres; z how wet churned ground looks; w ruts' darkening per metre below their sides
-		Math::Vec4 churn;  // xy the churn the soil starts and wholly shows at, zw the churn grass starts going and is all gone at
-		// A square of ground near the camera drawn dense (g_buffer_ground.vs), so that its marks are pressed into it as
-		// they are deep; the terrain's own mesh is put out of sight under it (sfeGroundUnderPatch). The terrain's heights,
-		// R32F, a texel a vertex of its mesh, as AssetsModule::terrainHeightsTexture makes them.
-		TextureHandle heights;
-		Math::Vec4 grid;   // xy the world x and z of the terrain mesh's first vertex, z its vertices' spacing, w the terrain's height
-		Math::Vec4 patch;  // xy the square's least world x and z, on the mesh's vertices; z its side; w its vertices' spacing. A zero side, none
-	};
-
-	// Mud maps (the game's vehicles'): how caked with mud each cell of a box over a model as it rests is, 0 clean to 1
-	// wholly (r), a map of kCells (x, y, z) cells of kCell metres a model; a 2D array, x across and z down each layer,
-	// a layer for each height (y), a map's layers one after another from its first (MaterialComponent::mudMap). Put by
-	// the game (under FrameId::MudMaps); without it nothing is caked by them.
-	struct MudMapsFrame {
-		static constexpr float kCell = 0.05f;
-		static constexpr uint32_t kCells[3] = { 56, 60, 128 };
-		TextureHandle map;
-		SamplerHandle sampler;
-	};
-
 	class FrameBlackboard {
 	public:
 		void set(const char* name, FrameResource resource) {
@@ -192,12 +143,6 @@ namespace SFE::Render {
 		constexpr const char* Csm = "csm";
 		constexpr const char* PointShadow = "pointShadow";
 		constexpr const char* ShadowPoint = "shadow.point";
-		constexpr const char* AreaTint = "areaTint";
-		constexpr const char* GroundMarks = "groundMarks";
-		constexpr const char* MudMaps = "mudMaps";
-		// A storage buffer of each entity's look, a uvec4 by its index (g_buffer.vs's sfeLooks), put by the game (set,
-		// FrameResource::buffer): its pieces of litter worn and dirtied. Without it nothing is.
-		constexpr const char* PieceLooks = "pieceLooks";
 	}
 
 }
