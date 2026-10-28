@@ -42,6 +42,7 @@
 #include "renderModule/Atmosphere.h"
 #include "mathModule/Forward.h"
 #include "propertiesModule/PropertiesSystem.h"
+#include "propertiesModule/SceneEvents.h"
 #include "systemsModule/systems/OcTreeSystem.h"
 #include "systemsModule/SystemManager.h"
 #include "logsModule/logger.h"
@@ -55,6 +56,14 @@ namespace {
 	// Texels a metre a cascade has at least for a caster's detail to read in its shadow -- a leaf card's cut-out outline,
 	// the finer of its levels of detail: a centimetre a texel, the cascades about the eye and hands.
 	constexpr float kFineTexelsPerMetre = 100.f;
+
+	// The sun turned, and its matrix made at once: the cascades are fitted to it in the same frame, and left to
+	// TransformSystem's worker the fit would read whichever matrix the worker had got to by then. What places an entity
+	// and reads its matrix in one frame reloads it itself (CameraSystem::placeCamera); the worker then finds it clean.
+	void placeSun(SFE::ComponentsModule::TransformComponent& sun, const SFE::Math::Vec3& rotation) {
+		sun.setRotate(rotation);
+		sun.reloadTransform();
+	}
 }
 
 CascadedShadowPass::CascadedShadowPass() {
@@ -101,12 +110,27 @@ void CascadedShadowPass::init(SystemsModule::RenderData& renderDataHandle) {
 	//cmp->resolution = Math::Vec2{ 256.f, 256.f };
 	//cmp->shadowCascadeLevels = { cameraProjection.getNear(), 50.f, 150.f, /*500.f, 5000.f*/ };
 	//cmp->updateCascades(cameraProjection);
-	transform->setRotate({ -32.f, 28.f, 8.f });
 	// An outdoor scene places the sun itself, and the air it shines through colours it.
 	if (const auto sky = Render::Atmosphere::sceneSky()) {
-		transform->setRotate(sky->sunRotation());
+		placeSun(*transform, sky->sunRotation());
 		worldLight->setLightColor(Render::Atmosphere::sunTransmittance(sky->toSun()));
+	} else {
+		placeSun(*transform, { -32.f, 28.f, 8.f });
 	}
+	// And the sky of each scene loaded after, placed and coloured as above when it is told of (SceneEvents.h): a scene
+	// told of before the first frame has that frame's cascades cast from its sun. The frames move it on from there.
+	PropertiesModule::onSceneLoaded(this, [this](const PropertiesModule::SceneLoaded&) {
+		const auto sky = Render::Atmosphere::sceneSky();
+		if (!sky) {
+			return;
+		}
+		if (auto sun = ECSHandler::registry().pinComponent<TransformComponent>(mShadowSource)) {
+			placeSun(*sun, sky->sunRotation());
+		}
+		if (auto light = ECSHandler::registry().pinComponent<LightSourceComponent>(mShadowSource)) {
+			light->setLightColor(Render::Atmosphere::sunTransmittance(sky->toSun()));
+		}
+	});
 
 	initRender();
 	renderDataHandle.frame.setData(FrameId::Csm, &mData);
@@ -320,7 +344,7 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 		if (rotation != mSunRotation) {
 			mSunRotation = rotation;
 			if (auto transform = ECSHandler::registry().pinComponent<TransformComponent>(mShadowSource)) {
-				transform->setRotate(rotation);
+				placeSun(*transform, rotation);
 			}
 		}
 		if (auto light = ECSHandler::registry().pinComponent<LightSourceComponent>(mShadowSource)) {

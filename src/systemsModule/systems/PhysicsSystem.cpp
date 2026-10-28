@@ -213,6 +213,33 @@ namespace SFE::SystemsModule {
 				}
 			}
 		}
+
+		// The entities of `candidates` that stand in a world as static colliders, in the one order every way of taking them
+		// lays them: what has a model -- with a collider, or drawing a heightfield -- by id, then the heightfields no model
+		// draws, by id. A scene told of after a world is made then lays what one there before it would, body for body.
+		std::vector<ecss::EntityId> staticOrder(const std::vector<ecss::EntityId>& candidates) {
+			auto& registry = ECSHandler::registry();
+			std::vector<ecss::EntityId> modelled;
+			std::vector<ecss::EntityId> fields;
+			for (const auto entity : candidates) {
+				if (!registry.hasComponent<ComponentsModule::TransformMatComp>(entity)) {
+					continue;
+				}
+				const bool field = registry.hasComponent<ComponentsModule::HeightfieldComponent>(entity);
+				if (const auto model = registry.pinComponent<const ModelComponent>(entity)) {
+					if (model->collider || field) {
+						modelled.push_back(entity);
+					}
+				}
+				else if (field) {
+					fields.push_back(entity);
+				}
+			}
+			std::ranges::sort(modelled);
+			std::ranges::sort(fields);
+			modelled.insert(modelled.end(), fields.begin(), fields.end());
+			return modelled;
+		}
 	}
 
 	PhysicsSystem::PhysicsSystem() : PhysicsSystem(kMainThreads) {}
@@ -231,17 +258,18 @@ namespace SFE::SystemsModule {
 		addStaticColliders();
 		mWorld->OptimizeBroadPhase();
 
-		// Take what is there (above), and listen for what is loaded after, the same way: replaceStatic. A scene loaded
-		// before the world first steps -- a game loading its scene once its systems are made -- is laid in at once, on the
-		// main thread, for whatever is made on it next; one loaded after goes in between two steps, at the start of the
-		// next update. The capsule sources are asked again with it: what stands may have come with the scene.
+		// Take what is there (above), and listen for what is loaded after, the same way: replaceStatic, in the same order
+		// (staticOrder). A scene loaded before the world first steps -- a game loading its scene once its systems are made --
+		// is laid in at once, on the main thread, for whatever is made on it next; one loaded after goes in between two
+		// steps, at the start of the next update. The capsule sources are asked again with it: what stands may have come
+		// with the scene.
 		PropertiesModule::onSceneLoaded(this, [this](const PropertiesModule::SceneLoaded& scene) {
 			std::unique_lock lock(mStepping);
 			const bool atOnce = !mStepped.load(std::memory_order_relaxed);
 			if (!atOnce) {
 				lock.unlock();
 			}
-			queueStatic(*this, scene.entities);
+			queueStatic(*this, staticOrder(scene.entities));
 			std::optional<std::vector<JPH::ShapeRefC>> capsules;
 			if (!mCapsuleSources.empty()) {
 				capsules = capsuleShapes();
@@ -336,22 +364,16 @@ namespace SFE::SystemsModule {
 
 	void PhysicsSystem::addStaticColliders() {
 		// The heightfields, and the props set in the scene with a collider: taken as a scene loaded later is (the
-		// constructor's listener), and laid in at once, as nothing steps a world still being made.
-		auto& registry = ECSHandler::registry();
+		// constructor's listener), from every entity with a render transform, in the same order (staticOrder: the models'
+		// bodies first, then the heightfields drawn by no model of their own), and laid in at once, as nothing steps a
+		// world still being made.
 		std::vector<ecss::EntityId> entities;
-		for (const auto& [id, model, matrix] : registry.view<const ModelComponent, const ComponentsModule::TransformMatComp>()) {
-			if (model && matrix && (model->collider || registry.hasComponent<ComponentsModule::HeightfieldComponent>(id))) {
+		for (const auto& [id, matrix] : ECSHandler::registry().view<const ComponentsModule::TransformMatComp>()) {
+			if (matrix) {
 				entities.push_back(id);
 			}
 		}
-		// Heightfields drawn by no model of their own collide too, after the models, so the models' bodies come first as
-		// ever.
-		for (const auto& [id, field, matrix] : registry.view<const ComponentsModule::HeightfieldComponent, const ComponentsModule::TransformMatComp>()) {
-			if (field && matrix && !registry.hasComponent<ModelComponent>(id)) {
-				entities.push_back(id);
-			}
-		}
-		queueStatic(*this, entities);
+		queueStatic(*this, staticOrder(entities));
 		swapStatic();
 	}
 

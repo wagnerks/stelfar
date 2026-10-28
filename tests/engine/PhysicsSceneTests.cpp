@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -5,6 +7,7 @@
 #include <vector>
 
 #include "EngineTestFixture.h"
+#include "assetsModule/modelModule/ModelLoader.h"
 #include "assetsModule/modelModule/Terrain.h"
 #include "componentsModule/HeightfieldComponent.h"
 #include "componentsModule/Hierarchy.h"
@@ -80,6 +83,41 @@ namespace SFE::EngineTests {
 				return std::nullopt;
 			}
 			return 50.f - 100.f * *hit;
+		}
+
+		// Where the order test's colliders stand, far from anything another test puts in the world, and how far round.
+		constexpr float kOrderAt = 4000.f;
+		constexpr float kOrderReach = 40.f;
+
+		// A static body of a world: the kind of its shape, whether that is a heightfield's field, and its bounds in the world
+		// -- where it stands. Not the shape's own bounds: those are round its centre of mass, which for a field (a shape
+		// moved to where the field lies, its body at the world's origin, PhysicsSystem.cpp) is not that origin.
+		struct Laid {
+			JPH::EShapeSubType type{};
+			bool field = false;
+			JPH::AABox bounds;
+		};
+		// The static bodies of `physics` within kOrderReach of (kOrderAt, kOrderAt), in the order of their ids: the order
+		// they were made in.
+		std::vector<Laid> laidAtTheOrderTest(SystemsModule::PhysicsSystem& physics) {
+			JPH::BodyIDVector ids;
+			physics.world().GetBodies(ids);
+			std::sort(ids.begin(), ids.end());
+			std::vector<Laid> laid;
+			auto& bodies = physics.world().GetBodyInterface();
+			for (const auto& id : ids) {
+				const auto shape = bodies.GetShape(id);
+				if (!shape) {
+					continue;
+				}
+				const auto bounds = shape->GetWorldSpaceBounds(bodies.GetCenterOfMassTransform(id), JPH::Vec3::sReplicate(1.f));
+				const auto centre = bounds.GetCenter();
+				if (std::abs(centre.GetX() - kOrderAt) > kOrderReach || std::abs(centre.GetZ() - kOrderAt) > kOrderReach) {
+					continue;
+				}
+				laid.push_back({ shape->GetSubType(), SystemsModule::TerrainCollider::field(*shape) != nullptr, bounds });
+			}
+			return laid;
 		}
 	}
 
@@ -239,5 +277,96 @@ namespace SFE::EngineTests {
 		made.update(kFrameTime);
 		EXPECT_TRUE(standsAt(made, at)) << "not in by the next step";
 		EXPECT_FALSE(standsAt(made, second)) << "the capsule before still stands";
+	}
+
+	// A scene told of after a world is made is laid in as a world made once the scene is there lays it, body for body,
+	// whatever order its entities are told in: the models' bodies by id -- a child's where its parent puts it -- then the
+	// heightfields no model draws, by id. Told here with the field among the models and the child before the second
+	// model; then a world is made and takes the same from the registry.
+	TEST(Physics, ASceneToldLaterLaysWhatOneThereLays) {
+		auto& registry = ECSHandler::registry();
+		auto* physics = ECSHandler::getSystem<SystemsModule::PhysicsSystem>();
+		auto* loose = ECSHandler::getSystem<SystemsModule::LoosePhysicsSystem>();
+		ASSERT_NE(physics, nullptr);
+		ASSERT_NE(loose, nullptr);
+		constexpr const char* kCube = "models/cube.fbx";
+		ASSERT_NE(AssetsModule::ModelLoader::instance()->load(kCube), nullptr) << kCube << " did not load";
+		step();
+
+		// Made before the scene, so it is told of it; no SystemManager steps it, so it lays the scene in at once.
+		SystemsModule::PhysicsSystem told;
+		ASSERT_TRUE(laidAtTheOrderTest(told).empty()) << "something stands where the test's colliders go";
+
+		// Taken out however the test ends: the bodies the engine's two worlds were told of, then the entities, off the
+		// octree.
+		std::vector<ecss::EntityId> made;
+		const Finally takeOut([&] {
+			for (const auto entity : made) {
+				physics->replaceStatic(entity, {});
+				loose->replaceStatic(entity, {});
+			}
+			step();
+			if (auto* octree = ECSHandler::getSystem<SystemsModule::OcTreeSystem>()) {
+				octree->detach(made);
+			}
+			ECSHandler::destroyEntities(made);
+			step();
+		});
+		const auto cube = [&](const Math::Vec3& pos, const Math::Vec3& rotate) {
+			const auto entity = PropertiesModule::PropertiesSystem::spawnModel(kCube, pos, Math::Vec3{ 1.f }, rotate);
+			if (auto model = registry.pinComponent<ModelComponent>(entity)) {
+				model->collider = true;
+				made.push_back(entity);
+				return entity;
+			}
+			return ecss::INVALID_ID;
+		};
+		const auto first = cube({ kOrderAt, 0.f, kOrderAt }, { 0.f, 30.f, 0.f });
+		const auto second = cube({ kOrderAt + 12.f, 0.f, kOrderAt - 6.f }, {});
+		const auto child = cube({ 0.f, 0.f, 6.f }, { 0.f, 0.f, 15.f });
+		ASSERT_NE(first, ecss::INVALID_ID) << kCube << " not spawned";
+		ASSERT_NE(second, ecss::INVALID_ID) << kCube << " not spawned";
+		ASSERT_NE(child, ecss::INVALID_ID) << kCube << " not spawned";
+		const auto field = registry.takeEntity();
+		made.push_back(field);
+		registry.addComponent<TransformComponent>(field, field);
+		if (auto transform = registry.pinComponent<TransformComponent>(field)) {
+			transform->setPos({ kOrderAt, -3.f, kOrderAt + 20.f });
+		}
+		registry.addComponent<ComponentsModule::HeightfieldComponent>(field, ComponentsModule::HeightfieldComponent{ kFieldSamples, kFieldSize, fieldHeights(), 1 });
+		// The child hung under the first once that stands still, so it is worked out from where the first stands, and the
+		// render copies of all four written.
+		step();
+		Hierarchy::setParent(child, first);
+		if (auto transform = registry.pinComponent<TransformComponent>(child)) {
+			transform->markDirty();
+		}
+		step(3);
+
+		PropertiesModule::emitSceneLoaded({ "", first, { first, field, child, second } });
+		SystemsModule::PhysicsSystem there;
+
+		const auto toldLaid = laidAtTheOrderTest(told);
+		const auto thereLaid = laidAtTheOrderTest(there);
+		ASSERT_GE(thereLaid.size(), 4u) << "not laid in by a world made once the scene is there";
+		EXPECT_TRUE(thereLaid.back().field) << "the heightfield not after the models";
+		ASSERT_EQ(toldLaid.size(), thereLaid.size()) << "not all laid in when told of";
+		for (size_t i = 0; i < thereLaid.size(); ++i) {
+			EXPECT_EQ(toldLaid[i].type, thereLaid[i].type) << "body " << i << ": laid in another order";
+			EXPECT_EQ(toldLaid[i].field, thereLaid[i].field) << "body " << i << ": laid in another order";
+			EXPECT_TRUE(toldLaid[i].bounds == thereLaid[i].bounds) << "body " << i << ": laid in another order";
+		}
+		// And they stand alike: a grid of rays down over the place meets the same heights in both.
+		int hits = 0;
+		for (int i = 0; i < 5; ++i) {
+			for (int j = 0; j < 5; ++j) {
+				const float x = kOrderAt - 10.f + 7.5f * static_cast<float>(i);
+				const float z = kOrderAt - 10.f + 7.5f * static_cast<float>(j);
+				const auto inThere = groundUnder(there, x, z);
+				EXPECT_EQ(groundUnder(told, x, z), inThere) << "at " << x << ", " << z;
+				hits += inThere ? 1 : 0;
+			}
+		}
+		EXPECT_GT(hits, 0) << "no ray met anything: the heights above prove nothing";
 	}
 }

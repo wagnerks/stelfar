@@ -96,7 +96,7 @@ void main() {
     bool worded = 2u * index + 1u < uint(sfeEntityWords.length());
     vWords = worded ? sfeEntityWords[2u * index] : uvec4(0u);
     vWordsMore = worded ? sfeEntityWords[2u * index + 1u] : uvec4(0u);
-    vPiece = sfePieceKey(uint(SFE_VERTEX_ID), model[index][3].xyz);
+    vPiece = sfePieceKey(uint(SFE_MESH_VERTEX_ID), model[index][3].xyz);
     worldPos.xyz += sfeWindSway(worldPos.xyz, model[index][3].xyz, instance.material, matrices.wind);
     worldPos.xyz = sfeGroundUnderPatch(worldPos.xyz, instance.material);
 

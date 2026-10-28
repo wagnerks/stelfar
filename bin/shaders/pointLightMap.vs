@@ -59,5 +59,5 @@ void main() {
     gl_Layer = pc.face;
     TexCoords = aTexCoords;
     TexCoords1 = aTexCoords1;
-    vPiece = sfePieceKey(uint(SFE_VERTEX_ID), world[3].xyz);
+    vPiece = sfePieceKey(uint(SFE_MESH_VERTEX_ID), world[3].xyz);
 }

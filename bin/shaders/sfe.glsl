@@ -1,11 +1,16 @@
 #ifndef SFE_GLSL
 #define SFE_GLSL
 
+// SFE_VERTEX_ID is the vertex's number in the shared vertex buffer: an indexed draw's index plus its base vertex (the
+// mesh's place in that buffer). SFE_MESH_VERTEX_ID is its number in its own mesh, the same wherever the mesh was
+// uploaded; it holds for indexed draws (a draw without indices has no base vertex on OpenGL).
 #ifdef VULKAN
+#extension GL_ARB_shader_draw_parameters : require
 #define SFE_SET(setIdx, bindingIdx) set = setIdx, binding = bindingIdx
 #define SFE_PUSH_BLOCK layout(push_constant) uniform
 #define SFE_INSTANCE_ID gl_InstanceIndex
 #define SFE_VERTEX_ID gl_VertexIndex
+#define SFE_MESH_VERTEX_ID (gl_VertexIndex - gl_BaseVertexARB)
 #else
 #extension GL_ARB_shader_draw_parameters : require
 #define SFE_SET(setIdx, bindingIdx) binding = bindingIdx
@@ -13,6 +18,7 @@
 // gl_InstanceID starts at 0 whatever firstInstance is; gl_InstanceIndex on Vulkan includes it.
 #define SFE_INSTANCE_ID (gl_InstanceID + gl_BaseInstanceARB)
 #define SFE_VERTEX_ID gl_VertexID
+#define SFE_MESH_VERTEX_ID (gl_VertexID - gl_BaseVertexARB)
 #endif
 
 // A hash that gives the same bits on every compiler path: integer arithmetic only. The usual
@@ -42,7 +48,8 @@ bool sfeLeafHole(float mapMask, vec2 across, float leafLight) {
 
 // 0..1 for a vertex of a model standing at `origin`, passed on flat so each triangle takes its first (or, on OpenGL,
 // last) vertex's: the point at which that triangle of a cut-out surface, a leaf, dissolves (SfeMaterial::dissolve).
-// Where the model stands tells two trees of one model apart, so they do not lose the same leaves.
+// Where the model stands tells two trees of one model apart, so they do not lose the same leaves. `vertex` is the
+// vertex's number in its own mesh (SFE_MESH_VERTEX_ID), so which leaves go does not hang on what was uploaded before it.
 float sfePieceKey(uint vertex, vec3 origin) {
     uvec3 v = uvec3(vertex, uvec2(ivec2(floor(origin.xz * 4.0))));
     v = v * 1664525u + 1013904223u;

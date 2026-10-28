@@ -7,6 +7,7 @@
 #include "core/Clocks.h"
 #include "core/Engine.h"
 #include "core/Params.h"
+#include "propertiesModule/SceneEvents.h"
 #include "renderModule/Atmosphere.h"
 #include "renderModule/DebugView.h"
 #include "renderModule/IblBaker.h"
@@ -150,10 +151,30 @@ void LightingPass::init(SystemsModule::RenderData& renderDataHandle)
 
 	mIbl = {};
 	bakeSkyLight(renderDataHandle);
+	// The sky light by the rule of whatever takes something of the world (SceneEvents.h): the sky there now (above), and
+	// the sky of each scene loaded after, taken as it is told of the way init takes it -- baked at once, not a bake
+	// behind, so a scene told of before the first frame lights that frame. The RenderData is RenderSystem's and outlives
+	// the pass, whose listeners RenderSystem forgets before it goes.
+	PropertiesModule::onSceneLoaded(this, [this, data = &renderDataHandle](const PropertiesModule::SceneLoaded&) {
+		if (skyLightKey(*data) == mIblKey) {
+			// The sky taken already, or still none.
+			return;
+		}
+		if (mIblBaking.valid()) {
+			// A bake of the sky before it: stale.
+			mIblBaking.wait();
+			mIblBaking = {};
+		}
+		bakeSkyLight(*data);
+	});
 }
 
 void LightingPass::bakeSkyLight(SystemsModule::RenderData& renderDataHandle) {
-	mIbl = SFE::Render::bakeIbl(Engine::instance()->rhi(), renderDataHandle.graphics.sunIntensity);
+	// Into the maps there are, made the first time (uploadIbl): the sky of a scene told of later is written over the maps
+	// the frames bind rather than into new ones.
+	if (auto* rhi = Engine::instance()->rhi()) {
+		SFE::Render::uploadIbl(rhi, SFE::Render::computeIbl(SFE::Render::Atmosphere::sceneSky(), renderDataHandle.graphics.sunIntensity), mIbl);
+	}
 	mIblKey = skyLightKey(renderDataHandle);
 	useSkyLight(renderDataHandle);
 }

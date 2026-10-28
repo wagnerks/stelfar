@@ -73,5 +73,5 @@ void main() {
                    dot(worldPos.xyz, normalize(vec3(m[0][1], m[1][1], m[2][1]))));
     TexCoords = aTexCoords;
     TexCoords1 = aTexCoords1;
-    vPiece = sfePieceKey(uint(SFE_VERTEX_ID), model[index][3].xyz);
+    vPiece = sfePieceKey(uint(SFE_MESH_VERTEX_ID), model[index][3].xyz);
 }

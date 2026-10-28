@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "AssetsManager.h"
 #include "assetsModule/modelModule/ModelRelease.h"
@@ -302,6 +303,26 @@ namespace {
 	// Compressed images predecode read ahead, unflipped, waiting for loadTexture to take them.
 	std::mutex gPredecodedMutex;
 	std::unordered_map<std::string, DecodedImage> gPredecoded;
+
+	// A texture is cached by its path alone, so a later request gets what the first one asked for. Asked for with another
+	// flip or storage, the request is not what it gets: said loudly, once a path.
+	std::mutex gMismatchMutex;
+	std::unordered_set<std::string> gMismatched;
+
+	void sayMismatch(const std::string& path, const Texture& cached, bool flip, TextureStorage storage) {
+		if (cached.flip == flip && cached.storage == storage) {
+			return;
+		}
+		{
+			std::lock_guard lock(gMismatchMutex);
+			if (!gMismatched.insert(path).second) {
+				return;
+			}
+		}
+		const auto name = [](TextureStorage s) { return s == TextureStorage::Compressed ? "Compressed" : "Raw"; };
+		SFE::LogsModule::Logger::LOG_ERROR("TextureHandler::loadTexture %s asked for with flip %d, %s, but it is cached with flip %d, %s (the first request's), which it gets",
+			path.c_str(), flip ? 1 : 0, name(storage), cached.flip ? 1 : 0, name(cached.storage));
+	}
 
 	// Runs fn(i) for i in [0, count) on threads of their own.
 	void forEachOnWorkers(const size_t count, const std::function<void(size_t)>& fn) {
@@ -611,6 +632,7 @@ std::vector<std::vector<unsigned char>> TextureHandler::buildMipChain(const unsi
 
 Texture* TextureHandler::loadTexture(const std::string& path, bool flip, TextureStorage storage) {
 	if (auto* texture = AssetsManager::instance()->getAsset<Texture>(path)) {
+		sayMismatch(path, *texture, flip, storage);
 		readBack(*texture);
 		return texture;
 	}

@@ -359,15 +359,30 @@ namespace SFE::PropertiesModule {
 		}
 		loadedScene() = { std::string(path), scene, read };
 
-		// The same as spawnModelEntity: a scene loaded before RenderSystem exists never reaches it through the
-		// transform notify, so the render copy of every transform is seeded here, parents before children.
+		// The scene's entities in the order the file lists them, depth first: the order fillTree made them in, which is
+		// their ids' order.
+		std::vector<ecss::EntityId> nodes;
+		for (std::vector<ecss::EntityId> open{ scene }; !open.empty();) {
+			const auto id = open.back();
+			open.pop_back();
+			nodes.push_back(id);
+			// The file's order (Hierarchy::children).
+			const auto children = Hierarchy::children(id);
+			open.insert(open.end(), children.rbegin(), children.rend());
+		}
+
+		// Every entity of the scene where the file puts it before anything is told of it, parents before children, both
+		// copies of its transform -- whether RenderSystem exists yet or not. The render copy, which a scene loaded before
+		// RenderSystem never gets through the transform notify (as spawnModelEntity), and which RenderSystem, listening
+		// during a load, may have written from a transform a worker reloaded before fillTree hung the entity under its
+		// parent (it loads a child's components first). And the component's own matrix, worked out again here (marked
+		// dirty, reloaded) so that no worker still holding the entity's dirty flag works it out after, then set to the same
+		// product whichever thread reloaded it.
 		std::unordered_map<ecss::EntityId, Math::Mat4> world;
-		auto nodes = Hierarchy::descendants(scene);
-		nodes.insert(nodes.begin(), scene);
 		{
 		LoadTrace::Step seeding("world transforms");
 		for (const auto id : nodes) {
-			const auto transform = ECSHandler::registry().pinComponent<const TransformComponent>(id);
+			const auto transform = ECSHandler::registry().pinComponent<TransformComponent>(id);
 			if (!transform) {
 				continue;
 			}
@@ -375,9 +390,10 @@ namespace SFE::PropertiesModule {
 			const auto parent = world.find(Hierarchy::parent(id));
 			const auto matrix = parent != world.end() ? parent->second * local : local;
 			world[id] = matrix;
-			if (!ECSHandler::registry().hasComponent<ComponentsModule::TransformMatComp>(id)) {
-				ECSHandler::registry().addComponent<ComponentsModule::TransformMatComp>(id, matrix);
-			}
+			transform->markDirty();
+			transform->reloadTransform();
+			transform->setTransform(matrix);
+			ECSHandler::registry().addComponent<ComponentsModule::TransformMatComp>(id, matrix);
 		}
 		}
 		LoadTrace::count("entities", static_cast<long long>(nodes.size()));

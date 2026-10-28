@@ -76,19 +76,30 @@ order:
    RHI's object for the backend chosen.
 3. `createWindow(...)`, then `initThread()`: the graphics device, the numbers read, the registry's listeners.
 4. The systems, from the bricks of `core/DefaultSystems.h` (`SFE::Modules`), those it wants, in this order:
-   `addSceneCore()`, `addCamera()`, `addFreeCamera()` (a free-flying camera, if it wants one), `loadScene(path)`,
-   `addRenderer(passes)`, `addPhysics()`, `addAudio()`, `addNetwork(settings)`. The renderer draws the list it is given:
+   `addSceneCore()`, `addCamera()`, `addFreeCamera()` (a free-flying camera, if it wants one), `addRenderer(passes)`,
+   `addPhysics()`, `addAudio()`, `addNetwork(settings)`. The renderer draws the list it is given:
    `Render::defaultPasses()` with the application's own passes put in by name (`Render::PassList`,
    `renderModule/PassList.h`; a name not in the list is an error). Then the application's own systems
    (`ECSHandler::systemManager().createSystem<T>(...)`) and the frame's order: `Modules::schedule()` roots the engine's
    systems that were made, and the application puts its own before them
    (`addRootSystemsBefore<PhysicsDrawSystem, ...>()`, or `addTickSystems<...>(rate)`). Scheduling never makes a system;
    a system made with an update of its own but in no schedule is named in `load_times.log`. Then what else it brings:
-   bridge commands (`RuntimeBridge::addCommand`), windows in the debug UI (`debugModule/DebugPanels.h`), upright
-   capsules for both physics worlds (`PhysicsSystem::addStaticCapsules`).
-5. `Engine::start()`: how the tick systems run (on threads, or stepped from the frame under a fixed step or a capture),
+   bridge commands (`RuntimeBridge::addCommand`), windows in the debug UI (`debugModule/DebugPanels.h`).
+5. The scene, `loadScene(path)`: anywhere after `addSceneCore()` and before `start()`, before the systems or after
+   them -- the world they make of it is the same, and so is what is drawn. Every engine system and pass goes by one rule
+   (`propertiesModule/SceneEvents.h`): it takes what is there when it is made, and is told of every scene loaded after
+   (`SceneLoaded`) -- the physics its static colliders, laid in the same order either way, the renderer its sky light
+   and its sun -- and an application's own systems and passes go by the same rule. Before anyone is told, every
+   transform of the scene stands where the file puts it, the render copy and the component's own matrix both; the
+   listeners are told in the order they subscribed, that is the order they were made in, with the scene's entities in
+   the order the file lists them, depth first. Loaded after the systems, it is still loaded before the world first
+   steps, so the physics lays it in at once and the systems told after the physics already meet its colliders. Upright
+   capsules for both physics worlds (`PhysicsSystem::addStaticCapsules`) go after the load when the application's own
+   takes must not meet them (a game laying litter on the ground before its trees' trunks stand): given before, the
+   physics, told before the application's systems, lays them in with the scene.
+6. `Engine::start()`: how the tick systems run (on threads, or stepped from the frame under a fixed step or a capture),
    the input, the engine's own bridge commands after the application's.
-6. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`.
+7. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`.
 
 Embedded in an editor, the editor's flags are the bridge's: `RuntimeBridge::setEmbeddedInEditor` and
 `setPublishEditorDisplay` (`runtimeBridge/RuntimeBridge.h`); whether the window shows the picture is
