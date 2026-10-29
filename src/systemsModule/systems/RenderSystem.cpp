@@ -231,8 +231,8 @@ namespace SFE::SystemsModule {
 				"raised to." });
 			Params::bind("AO", "sun share", gfx.ssaoSun, { .help = "The share of the ambient occlusion the sun's light takes "
 				"as well (painted: a crease is dark in the sun too)." });
-			Params::bind("AO", "grass floor", gfx.ssaoGrassFloor, { .help = "The least of the ambient occlusion a blade of "
-				"grass keeps." });
+			Params::bind("AO", "foliage floor", gfx.ssaoFoliageFloor, { .help = "The least of the ambient occlusion foliage "
+				"keeps (a leaf, a blade of grass)." });
 			Params::bind("Shadows", "sun width", gfx.shadowSunWidth, { .help = "The sun's width, as the penumbra's metres a "
 				"metre from the caster: the shadow is sharp where it leaves what casts it, wider the further it falls." });
 			Params::bind("Shadows", "penumbra most", gfx.shadowPenumbraMost, { .help = "The widest penumbra of the sun's "

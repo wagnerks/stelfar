@@ -2,7 +2,7 @@
 #include "sfe.glsl"
 #include "sfe_sky.glsl"
 // Mist on the water and haze in the distance, over the finished image. Along the view ray up to whatever the pixel
-// shows -- the sky counts as far away, and a ray into the lake stops at its surface -- the mist's density falls off
+// shows -- the sky counts as far away, and a ray into the water stops at its surface -- the mist's density falls off
 // exponentially with height above the water, so its thickness is exact rather than marched. The mist drifts in
 // patches with the wind; both are lit by the sky around the horizon and by the sun scattered forwards. An application
 // may add a medium of its own along the ray, lit in its own colour (sfe_user_mist.glsl).
@@ -57,7 +57,7 @@ void main() {
         rayLength = kSkyDistance;
     }
     float level = fog.mist.w;
-    // The lake bottom seen through the water: the fog ends at the surface.
+    // The bottom seen through the water: the fog ends at the surface.
     if (dir.y < -1e-4) {
         rayLength = min(rayLength, max(camera.y - level, 0.0) / -dir.y);
     }
@@ -68,7 +68,7 @@ void main() {
     float mistDepth = sfeLayerDepth(startHeight, endHeight, dir.y, rayLength, fog.mist.y);
     // Thicker and thinner patches, drifting with the wind, taken low down along the ray where the mist is.
     // Only where there is mist along the ray for them to thin or thicken: above it, or with no mist, they multiply zero.
-    // The haze is air near the ground as well, only a much deeper layer of it: across the lake the far shore greys
+    // The haze is air near the ground as well, only a much deeper layer of it: across water the far shore greys
     // and pales into the sky, while a ray up into the sky passes through little of it.
     float opticalDepth = fog.mist.z * sfeLayerDepth(startHeight, endHeight, dir.y, rayLength, kHazeHeight);
     if (isSky) {

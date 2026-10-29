@@ -91,7 +91,7 @@ vec2 waveSlope(vec2 p, float seconds, float footprint, vec2 stepX, vec2 stepY, v
         // Scattered around the wind, the short ones furthest from it.
         // Wind chop is not one train of waves: they run at every angle to the wind, the short ones most of all.
         float spread = (fract(sin(float(i) * 12.9898 + 4.1) * 43758.5453) * 2.0 - 1.0) * (0.9 + 0.8 * float(i) / float(kWaves));
-        // Wandering by where on the lake this is, so the crests are not the same straight lines everywhere; each
+        // Wandering by where on the water this is, so the crests are not the same straight lines everywhere; each
         // wave takes the turn differently.
         spread += wander * (1.4 + 1.1 * fract(float(i) * 0.618));
         float c = cos(spread);

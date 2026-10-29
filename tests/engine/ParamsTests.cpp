@@ -361,12 +361,13 @@ namespace SFE::EngineTests {
 			float initial;
 		};
 		const Number numbers[] = {
-			// The keys the game bound the graphics settings by, in tweaks.json as it is.
+			// The keys the graphics settings go by: those the game bound them by, as tweaks.json keeps them, and the AO's
+			// foliage floor, which the file leaves at the code's value.
 			{ "AO", "radius", &gfx.ssaoRadius, code.ssaoRadius },
 			{ "AO", "thickness", &gfx.ssaoThickness, code.ssaoThickness },
 			{ "AO", "intensity", &gfx.ssaoIntensity, code.ssaoIntensity },
 			{ "AO", "sun share", &gfx.ssaoSun, code.ssaoSun },
-			{ "AO", "grass floor", &gfx.ssaoGrassFloor, code.ssaoGrassFloor },
+			{ "AO", "foliage floor", &gfx.ssaoFoliageFloor, code.ssaoFoliageFloor },
 			{ "Shadows", "sun width", &gfx.shadowSunWidth, code.shadowSunWidth },
 			{ "Shadows", "penumbra most", &gfx.shadowPenumbraMost, code.shadowPenumbraMost },
 			{ "Shadows", "slope bias", &gfx.shadowSlopeBias, code.shadowSlopeBias },

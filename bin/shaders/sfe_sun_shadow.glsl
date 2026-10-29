@@ -1,7 +1,7 @@
 #ifndef SFE_SUN_SHADOW_GLSL
 #define SFE_SUN_SHADOW_GLSL
 // The sun's shadow from its cascades: sun_shadow.fs for what is drawn (deferred_shading.fs reads it), water.fs for the
-// lake. The includer says where the three resources are bound, as SFE_SET(set, binding) of each: SFE_SUN_SHADOW_DEPTH
+// water. The includer says where the three resources are bound, as SFE_SET(set, binding) of each: SFE_SUN_SHADOW_DEPTH
 // (the cascades' depth), SFE_SUN_SHADOW_BLOCK (LightingPass's CascadedShadowBlock), SFE_SUN_SHADOW_MATRICES (the
 // cascades' matrices).
 // It may say too how the filter's disk is turned at this pixel, as SFE_SUN_SHADOW_TURN: x the turn, 0..1; y where

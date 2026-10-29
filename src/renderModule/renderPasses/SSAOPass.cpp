@@ -135,7 +135,7 @@ void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	// read as flicker -- hold it still in that case.
 	const auto& graphics = renderDataHandle.graphics;
 	params.intensity = graphics.ssaoIntensity;
-	params.grassFloor = graphics.ssaoGrassFloor;
+	params.foliageFloor = graphics.ssaoFoliageFloor;
 	params.radius = graphics.ssaoRadius;
 	params.thickness = graphics.ssaoThickness;
 	params.frameIndex = renderDataHandle.graphics.taa ? static_cast<float>(renderDataHandle.taaFrame % 8) : 0.f;

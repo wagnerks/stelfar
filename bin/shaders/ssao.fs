@@ -9,7 +9,7 @@ layout(SFE_SET(0, 2)) uniform sampler2D gMaterial;
 
 layout(SFE_SET(0, 3), std140) uniform SSAOParams {
     float power;      // the visibility raised to it
-    float grassFloor; // the least a leaf or a blade keeps
+    float foliageFloor; // the least a leaf or a blade keeps
     float radius;    // metres round a point searched for what covers it
     float thickness; // metres what stands in front of a point is taken to go back from its face
     float frameIndex;
@@ -135,7 +135,7 @@ void main() {
             s = s * s + minS;
             bool skyS;
             // A blade found round a point (a blade's or the ground's) counts as that much lower: a tuft does not grey the
-            // bare ground round it, nor the blades of its own tuft one another, while a table, a bench or the van over the
+            // bare ground round it, nor the blades of its own tuft one another, while a table, a bench or a car over the
             // grass covers both alike. Only the blades are lowered: the whole scene lowered round a blade took most of a
             // table's shade off the grass under it, and blades drawn as such only near the eye left a hard line there.
             // The material read only where a sample would raise the horizon (the lift only lowers it).
@@ -167,5 +167,5 @@ void main() {
     }
     visibility = clamp(visibility / float(SLICES), 0.0, 1.0);
     // Leaves and blades are never more than a little grey: they are thin, light comes through them.
-    FragColor = max(pow(visibility, params.power), params.grassFloor * foliageAt(uv));
+    FragColor = max(pow(visibility, params.power), params.foliageFloor * foliageAt(uv));
 }

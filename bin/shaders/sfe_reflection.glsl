@@ -13,7 +13,7 @@ float sfeViewDistance(float ndcDepth) {
 // searched as finely as the near end: with steps that grow in metres a ray crosses whole trees at a stride and the
 // reflection lands in blocks. How far it looks is cut down with distance -- a reflection thirty metres off is a few
 // pixels of the picture, and nobody reads the far shore in it. The bottom (seen through the water at that pixel) does
-// not count: what is below `level` (the lake's surface; far below it for none).
+// not count: what is below `level` (the water's surface; far below it for none).
 bool sfeMarchReflection(vec3 origin, vec3 dir, float level, float eyeDistance, vec2 pixelSize, out vec2 hitUv) {
     // Fewer steps, and a shorter reach, the further the water is from the eye: a reflection thirty metres off is a
     // few pixels of the picture, and nobody reads the far shore in it.

@@ -1,62 +1,31 @@
 # Stellar Forge Engine (STELFORGE ENGINE // SFE)
-![image](https://github.com/stalker1177/KillRealGameEngine/assets/44020451/d3b12f9f-cecf-4a9e-a9c9-94c58e93d26e)
 
-![image](https://github.com/stalker1177/KillRealGameEngine/assets/44020451/478cfff6-a3db-4673-a4a7-0b7a4c3cc3ba)
+A C++ game engine as a static library, `StelForgeEngine`, which an application links and puts together itself. The
+engine holds no world, no content, no player and no game systems: the application makes the world from its own scene,
+chooses the engine's systems and passes, puts its own among them and brings its own content.
 
-there is just some piece of pet project, you can find a lot of draft and junk code here, but i will fix every module after finishing working on it
+## What is in it
 
-The main goal is to create and to try modern fast game engine included draw and physics parts, with dod ecs, with high quality light system. Thinking about doing it specifically for some piece of open world space survival game.   
+- An ECS with data-oriented storage (`src/submodules/ecss`) and the frame's order of systems (`SystemManager`): root
+  systems run in the frame, tick systems at a rate of their own, on threads or stepped from the frame.
+- A render hardware interface (`rhi/`) with three backends: Vulkan, OpenGL and None, which draws nothing (tests,
+  bots). Shaders are GLSL; for Vulkan they are compiled to SPIR-V at run time and cached.
+- A GPU-driven deferred renderer (`renderModule/`, `RenderSystem`): culling and mesh LOD on the GPU, cascaded sun
+  shadows, sky light from a procedural sky, SSAO, SSR, water, mist, glass, particles, TAA and the rest of
+  `Render::defaultPasses()`.
+- Assets: models through assimp, with a model cache and mesh LODs (meshoptimizer); textures compressed to BC7; scenes
+  in JSON (`propertiesModule/`).
+- Physics on Jolt in two worlds (`PhysicsSystem`, and `LoosePhysicsSystem` ticked 60 times a second), audio on
+  miniaudio with Steam Audio, a network on enet.
+- The runtime bridge (`runtimeBridge/`), through which a running program takes commands, 13 of them the engine's own;
+  the ImGui debug UI and its windows; `SFE::Params`, the registry of tunable numbers.
 
-Which means really big open world, atmospheres, stars, lights, may be some procedural algorithm for planets and star systems, and I want it looks as much as possible.
+## Build and link
 
-# GOALS  
-
-- [x] Entity Component System with Data Oriented Design
-- [x] OpenGL Scene Rendering  
-- [x] 3d models loading
-- [x] imgui
-- [x] deferred shading
-- [x] directional ortho light shadows
-- [ ] perspective ortho light
-- [x] point light
-- [ ] sky (don't like current realisation) 
-- [ ] invent engine name (KillReallGameEngine not bad, but is the best?)
-- [x] frustum culling
-- [ ] depth culling
-- [x] LOD
-- [ ] LOD depending on screen space size instead distane
-- [ ] batcher (existing just draft)
-- [ ] own 3d math module
-- [ ] custom allocator for game data (models, sprites etc)
-- [x] custom allocator for ECS
-- [ ] entities actions
-- [x] ability to draw object via custom shader which ok with deferred shading
-- [ ] precompile models format and faster models loading in game
-- [ ] own gui (imgui good, but not very fast)
-- [ ] add specular and other maps to the models
-- [ ] skeleton animation
-- [ ] (possible some 3d tools for converting normals in needed for me way)
-- [x] added converting normals to engine coordinates system
-- [ ] 3d objects visual redactor utils
-- [ ] drag and drop
-- [x] choose object by click
-- [x] outlines
-- [x] multithread integration, first of all add ability to update systems in parallel(almost done but no pushed yet)
-- [x] Shadows (don't like how it looks now, but it works) 
-- [ ] SSAO(current algorithm is not fast enough, and have some glitches while fast moving)
-- [ ] SSR
-- [x] HDR
-- [ ] volumetric FOG
-- [x] logs
-- [ ] logs to file
-- [ ] volumetric clouds with shadows
-- [ ] dynamic meshes
-- [ ] vulkan 
-- [ ] directx
-- [ ] ray tracing
-- [ ] grass  
-
-I will add new goals as soon as find somenew
+An application adds the engine with `add_subdirectory`, links `StelForgeEngine` and calls `sfe_stage_app(MyApp)`,
+which puts the runtime libraries beside its executable. `SFE_BUILD_ENGINE_TESTS` adds `engine_tests` (googletest: the
+engine on the None backend, with no window, its content `STELFORGE_CONTENT=engine/bin`); `SFE_BUILD_RHI_TESTS` adds the
+RHI's conformance tests.
 
 # Putting the engine together
 
@@ -103,7 +72,7 @@ order:
    the order the file lists them, depth first. Loaded after the systems, it is still loaded before the world first
    steps, so the physics lays it in at once and the systems told after the physics already meet its colliders. Upright
    capsules for both physics worlds (`PhysicsSystem::addStaticCapsules`) go after the load when the application's own
-   takes must not meet them (a game laying litter on the ground before its trees' trunks stand): given before, the
+   takes must not meet them (loose bodies laid before the trunks stand): given before, the
    physics, told before the application's systems, lays them in with the scene.
 6. `Engine::start()`: how the tick systems run (on threads, or stepped from the frame under a fixed step or a capture),
    the input, the engine's own bridge commands after the application's, and the frame limit.
@@ -126,3 +95,64 @@ Gone from `Engine.h`, with no stand-in left there: `setScenePath` (now `Modules:
 application's to do), `setProceduralSpheres`, `setProceduralRooms` and the demo scenes; besides,
 `ECSHandler::initSystems` (now the modules and the application's own calls) and `GameModule` (now `PassList`,
 `DebugPanels` and the application's own `createSystem` calls).
+
+# Extending the engine
+
+What an application adds to the engine goes through the channels below, none of them named after a game's feature. Each
+is described in its header.
+
+- **One world rule** (`propertiesModule/SceneEvents.h`): a system or pass takes what is there when it is made, and is
+  told of every scene loaded after (`SceneLoaded`). The engine's own go by it, and an application's should too.
+- **Files** (`core/FileSystem.h`): two roots. A relative path is read from the application's root first and from the
+  engine's (`engine/bin`) behind it, so a file of the same path stands in for the engine's; a shader's `#include "x"`
+  is found the same way, as `shaders/x`, and beside the including file only when neither root has it. Whatever the
+  engine writes -- caches, compiled SPIR-V, captures, `sfe_fatal.log` -- goes under the application's root.
+- **Shader hooks**: the files `bin/shaders/sfe_user_*.glsl` are empty defaults, each saying where it is called and what
+  the engine does with what it returns; an application puts its own copy under `shaders/` in its root. Surface
+  (`sfeUserSurface`, early, and `sfeUserSurfaceLate`); dissolve (`sfeUserDissolveKeeps`, `sfeUserDissolved`: what of a
+  dissolving piece stays and in what colour, in the surface and in the shadow passes); glass (`sfeUserGlass`);
+  lighting (`sfeUserLitAlbedo`, `sfeUserAir`); water (`sfeUserWater`, `sfeUserWaterFilm`); mist (`sfeUserMist`);
+  ground (`sfeUserGroundOffset`). A G-buffer shader of the application's own that defines `SFE_GBUFFER_DEPTH` or
+  `SFE_GBUFFER_STYLE` before it includes `sfe_gbuffer_surface.glsl` gives the surface a depth or a look of its own.
+- **Frame data** (`renderModule/UserFrameSet.h`): set 3, bindings 40-63, declared before the renderer is made, each with
+  a stand-in (zero or white) until something is published to it, laid out and bound by every pipeline that compiles a
+  hook or reads it.
+- **Entity words** (`renderModule/EntityUser.h`): eight 32-bit words an entity keeps for the application's shaders
+  (`sfe_words.glsl`: `vWords`, `vWordsMore`); word 7 is the writer's kind.
+- **Ground patch** (`renderModule/TerrainPatch.h`): the ground drawn dense near the camera, its heights given by a
+  producer, the depth it is pressed in by `sfeUserGroundOffset`.
+- **Material data** (`componentsModule/MaterialComponent.h`, `assetsModule/modelModule/Material.h`): two user `vec4` a
+  material (`user`), four texture slots `USER0`-`USER3`, `dissolve`, and the draw class (`DrawClass`: `Solid`,
+  `Cutout`, `Ground`). A system that changes an entity's material or mesh says so with `TasksManager`'s
+  `MATERIAL_UPDATED`.
+- **Heightfield** (`componentsModule/HeightfieldComponent.h`): heights of any producer, which the physics collides with;
+  its mesh `AssetsModule::heightfieldModel` and its height `heightfieldHeight` (`assetsModule/modelModule/Terrain.h`).
+- **Sky** (`componentsModule/SkyComponent.h`): the sun's path is the scene's data -- `latitude`, `declination`, `noon`
+  and `ground_albedo`.
+- **Passes** (`renderModule/PassList.h`): the renderer draws the list it is given, `Render::defaultPasses()` with the
+  application's own put in by name (`insertBefore`, `insertAfter`, `replace`, `disable`, `remove`; a name not in the
+  list is an error), each with a predicate of when it runs. A pass that casts shadows implements `ShadowCasterPass`
+  (`renderModule/renderPasses/RenderPass.h`), and the shadow pass finds it among the passes.
+- **Systems** (`core/DefaultSystems.h`, `SFE::Modules`): the engine's systems as bricks the application calls in its
+  own order, and the frame's order: `Modules::schedule()` roots the engine's, and the application puts its own before
+  them (`addRootSystemsBefore<PhysicsDrawSystem, ...>`) or ticks them at a rate (`addTickSystems<...>(rate)`).
+  `FreeCameraController` (`systemsModule/systems/FreeCameraController.h`), made by `addFreeCamera()`, flies the camera
+  until whatever takes the camera over turns it off.
+- **Numbers** (`core/Params.h`, `SFE::Params`): one registry for the engine's numbers and the application's, by group
+  and name, with a range and a help text; one numbers file the application names (`EngineConfig::numbersFile`), read
+  before any system is made; a session layer (the bridge's `tweak`, the command line) that is never saved. A reset goes
+  back to the file's value, or the code's where the file has none. The engine's code defaults are neutral: a look is
+  the file's.
+- **Bridge commands** (`runtimeBridge/RuntimeBridge.h`): the engine's own are `bakeSurface`, `debugTerm`, `display`,
+  `meshLods`, `press`, `profile`, `reloadModels`, `reloadScene`, `reloadShaders`, `reloadTextures`, `screenshot`,
+  `setTransform` and `tweak`, registered in `start()` after the application's (`addCommand`). A name registered twice
+  is logged as a warning, and the later one stands.
+- **Debug UI** (`debugModule/DebugPanels.h`): the application's windows.
+- **Scene components** (`propertiesModule/ComponentSerializer.h`, `ComponentRegistry::add<T>()`): a component a scene
+  file may carry, read and saved.
+- **LOD** (`renderModule/LodRule.h`): the rule of which level of a mesh's chain is drawn, the text of
+  `shaders/sfe_lod.glsl` compiled as C++, for a pass that picks the levels of its own instances on the CPU.
+- **Command line** (`runtime/RunOptions.h`): the engine's flags read, the application's own left in order.
+
+Deliberately not offered, since no second application asks for them: replacing an engine system with a subclass,
+rooting systems after the engine's, a `start()` of each system, a table of physics layers an application extends.

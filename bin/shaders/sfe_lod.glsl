@@ -1,9 +1,9 @@
 #ifndef SFE_LOD_GLSL
 #define SFE_LOD_GLSL
 // Which level of a mesh's chain is drawn: one text for the scene's culls (gpu_cull.cs) and for C++ (renderModule/LodRule.h),
-// where a pass that picks the levels of its own instances takes it, as the game's litter does. So it is written in what
-// GLSL and C++ share -- scalars, uint, a fixed array parameter, max, f-suffixed literals, no vectors and no includes --
-// and every function is SFE_LOD_FN, which C++ makes inline.
+// where a pass that picks the levels of its own instances takes it. So it is written in what GLSL and C++ share --
+// scalars, uint, a fixed array parameter, max, f-suffixed literals, no vectors and no includes -- and every function is
+// SFE_LOD_FN, which C++ makes inline.
 #ifndef SFE_LOD_FN
 #define SFE_LOD_FN
 #endif

@@ -36,11 +36,11 @@ namespace SFE::Render::RenderPasses {
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
 		void resize(SystemsModule::RenderData& renderDataHandle) override;
 	private:
-		// ssao.fs's: the power, the blades' floor, the radius and the thickness from GraphicsSettings each frame.
+		// ssao.fs's: the power, foliage's floor, the radius and the thickness from GraphicsSettings each frame.
 		struct SSAOParams
 		{
 			float intensity = 1.5f;
-			float grassFloor = 0.85f;
+			float foliageFloor = 0.85f;
 			float radius = 1.5f;
 			float thickness = 0.5f;
 			// TAA jitter phase. Rotates the sample disc per frame so the static screen-space

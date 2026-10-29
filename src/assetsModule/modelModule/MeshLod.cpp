@@ -32,10 +32,10 @@ namespace SFE {
 		constexpr float kWeldShare = 1.f / 256.f;
 		// markOneSided draws a mesh from the six axes and the eight corners of a cube round it, each view this many pixels
 		// across, and lets back faces be this share of all it sees: a tin bucket's, through the open ends of its handle's
-		// wire and the slit between its bottom and its wall (0.75%), not a sheet's or an open box's. Over all the
-		// camp's models, a level of detail whose thin walls crossed was seen on 254 parts; 172 of them come out one-sided
-		// by this, half a percent would have left 161, and more than this gains next to none. A part that comes out so
-		// changes on at most this share of its pixels at full detail.
+		// wire and the slit between its bottom and its wall (0.75%), not a sheet's or an open box's. Over the models of
+		// a large outdoor scene, a level of detail whose thin walls crossed was seen on 254 parts; 172 of them come out
+		// one-sided by this, half a percent would have left 161, and more than this gains next to none. A part that
+		// comes out so changes on at most this share of its pixels at full detail.
 		constexpr int kSideViewPixels = 96;
 		constexpr float kSideBackShare = 0.01f;
 
@@ -203,8 +203,8 @@ namespace SFE {
 		}
 		// Copies of a corner apart only by float noise, a normal a hundredth of a degree off, are one vertex: they are
 		// compared on their attributes rounded to steps no eye tells apart, and one copy is kept. A mesh exported a
-		// triangle at a time (the camp's van) otherwise keeps three vertices a triangle, shaded three times over, and no
-		// edge shared for the simplifier to collapse.
+		// triangle at a time (a car body, as some exporters write it) otherwise keeps three vertices a triangle, shaded
+		// three times over, and no edge shared for the simplifier to collapse.
 		const auto round = [](float& value, const float step) { value = std::round(value / step) * step + 0.f; };
 		std::vector<Vertex3D> keys = mesh.vertices;
 		for (auto& v : keys) {

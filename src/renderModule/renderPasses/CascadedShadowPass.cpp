@@ -100,7 +100,7 @@ void CascadedShadowPass::init(SystemsModule::RenderData& renderDataHandle) {
 	// made here and never resized.
 	mStylised = renderDataHandle.graphics.stylise > 0.5f;
 	if (mStylised) {
-		// And half the distance. The last cascade is fitted to the slice from 120 m out, so every tree in the forest
+		// And half the distance. The last cascade is fitted to the slice from 120 m out, so every tree of a forest
 		// stands in it; drawing it to 200 m instead of 400 is most of what this pass costs in a wood, and past that
 		// the air has taken the contrast out of the trees anyway.
 		if (!cmp->shadowCascadeLevels.empty()) {
@@ -368,9 +368,10 @@ void CascadedShadowPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	if (!lightMatrices.empty()) {
 		mData.lightSpaceMatrices = lightMatrices;
 	}
-	// The near ones (reaching no further than kNearReach) are drawn every frame: the character's own shadow and the leaves
-	// swaying over the ground about it, kept a frame or two, trailed the running feet and stepped while the leaves moved
-	// smoothly. However many there are: one fitted round the hands alone, for their own shadows, is near as well.
+	// The near ones (reaching no further than kNearReach) are drawn every frame: a controlled character's own shadow
+	// and the leaves swaying over the ground about it, kept a frame or two, trailed the running feet and stepped while
+	// the leaves moved smoothly. However many there are: one fitted round the hands alone, for their own shadows, is
+	// near as well.
 	// A far one is drawn no more often than graphics.shadowRefreshRate times a second (0: every frame), and what moves in
 	// it moves in its shadow that much later; kShare of that, from the first far one on, a half and a third: each costs
 	// about as much to draw as a near one, and what moves past 12 m moves little on the screen. While the camera and the

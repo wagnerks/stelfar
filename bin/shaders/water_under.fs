@@ -48,7 +48,7 @@ void main() {
     float toSurface = dir.y > 1e-4 ? (level - eye.y) / dir.y : 1e4;
     float path = min(distanceTo, toSurface);
 
-    // Clearer than the stained lake looks from above, where the light crosses it twice: a swimmer sees some metres.
+    // Clearer than the stained water looks from above, where the light crosses it twice: a swimmer sees some metres.
     // The water round the eye as an application leaves it (sfe_user_water.glsl): its albedo and its clarity.
     SfeWaterPlace place = sfeWaterPlace(water.look.x);
     sfeUserWater(eye.xz, place);
