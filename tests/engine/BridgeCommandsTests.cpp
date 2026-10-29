@@ -1,6 +1,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -75,15 +76,23 @@ namespace SFE::EngineTests {
 			std::filesystem::path mDir;
 		};
 
-		// What a listener of the keyboard hears.
+		// What a listener of the input hears: the keys, the mouse's buttons and its wheel.
 		class Listener : public CoreModule::InputObserver {
 		public:
 			Listener() {
 				onKeyEvent = [this](CoreModule::InputKey key, CoreModule::InputEventType type) {
 					heard.emplace_back(key, type);
 				};
+				onMouseBtnEvent = [this](Math::DVec2, CoreModule::MouseButton button, CoreModule::InputEventType type) {
+					clicked.emplace_back(button, type);
+				};
+				onScrollEvent = [this](Math::DVec2 offset) {
+					turned.emplace_back(offset.x, offset.y);
+				};
 			}
 			std::vector<std::pair<CoreModule::InputKey, CoreModule::InputEventType>> heard;
+			std::vector<std::pair<CoreModule::MouseButton, CoreModule::InputEventType>> clicked;
+			std::vector<std::pair<double, double>> turned;
 		};
 	}
 
@@ -194,25 +203,73 @@ namespace SFE::EngineTests {
 		for (const char* none : { "", "w", "LMB", "RMB", "F0", "F13", "F01", "F1X", "SHIFTY" }) {
 			EXPECT_EQ(keyNamed(none), InputKey::UNKNOWN) << none;
 		}
+		// The mouse's buttons by their own names, which are no key's.
+		using CoreModule::buttonNamed;
+		using CoreModule::MouseButton;
+		const std::pair<const char*, MouseButton> buttons[] = {
+			{ "LMB", MouseButton::MOUSE_BUTTON_LEFT }, { "RMB", MouseButton::MOUSE_BUTTON_RIGHT },
+			{ "MMB", MouseButton::MOUSE_BUTTON_MIDDLE },
+		};
+		for (const auto& [name, button] : buttons) {
+			EXPECT_TRUE(buttonNamed(name) == button) << name;
+		}
+		for (const char* none : { "", "lmb", "W", "LMBX", "MB" }) {
+			EXPECT_FALSE(buttonNamed(none).has_value()) << none;
+		}
 	}
 
-	// A key pressed by the command reaches whatever listens to the keyboard, held and let go; one of no name says which
-	// there are.
-	TEST(BridgeCommands, PressReachesTheKeyboardsListeners) {
-		Listener listener;
+	// A key, a mouse button or the wheel sent by the command reaches every listener of the input, as the window's does:
+	// held and let go, turned either way. A name of no key or button says which there are, and nothing is heard.
+	TEST(BridgeCommands, PressReachesEveryListener) {
+		using CoreModule::InputEventType;
+		using CoreModule::InputKey;
+		using CoreModule::MouseButton;
+		Listener first;
+		Listener second;
 		Json::Value args;
 		args["key"] = "W";
 		EXPECT_EQ(run("press", args), "press: W held");
 		args["down"] = false;
 		EXPECT_EQ(run("press", args), "press: W let go");
-		const std::vector<std::pair<CoreModule::InputKey, CoreModule::InputEventType>> heard = {
-			{ CoreModule::InputKey::KEY_W, CoreModule::InputEventType::PRESS },
-			{ CoreModule::InputKey::KEY_W, CoreModule::InputEventType::RELEASE },
+		for (const std::string button : { "LMB", "RMB", "MMB" }) {
+			args["key"] = button;
+			args["down"] = true;
+			EXPECT_EQ(run("press", args), "press: " + button + " held");
+			args["down"] = false;
+			EXPECT_EQ(run("press", args), "press: " + button + " let go");
+		}
+		// Turned back as far, so the free camera the fixture makes, which zooms by the wheel, is left as it was.
+		Json::Value wheel;
+		wheel["wheel"] = 2;
+		EXPECT_EQ(run("press", wheel), "press: wheel turned 2");
+		wheel["wheel"] = -2;
+		EXPECT_EQ(run("press", wheel), "press: wheel turned -2");
+
+		const std::vector<std::pair<InputKey, InputEventType>> keys = {
+			{ InputKey::KEY_W, InputEventType::PRESS }, { InputKey::KEY_W, InputEventType::RELEASE },
 		};
-		EXPECT_EQ(listener.heard, heard);
-		args["key"] = "LMB";
+		const std::vector<std::pair<MouseButton, InputEventType>> buttons = {
+			{ MouseButton::MOUSE_BUTTON_LEFT, InputEventType::PRESS }, { MouseButton::MOUSE_BUTTON_LEFT, InputEventType::RELEASE },
+			{ MouseButton::MOUSE_BUTTON_RIGHT, InputEventType::PRESS }, { MouseButton::MOUSE_BUTTON_RIGHT, InputEventType::RELEASE },
+			{ MouseButton::MOUSE_BUTTON_MIDDLE, InputEventType::PRESS }, { MouseButton::MOUSE_BUTTON_MIDDLE, InputEventType::RELEASE },
+		};
+		const std::vector<std::pair<double, double>> turned = { { 0.0, 2.0 }, { 0.0, -2.0 } };
+		for (const auto* listener : { &first, &second }) {
+			EXPECT_EQ(listener->heard, keys);
+			EXPECT_EQ(listener->clicked, buttons);
+			EXPECT_EQ(listener->turned, turned);
+		}
+
+		args["key"] = "X1";
+		args["down"] = true;
 		EXPECT_EQ(run("press", args).rfind("press: give {\"key\": A-Z, 0-9", 0), 0u);
-		EXPECT_EQ(listener.heard.size(), 2u) << "a name of no key was pressed";
+		wheel["wheel"] = "far";
+		EXPECT_EQ(run("press", wheel).rfind("press: give {\"key\": A-Z, 0-9", 0), 0u);
+		for (const auto* listener : { &first, &second }) {
+			EXPECT_EQ(listener->heard.size(), 2u) << "a name of no key was pressed";
+			EXPECT_EQ(listener->clicked.size(), 6u) << "a name of no button was pressed";
+			EXPECT_EQ(listener->turned.size(), 2u) << "a wheel of no notches was turned";
+		}
 	}
 
 	// A command added under a name already taken stands in for the earlier one, and addCommand says it replaced one.

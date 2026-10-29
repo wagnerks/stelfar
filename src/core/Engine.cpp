@@ -143,8 +143,9 @@ namespace SFE {
 
 	void Engine::start() {
 		// Settled at the first update, for every tick system whenever it was added: stepped from the frame for a fixed step
-		// or a capture, each on a thread of its own otherwise.
-		ECSHandler::systemManager().setStepTickSystems(mConfig->capture.enabled || mConfig->fixedDeltaTime > 0.f);
+		// or a capture, each on a thread of its own in real time.
+		const bool wallClock = realTime(*mConfig);
+		ECSHandler::systemManager().setStepTickSystems(!wallClock);
 		// After every system: the window's input goes to the observers they are.
 		CoreModule::InputHandler::init(mWindow);
 		addRuntimeCommands();
@@ -154,13 +155,13 @@ namespace SFE {
 		SFE::LogsModule::Logger::LOG_INFO("engine started (%s backend)",
 			graphicsBackendName(activeGraphicsBackend()));
 		// The frame limit from here: maxFps while the step is the wall clock's, none under a fixed step or a capture
-		// (pacedFps). A frame long enough to nap in has the OS's timer asked for naps of a millisecond, before the first
-		// update makes the tick threads, whose scheduler naps by it too.
-		const int fps = pacedFps(*mConfig);
-		if (napsFit(fps)) {
+		// (pacedFps). A run in real time waits on the clock -- its frames for the limit, its tick threads for their ticks,
+		// whatever the limit -- so it has the OS's timer asked for naps of a millisecond, before the first update makes the
+		// tick threads; a stepped run waits on no clock and asks for nothing.
+		if (wallClock) {
 			askFineNaps();
 		}
-		gPacer.start(fps);
+		gPacer.start(pacedFps(*mConfig));
 	}
 
 
@@ -464,19 +465,38 @@ namespace SFE {
 				}
 				return "debug term " + std::to_string(Render::debugView());
 			});
-		// Keys held and let go by a command, as from the keyboard, to whatever listens for them.
+		// Keys and the mouse's buttons held and let go, and its wheel turned, by a command: the input a script sends is the
+		// window's, given to every listener of it (InputHandler) as the window gives it. Only the panels, which hear the
+		// window itself, do not hear it.
 		bridge->addCommand("press",
-			"A key held or let go as from the keyboard: {\"key\": " + CoreModule::keyNames() + ", \"down\": true or false (true if "
-			"left out)}.",
+			"A key or a mouse button held or let go as from the keyboard or the mouse: {\"key\": " + CoreModule::keyNames()
+			+ ", or LMB, RMB, MMB (at the cursor where it is), \"down\": true or false (true if left out)}; or {\"wheel\": "
+			"notches} the mouse wheel turned.",
 			[](const Json::Value& args) -> std::string {
+				const auto give = "give {\"key\": " + CoreModule::keyNames() + ", or LMB, RMB, MMB, \"down\": true or false}, "
+					"or {\"wheel\": notches}";
+				if (args.isObject() && args.isMember("wheel")) {
+					if (!args["wheel"].isNumeric()) {
+						return give;
+					}
+					CoreModule::InputHandler::injectScroll(0.0, args["wheel"].asDouble());
+					return "wheel turned " + args["wheel"].asString();
+				}
 				const auto name = args.isObject() ? args.get("key", "").asString() : std::string();
+				const auto button = CoreModule::buttonNamed(name);
 				const auto key = CoreModule::keyNamed(name);
-				if (key == CoreModule::InputKey::UNKNOWN) {
-					return "give {\"key\": " + CoreModule::keyNames() + ", \"down\": true or false}";
+				if (!button && key == CoreModule::InputKey::UNKNOWN) {
+					return give;
 				}
 				const bool down = args.get("down", true).asBool();
-				CoreModule::InputHandler::injectKey(static_cast<int>(key),
-					static_cast<int>(down ? CoreModule::InputEventType::PRESS : CoreModule::InputEventType::RELEASE));
+				const int action = static_cast<int>(down ? CoreModule::InputEventType::PRESS : CoreModule::InputEventType::RELEASE);
+				if (button) {
+					// At the cursor where it is, as the window gives a click.
+					CoreModule::InputHandler::mouseBtnInput(static_cast<int>(*button), action, 0);
+				}
+				else {
+					CoreModule::InputHandler::injectKey(static_cast<int>(key), action);
+				}
 				return name + (down ? " held" : " let go");
 			});
 	}
@@ -510,6 +530,12 @@ namespace SFE {
 			SFE_PROFILE_ZONE(Debug::Profiler::kWaitGpu);
 			mRHI->beginFrame();
 		}
+		// Then everything that arrived since the last frame, all of it before any system reads it: nothing polled in a
+		// frame is left for the next. The window's input first, then the commands, a script's press among them.
+		if (getMainWindow()) {
+			SFE_PROFILE_ZONE("Input");
+			glfwPollEvents();
+		}
 		// The commands asked for since the last frame, now that it has begun and nothing of it is recorded yet: what they
 		// upload goes with the frame's own uploads.
 		if (RuntimeBridge::RuntimeBridge::isAlive()) {
@@ -519,11 +545,6 @@ namespace SFE {
 		updateDelta();
 
 		mCore.update(mDeltaTime);
-	
-		if (getMainWindow()) {
-			SFE_PROFILE_ZONE("Input");
-			glfwPollEvents();
-		}
 
 		//getWindow()->swapBuffers();
 
@@ -547,7 +568,8 @@ namespace SFE {
 		// show up as a backend difference when it is only a timing difference.
 		const float fixedDeltaTime = mConfig->fixedDeltaTime;
 		const bool capturing = mConfig->capture.enabled;
-		if (fixedDeltaTime > 0.f || capturing) {
+		const bool stepped = !realTime(*mConfig);
+		if (stepped) {
 			// Assigned, not derived from an accumulated clock: a float clock loses bits as it grows, and the
 			// difference of two of its values would stop being exactly the step.
 			mDeltaTime = fixedDeltaTime > 0.f ? fixedDeltaTime : 1.f / 60.f;
@@ -583,7 +605,6 @@ namespace SFE {
 
 		// A capture holds the pose still, unless it runs at a fixed step: then a clip plays the same way on every run. A
 		// hold (Clocks::hold) stands it still at its own time whatever the step.
-		const bool stepped = fixedDeltaTime > 0.f || capturing;
 		mAnimationClock = Clocks::beginFrame(stepped ? mLastFrame : -1.0, !capturing || fixedDeltaTime > 0.f ? mDeltaTime : 0.f);
 
 		mFramesCounter++;

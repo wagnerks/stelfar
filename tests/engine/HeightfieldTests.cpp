@@ -142,8 +142,8 @@ namespace SFE::EngineTests {
 
 	// Its mesh: square chunks of kTerrainChunkCells cells, every vertex a sample where the heights put it, texCoords its
 	// x/z and texCoords1.x its height, every chunk with the material given and levels of detail of its own, kept on disk
-	// by the field's key with the chunk's cells in it. The chunks are put in from the middle out, each in front of those
-	// before it (Tree::addChild): the one round the middle comes last. Asked again for the same asset, the same model.
+	// by the field's key with the chunk's cells in it. The model lists the chunks from the middle out, the one round the
+	// middle first, so the ground nearer the camera is drawn first. Asked again for the same asset, the same model.
 	TEST(Heightfield, TheMeshIsItsHeights) {
 		const ScratchRoot root;
 		const auto field = bumpyField();
@@ -155,7 +155,7 @@ namespace SFE::EngineTests {
 		const float step = kSize / static_cast<float>(kSamples - 1);
 		const float half = kSize * 0.5f;
 		size_t vertices = 0;
-		float fromMiddleBefore = 1e30f;
+		float fromMiddleBefore = -1.f;
 		for (const auto* chunk : meshes) {
 			ASSERT_NE(chunk, nullptr);
 			ASSERT_FALSE(chunk->mesh.vertices.empty());
@@ -177,13 +177,13 @@ namespace SFE::EngineTests {
 			// Twice the chunk's middle, from its opposite corners, as the mesh orders its chunks by.
 			const float x = chunk->mesh.vertices.front().position.x + chunk->mesh.vertices.back().position.x;
 			const float z = chunk->mesh.vertices.front().position.z + chunk->mesh.vertices.back().position.z;
-			EXPECT_LE(x * x + z * z, fromMiddleBefore) << "the chunks are not in the order they were put in";
+			EXPECT_GE(x * x + z * z, fromMiddleBefore) << "the chunks are not listed from the middle out";
 			fromMiddleBefore = x * x + z * z;
 		}
 		// 33 + 9 samples a side, the row between two chunks in both.
 		EXPECT_EQ(vertices, static_cast<size_t>(42 * 42));
-		EXPECT_EQ(meshes.back()->mesh.vertices.front().position.x, -half) << "the chunk round the middle is not the last";
-		EXPECT_EQ(meshes.back()->mesh.vertices.front().position.z, -half);
+		EXPECT_EQ(meshes.front()->mesh.vertices.front().position.x, -half) << "the chunk round the middle is not the first";
+		EXPECT_EQ(meshes.front()->mesh.vertices.front().position.z, -half);
 		std::error_code ec;
 		EXPECT_TRUE(std::filesystem::exists(root.dir() / "cache" / "terrain_chunk_lods2_0000000000000120.bin", ec))
 			<< "its levels of detail not kept by the key 0x100 ^ 32";

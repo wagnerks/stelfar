@@ -28,8 +28,8 @@ namespace AssetsModule {
 
 	// The mesh of `field`, kept as the asset `assetPath` (that asset if it is there already): chunks of
 	// kTerrainChunkCells cells, each a mesh with `material` and its own bounds and levels of detail (kept on disk by
-	// the field's key: cache/terrain_chunk_lods2_<key ^ kTerrainChunkCells>), put in from the middle out, each in front
-	// of those before it, so the model lists them from the outside in, the one round the middle last. Its texCoords
+	// the field's key: cache/terrain_chunk_lods2_<key ^ kTerrainChunkCells>), listed from the middle out, the one round
+	// the middle first, so the ground nearer the camera is drawn first. Its texCoords
 	// carry the local x/z in metres, texCoords1.x the height: what kTerrainFS shades from. Null if the field has fewer
 	// than 2 samples or fewer heights than samples squared.
 	Model* heightfieldModel(const SFE::ComponentsModule::HeightfieldComponent& field, const SFE::Material& material,

@@ -83,15 +83,12 @@ namespace SFE {
 		}
 	}
 
-	int pacedFps(const EngineConfig& config) {
-		if (config.fixedDeltaTime > 0.f || config.capture.enabled) {
-			return 0;
-		}
-		return (std::max)(0, config.maxFps);
+	bool realTime(const EngineConfig& config) {
+		return !(config.fixedDeltaTime > 0.f || config.capture.enabled);
 	}
 
-	bool napsFit(const int fps) {
-		return fps > 0 && 1.0 / static_cast<double>(fps) > DeadlineWaiter::kFirstNapEstimate;
+	int pacedFps(const EngineConfig& config) {
+		return realTime(config) ? (std::max)(0, config.maxFps) : 0;
 	}
 
 	void askFineNaps() {

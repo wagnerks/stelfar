@@ -82,7 +82,9 @@ namespace {
 	// (TextureHandler::loadTexture reads it back), or read for the first time and held too, and the materials pointed at
 	// them. So a model never keeps a texture let go of, whether it was itself let go of or was loading while another one
 	// was, and lets go of every one it read when it is let go of, a model from the cache too, whose textures are first
-	// read here.
+	// read here. A re-take of what a slot names, not a request: one read already is taken as it was read (its own flip
+	// and storage, whoever read it first), one not read yet is read as a model's own textures are, unflipped and
+	// compressed.
 	std::vector<Texture*> hold(const std::vector<SFE::MeshObject3D*>& parts) {
 		std::vector<Texture*> textures;
 		for (const auto* part : parts) {
@@ -105,7 +107,9 @@ namespace {
 				if (slot.path.empty()) {
 					continue;
 				}
-				auto* texture = TextureHandler::loadTexture(slot.path, false, TextureStorage::Compressed);
+				const auto* cached = AssetsManager::instance()->getAsset<Texture>(slot.path);
+				auto* texture = TextureHandler::loadTexture(slot.path, cached ? cached->flip : false,
+					cached ? cached->storage : TextureStorage::Compressed);
 				slot.texture = texture->texture;
 				if (texture != none && std::find(textures.begin(), textures.end(), texture) == textures.end()) {
 					std::lock_guard lock(gResidencyMutex);

@@ -3,7 +3,8 @@
 #include <chrono>
 
 // How the engine waits: for a tick of a tick system (SystemManager) and for the end of a frame (Engine::update), with one
-// waiter. Included by Engine.cpp, SystemManager.cpp and their tests only.
+// waiter. Included by Engine.cpp, Pacing.cpp, SystemManager.cpp and the engine's tests (PacingTests, RunOptionsTests)
+// only.
 namespace SFE {
 	struct EngineConfig;
 
@@ -66,11 +67,13 @@ namespace SFE {
 		DeadlineWaiter mWaiter;
 	};
 
-	// The frames a second a run is held to: EngineConfig::maxFps while the step is the wall clock's; none (0) under a
-	// fixed step or a capture, whose frames go as fast as they can.
+	// Whether a run's step is the wall clock's: no fixed step and no capture. Such a run waits on the clock -- its frames
+	// for the limit, its tick systems for their ticks -- and has the OS asked for fine naps (askFineNaps); a stepped run
+	// never waits on it.
+	bool realTime(const EngineConfig& config);
+	// The frames a second a run is held to: EngineConfig::maxFps in real time; none (0) under a fixed step or a capture,
+	// whose frames go as fast as they can.
 	int pacedFps(const EngineConfig& config);
-	// Whether a frame of 1 / fps seconds has room to nap in: longer than a nap is first taken to cost. False for none.
-	bool napsFit(int fps);
 	// The OS's timer at 1 ms for the rest of the process, so naps are a millisecond and not a slice (timeBeginPeriod on
 	// Windows, given back at exit; nothing elsewhere). Asked once however often it is called.
 	void askFineNaps();

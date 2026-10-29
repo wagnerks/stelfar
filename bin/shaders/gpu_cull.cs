@@ -9,6 +9,7 @@ layout(SFE_SET(0, 1), std430) readonly buffer modelMatrices {
 };
 
 #include "sfe_gpu_meshes.glsl"
+#include "sfe_lod.glsl"
 
 struct SceneInstance {
     uint entity;
@@ -81,18 +82,6 @@ layout(SFE_SET(0, 31), std430) readonly buffer CullView {
     // The pixels on screen a coarser level may change, and as many texels in a shadow map.
     float lodPixels;
 } view;
-
-// The coarsest level of the chain that strays from the full mesh by no more than `allowed`, a share of the mesh's
-// extent (MeshLod's errors, growing down the chain).
-uint lodForError(GpuMesh mesh, float allowed) {
-    uint level = 0u;
-    for (uint l = 1u; l < mesh.lodCount; ++l) {
-        if (mesh.lodErrors[l - 1u] <= allowed) {
-            level = l;
-        }
-    }
-    return level;
-}
 
 // Per instance slot: 1 when it passed the occlusion test last frame. A slot that changed owner can hold
 // anything, which only decides the phase it is drawn in.
@@ -224,14 +213,10 @@ void main() {
         }
         if (mesh.lodCount > 1u) {
             float distance = max(length(center - view.lodOrigin.xyz), 1e-3);
-            // A level is drawn once what it changes is under lodPixels: its error times the mesh's extent on screen, at most
-            // twice the radius. The pixels are the player's; each step of bias doubles them.
-            float allowed = view.lodPixels * float(1u << view.lodBias) / max(2.0 * radius * view.lodOrigin.w / distance, 1e-6);
-            // Never finer than the map's texels show, which in a far cascade is coarser than the camera's pixels ask.
-            if (view.texelsPerMetre > 0.0) {
-                allowed = max(allowed, view.lodPixels / max(2.0 * texels, 1e-6));
-            }
-            uint level = lodForError(mesh, allowed);
+            // A level is drawn once what it changes is under lodPixels, the player's pixels or a cascade's texels
+            // (sfe_lod.glsl, the rule a pass drawing its own instances takes too).
+            float allowed = sfeLodAllowed(view.lodPixels, view.lodBias, radius, view.lodOrigin.w, distance, view.texelsPerMetre);
+            uint level = sfeLodLevel(mesh.lodErrors, mesh.lodCount, allowed);
             // A far ground chunk is still large on screen, but seen nearly edge on its triangles are slivers a pixel
             // or two high, shaded mostly for nothing: past the distance it keeps about half of them.
             if (b >= view.groundFirst && b < view.groundEnd && distance > view.groundLodDistance) {

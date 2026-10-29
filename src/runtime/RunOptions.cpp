@@ -151,10 +151,10 @@ namespace SFE {
 				o.contentDir = after(arg, "--content-dir=");
 			}
 			// Read by Render::configureGraphicsBackend; taken here so the application does not meet it.
-			else if (arg == "--backend" && valued(i)) {
-				++i;
-			}
-			else if (arg.starts_with("--backend=")) {
+			else if ((arg == "--backend" && valued(i)) || arg.starts_with("--backend=")) {
+				if (arg == "--backend") {
+					++i;
+				}
 			}
 			else {
 				o.rest.push_back(argv[i]);

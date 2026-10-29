@@ -1,14 +1,20 @@
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <system_error>
 
 #include <gtest/gtest.h>
 
+#include "assetsModule/AssetsManager.h"
+#include "assetsModule/TextureHandler.h"
 #include "assetsModule/modelModule/ModelCache.h"
 #include "assetsModule/modelModule/ModelLoader.h"
+#include "core/FileSystem.h"
+#include "multithreading/ThreadPool.h"
 
 // What ModelLoader keeps of a model file comes back as it went in -- every part in its place among its siblings, its
 // vertices, levels, material and extras, the armature and the animations -- and stops coming back once a file it was
@@ -240,5 +246,89 @@ namespace SFE::ModelCacheTests {
 		Armature a;
 		std::vector<Animation> n;
 		EXPECT_FALSE(ModelCache::read(std::string(kPath) + ".text", m, a, n));
+	}
+
+	namespace {
+		// FileSystem's root a folder of this test's own for as long as it lives, then put back and the folder gone: the
+		// picture, the model's cache and the log of errors (sfe_fatal.log) are made there, apart from every other test's.
+		class ScratchRoot {
+		public:
+			ScratchRoot() : mWasRoot(FileSystem::root()), mDir(std::filesystem::temp_directory_path()
+				/ ("sfe_model_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+				ThreadPool::instance()->waitIdle();
+				std::filesystem::create_directories(mDir);
+				FileSystem::setRoot(mDir.string());
+			}
+			~ScratchRoot() {
+				ThreadPool::instance()->waitIdle();
+				FileSystem::setRoot(mWasRoot.string());
+				std::error_code ec;
+				std::filesystem::remove_all(mDir, ec);
+			}
+			ScratchRoot(const ScratchRoot&) = delete;
+			ScratchRoot& operator=(const ScratchRoot&) = delete;
+
+			const std::filesystem::path& dir() const { return mDir; }
+
+		private:
+			std::filesystem::path mWasRoot;
+			std::filesystem::path mDir;
+		};
+
+		// A 4 x 4 opaque picture as an uncompressed TGA, rows from the top, which the texture reader reads as any image.
+		void writePicture(const std::filesystem::path& file) {
+			std::filesystem::create_directories(file.parent_path());
+			std::string bytes(18, '\0');
+			bytes[2] = 2;     // true colour, uncompressed
+			bytes[12] = 4;    // width
+			bytes[14] = 4;    // height
+			bytes[16] = 32;   // bits a pixel, BGRA
+			bytes[17] = 0x28; // 8 bits of alpha, rows from the top
+			for (int i = 0; i < 16; ++i) {
+				bytes += { static_cast<char>(40 + 10 * i), static_cast<char>(200 - 5 * i), static_cast<char>(90), static_cast<char>(255) };
+			}
+			std::ofstream(file, std::ios::binary | std::ios::trunc) << bytes;
+		}
+	}
+
+	// A model's hold re-takes what its slots name and asks nothing: a texture read already, by whoever read it first and
+	// however -- as a text model reads its font's picture raw -- is held as it was read, the one texture of its path, with
+	// nothing said of a request that disagrees. The model comes from its cache, whose textures only the hold reads.
+	TEST(ModelCache, AHoldTakesATextureAsItIsCached) {
+		const ScratchRoot root;
+		constexpr const char* kPicture = "textures/held_as_cached.tga";
+		constexpr const char* kModel = "models/held_as_cached.gltf";
+		writePicture(root.dir() / kPicture);
+		auto* picture = TextureHandler::loadTexture(kPicture);
+		ASSERT_TRUE(picture->isValid()) << kPicture << " was not read";
+		ASSERT_EQ(picture->storage, TextureStorage::Raw);
+
+		Tree<MeshObject3D> meshes;
+		MeshObject3D held;
+		held.nodeName = "held";
+		for (int i = 0; i < 3; ++i) {
+			Vertex3D v;
+			v.position = { static_cast<float>(i % 2), static_cast<float>(i / 2), 0.f };
+			v.normal = { 0.f, 0.f, 1.f };
+			held.mesh.vertices.push_back(v);
+		}
+		held.mesh.indices = { 0, 1, 2 };
+		held.material[DIFFUSE].path = kPicture;
+		meshes.addChild(std::move(held));
+		ModelCache::write(kModel, meshes, Armature{}, {}, {});
+
+		auto* model = ModelLoader::instance()->load(kModel);
+		ASSERT_NE(model, nullptr) << kModel << " was not read from its cache";
+		EXPECT_EQ(AssetsManager::instance()->getAsset<Texture>(kPicture), picture) << "the path is two textures";
+		EXPECT_EQ(picture->storage, TextureStorage::Raw) << "the hold read it again otherwise";
+		EXPECT_FALSE(picture->flip);
+		const auto& parts = (*model->getLODs())[0].meshes;
+		ASSERT_EQ(parts.size(), 1u);
+		const auto* slot = parts.front()->material.materialTextures.contains(DIFFUSE) ? &parts.front()->material.materialTextures.at(DIFFUSE) : nullptr;
+		ASSERT_NE(slot, nullptr);
+		EXPECT_EQ(slot->texture.id, picture->texture.id) << "the slot does not draw with the texture of its path";
+
+		const auto log = bytesOf((root.dir() / "sfe_fatal.log").string());
+		EXPECT_EQ(log.find("asked for with flip"), std::string::npos) << log;
 	}
 }

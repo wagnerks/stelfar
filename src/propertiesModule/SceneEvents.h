@@ -9,9 +9,10 @@
 
 namespace SFE::PropertiesModule {
 	// A scene file made into entities (PropertiesSystem::loadScene): the file as it was named, the entity the scene
-	// hangs under, and every entity made of it -- the root first, then each generation after the one it hangs under.
-	// Each that has a transform has its render transform (TransformMatComp) seeded where the file puts it; the root, and
-	// a node the file gives none, have none.
+	// hangs under, and every entity made of it in the order the file lists them, depth first -- the root first, each
+	// node before its children, siblings as the file has them (fillTree's order, their ids' order). Each that has a
+	// transform stands where the file puts it under its parents before any listener is told: its component's own matrix
+	// and its render copy (TransformMatComp) both. A node the file gives no transform has neither.
 	struct SceneLoaded {
 		std::string path;
 		ecss::EntityId root = ecss::INVALID_ID;

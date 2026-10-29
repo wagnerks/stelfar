@@ -1,9 +1,14 @@
 #include <cmath>
+#include <regex>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "assetsModule/modelModule/MeshLod.h"
+#include "assetsModule/modelModule/MeshVaoRegistry.h"
+#include "core/FileSystem.h"
+#include "renderModule/LodRule.h"
 
 // Whether a mesh's back side is never seen (markOneSided), as GeometryPass and the game's litter then cull its back
 // faces: a closed surface facing out is, however its corners are split; a rigid one with a thin open tube on it, as a
@@ -121,5 +126,55 @@ namespace SFE::MeshLodTests {
 		}
 		markOneSided(b.mesh);
 		EXPECT_FALSE(b.mesh.oneSided);
+	}
+
+	// Which level of a chain is drawn (shaders/sfe_lod.glsl, the scene's culls' and through LodRule.h a pass's of its own
+	// instances): the coarsest whose error is within the allowed share of the mesh's extent, and that share growing with
+	// the distance and the bias, never finer than a shadow map's texels show.
+	constexpr float kErrors[GpuMesh::kMaxLodErrors] = { 0.01f, 0.02f, 0.04f, 0.08f, 0.16f, 0.32f };
+
+	TEST(LodRule, TheCoarsestLevelWithinTheAllowedError) {
+		using Render::LodRule::sfeLodLevel;
+		EXPECT_EQ(sfeLodLevel(kErrors, 7u, 0.005f), 0u) << "under every level's error";
+		EXPECT_EQ(sfeLodLevel(kErrors, 7u, 0.02f), 2u) << "an error equal to the allowed one is within it";
+		EXPECT_EQ(sfeLodLevel(kErrors, 7u, 1.f), 6u);
+		EXPECT_EQ(sfeLodLevel(kErrors, 3u, 1.f), 2u) << "past the end of a shorter chain";
+		EXPECT_EQ(sfeLodLevel(kErrors, 1u, 1.f), 0u) << "a mesh with no coarser level";
+	}
+
+	TEST(LodRule, AllowedGrowsWithDistanceAndDoublesPerBias) {
+		using Render::LodRule::sfeLodAllowed;
+		constexpr float kPixels = 2.f;
+		constexpr float kPerUnit = 1000.f;
+		// 2 pixels of a mesh 1 m across seen from 10 m, 100 pixels: a share of 0.02.
+		const float atTen = sfeLodAllowed(kPixels, 0u, 0.5f, kPerUnit, 10.f, 0.f);
+		EXPECT_FLOAT_EQ(atTen, 0.02f);
+		EXPECT_FLOAT_EQ(sfeLodAllowed(kPixels, 0u, 0.5f, kPerUnit, 20.f, 0.f), 2.f * atTen) << "twice as far, twice the share";
+		EXPECT_FLOAT_EQ(sfeLodAllowed(kPixels, 1u, 0.5f, kPerUnit, 10.f, 0.f), 2.f * atTen) << "a step of bias doubles the pixels";
+		EXPECT_FLOAT_EQ(sfeLodAllowed(kPixels, 0u, 1.f, kPerUnit, 10.f, 0.f), 0.5f * atTen) << "twice the size, half the share";
+		// A cascade of a texel a metre shows the mesh 1 texel across, coarser than its 100 pixels; one of 1e5 a metre
+		// finer, which leaves the pixels' share.
+		EXPECT_FLOAT_EQ(sfeLodAllowed(kPixels, 0u, 0.5f, kPerUnit, 10.f, 1.f), 2.f) << "finer than the map's texels show";
+		EXPECT_FLOAT_EQ(sfeLodAllowed(kPixels, 0u, 0.5f, kPerUnit, 10.f, 1e5f), atTen);
+		const float atTheEye = sfeLodAllowed(kPixels, 0u, 0.5f, kPerUnit, 0.f, 0.f);
+		EXPECT_TRUE(std::isfinite(atTheEye)) << "a distance of 0 divides by 0";
+		EXPECT_GT(atTheEye, 0.f);
+		EXPECT_LT(atTheEye, atTen);
+	}
+
+	// The scene's cull takes the rule instead of a copy of its own, with GpuMesh's errors as they are.
+	TEST(LodRule, TheCullShaderTakesTheRule) {
+		std::string cull;
+		ASSERT_TRUE(FileSystem::readFile("shaders/gpu_cull.cs", cull));
+		EXPECT_NE(cull.find("#include \"sfe_lod.glsl\""), std::string::npos);
+		EXPECT_NE(cull.find("sfeLodAllowed("), std::string::npos);
+		EXPECT_NE(cull.find("sfeLodLevel("), std::string::npos);
+		EXPECT_EQ(cull.find("lodErrors["), std::string::npos) << "gpu_cull.cs picks a level by a rule of its own";
+
+		std::string rule;
+		ASSERT_TRUE(FileSystem::readFile("shaders/sfe_lod.glsl", rule));
+		std::smatch errors;
+		ASSERT_TRUE(std::regex_search(rule, errors, std::regex(R"(float errors\[(\d+)\])")));
+		EXPECT_EQ(std::stoul(errors[1].str()), GpuMesh::kMaxLodErrors) << "sfe_lod.glsl's errors are not GpuMesh::lodErrors";
 	}
 }

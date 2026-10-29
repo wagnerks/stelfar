@@ -25,7 +25,4 @@ namespace SFE::Render {
 	IblTexels computeIbl(const std::optional<ComponentsModule::SkyComponent>& sky, float sunIntensity);
 	// On the render thread: into `maps`, made the first time and written over after.
 	void uploadIbl(RenderHardwareInterface* rhi, const IblTexels& texels, IblMaps& maps);
-
-	// The scene's sky when it has one, the studio environment otherwise.
-	IblMaps bakeIbl(RenderHardwareInterface* rhi, float sunIntensity);
 }

@@ -110,8 +110,9 @@ order:
 7. `while (engine->isAlive()) engine->update();`, then `Engine::terminate()`. The engine paces the frames itself, with
    the same waiter as the tick systems' (`core/Pacing.h`): while the step is the wall clock's, `update()` ends on a grid
    of 1 / `maxFps` from `start()`, a late frame waiting for nothing and the grid starting again from it; a fixed step or
-   a capture is never held back. When a frame has room to nap in (60 a second, not 600), `start()` asks the OS for
-   naps of a millisecond (`timeBeginPeriod(1)` on Windows). The application adds no wait of its own.
+   a capture is never held back. A run in real time, whatever its limit, waits on the clock -- its frames for the
+   limit, its tick systems for their ticks -- so `start()` asks the OS for naps of a millisecond for it
+   (`timeBeginPeriod(1)` on Windows); a stepped run asks for nothing. The application adds no wait of its own.
 
 Embedded in an editor, the editor's flags are the bridge's: `RuntimeBridge::setEmbeddedInEditor` and
 `setPublishEditorDisplay` (`runtimeBridge/RuntimeBridge.h`); whether the window shows the picture is

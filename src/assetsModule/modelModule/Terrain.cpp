@@ -160,11 +160,11 @@ namespace AssetsModule {
 			writer.commit();
 		}
 
-		// The root holds nothing; every chunk is a child with the material and its own bounds. They are put in from the
-		// middle out, but Tree::addChild puts each in front of those before it, so the model lists them from the outside
-		// in, the one round the middle last (HeightfieldTests pins it). Meant the other way round -- the camera is mostly
-		// near a heightfield's middle, so the ground nearer it would go first and the depth test turn away what it hides
-		// before it is shaded -- but turning it would change the draw order and so the picture, so it is kept.
+		// The root holds nothing; every chunk is a child with the material and its own bounds. The model lists them from
+		// the middle out, the one round the middle first: the camera is mostly near a heightfield's middle, so the ground
+		// nearer it goes up and is drawn first, and the depth test turns away what it hides before it is shaded.
+		// Tree::addChild puts each child in front of those before it, so they are put in the other way, from the outside
+		// in.
 		std::vector<size_t> order(chunkMeshes.size());
 		std::iota(order.begin(), order.end(), size_t{ 0 });
 		const auto fromMiddle = [&](const size_t c) {
@@ -176,8 +176,8 @@ namespace AssetsModule {
 		};
 		std::stable_sort(order.begin(), order.end(), [&](const size_t a, const size_t b) { return fromMiddle(a) < fromMiddle(b); });
 		SFE::Tree<SFE::MeshObject3D> tree;
-		for (const size_t c : order) {
-			auto& chunk = chunkMeshes[c];
+		for (auto c = order.rbegin(); c != order.rend(); ++c) {
+			auto& chunk = chunkMeshes[*c];
 			SFE::Math::Vec3 lo = chunk.mesh.vertices.front().position;
 			SFE::Math::Vec3 hi = lo;
 			for (const auto& v : chunk.mesh.vertices) {

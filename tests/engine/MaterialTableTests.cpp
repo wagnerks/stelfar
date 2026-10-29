@@ -372,10 +372,10 @@ namespace SFE::EngineTests {
 		EXPECT_TRUE(isNew(before)) << "the material before the change is still held";
 	}
 
-	// A model bound again keeps what was changed on its meshes' materials since: the application's lanes and the ground
-	// among them, which carry a coat, a ghost's wrist, a soak line, a ground. Its name, solidGlass, castsShadow and
-	// dissolve go back to the model's, as they always have (docs/engine_split.md, step 9's list).
-	TEST(EngineTest, AReBindKeepsTheUserLanesAndTheGround) {
+	// A model bound again keeps every field changed on its meshes' materials since, with none excepted: the application's
+	// lanes and the ground (a coat, a ghost's wrist, a soak line, a ground), the name, solidGlass (a ghost), castsShadow
+	// (an outline, a web, a flame) and dissolve (a withered plant). A field nobody changed still is the model's.
+	TEST(EngineTest, AReBindKeepsWhatWasChanged) {
 		auto& registry = ECSHandler::registry();
 		constexpr const char* kPath = "models/test_anim.fbx";
 		const auto entity = PropertiesModule::PropertiesSystem::spawnModel(kPath, {}, Math::Vec3{ 1.f }, {});
@@ -415,10 +415,11 @@ namespace SFE::EngineTests {
 			const auto& material = mesh->meshMaterials[i];
 			EXPECT_TRUE(material.user == lanes) << "mesh " << i << ": the lanes were dropped";
 			EXPECT_TRUE(material.ground) << "mesh " << i << ": the ground was dropped";
-			EXPECT_EQ(material.name, given[i].name) << "mesh " << i;
-			EXPECT_EQ(material.solidGlass, given[i].solidGlass) << "mesh " << i;
-			EXPECT_EQ(material.castsShadow, given[i].castsShadow) << "mesh " << i;
-			EXPECT_EQ(material.dissolve, given[i].dissolve) << "mesh " << i;
+			EXPECT_EQ(material.name, given[i].name + " renamed") << "mesh " << i << ": the name was dropped";
+			EXPECT_EQ(material.solidGlass, !given[i].solidGlass) << "mesh " << i << ": solidGlass was dropped";
+			EXPECT_EQ(material.castsShadow, !given[i].castsShadow) << "mesh " << i << ": castsShadow was dropped";
+			EXPECT_EQ(material.dissolve, 0.5f) << "mesh " << i << ": dissolve was dropped";
+			EXPECT_EQ(material.roughness, given[i].roughness) << "mesh " << i << ": an unchanged field left the model's";
 		}
 	}
 }

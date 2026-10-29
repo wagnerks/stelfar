@@ -305,7 +305,8 @@ namespace {
 	std::unordered_map<std::string, DecodedImage> gPredecoded;
 
 	// A texture is cached by its path alone, so a later request gets what the first one asked for. Asked for with another
-	// flip or storage, the request is not what it gets: said loudly, once a path.
+	// flip or storage, the request is not what it gets: said loudly, once a path. A hold re-takes and asks nothing: it
+	// passes the cached texture's own (ModelLoader's hold).
 	std::mutex gMismatchMutex;
 	std::unordered_set<std::string> gMismatched;
 

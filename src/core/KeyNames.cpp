@@ -16,6 +16,10 @@ namespace SFE::CoreModule {
 			{ "END", InputKey::KEY_END },
 		};
 		constexpr int kFunctionKeys = 12;
+		constexpr std::pair<std::string_view, MouseButton> kButtons[] = {
+			{ "LMB", MouseButton::MOUSE_BUTTON_LEFT }, { "RMB", MouseButton::MOUSE_BUTTON_RIGHT },
+			{ "MMB", MouseButton::MOUSE_BUTTON_MIDDLE },
+		};
 
 		// A key some way along a run of keys numbered one after another (A to Z, 0 to 9, F1 to F12, as GLFW numbers them).
 		InputKey after(InputKey first, int steps) {
@@ -47,6 +51,15 @@ namespace SFE::CoreModule {
 			}
 		}
 		return InputKey::UNKNOWN;
+	}
+
+	std::optional<MouseButton> buttonNamed(std::string_view name) {
+		for (const auto& [word, button] : kButtons) {
+			if (word == name) {
+				return button;
+			}
+		}
+		return std::nullopt;
 	}
 
 	std::string keyNames() {

@@ -397,12 +397,4 @@ namespace SFE::Render {
 			uploadCube(rhi, maps.prefilter, (std::max)(kPreSize >> mip, 1), mip, texels.prefilter[mip]);
 		}
 	}
-
-	IblMaps bakeIbl(RenderHardwareInterface* rhi, const float sunIntensity) {
-		IblMaps maps{};
-		if (rhi) {
-			uploadIbl(rhi, computeIbl(Atmosphere::sceneSky(), sunIntensity), maps);
-		}
-		return maps;
-	}
 }

@@ -7,7 +7,7 @@
 #include "core/Pacing.h"
 
 // The frame limit (core/Pacing.h): frames end on a grid of 1 / fps, a late one is not made up, and only a run whose
-// step is the wall clock's is held to it.
+// step is the wall clock's is held to it, and naps finely.
 namespace SFE::FramePacingTests {
 	using Clock = FrameSchedule::Clock;
 	using std::chrono::milliseconds;
@@ -79,10 +79,23 @@ namespace SFE::FramePacingTests {
 		EXPECT_EQ(pacedFps(config), 0) << "a capture";
 	}
 
-	TEST(FramePacing, FineNapsOnlyWhenAFrameHasRoom) {
-		EXPECT_TRUE(napsFit(60));
-		EXPECT_FALSE(napsFit(600));
-		EXPECT_FALSE(napsFit(0));
-		EXPECT_FALSE(napsFit(-1));
+	// Every run whose step is the wall clock's waits on it -- its frames for the limit, its tick systems for their ticks --
+	// and has the OS asked for fine naps whatever its limit: the window's 600, a bot's 60, none at all. A stepped run
+	// waits on no clock, and is neither paced nor asks.
+	TEST(FramePacing, FineNapsForEveryRealTimeRun) {
+		EngineConfig config;
+		EXPECT_TRUE(realTime(config)) << "the default, " << config.maxFps << " a second";
+		config.maxFps = 60;
+		EXPECT_TRUE(realTime(config)) << "60 a second";
+		config.maxFps = 0;
+		EXPECT_TRUE(realTime(config)) << "no limit: its ticks still wait";
+		config.maxFps = 60;
+		config.fixedDeltaTime = 0.016f;
+		EXPECT_FALSE(realTime(config)) << "a fixed step";
+		EXPECT_EQ(pacedFps(config), 0);
+		config.fixedDeltaTime = 0.f;
+		config.capture.enabled = true;
+		EXPECT_FALSE(realTime(config)) << "a capture";
+		EXPECT_EQ(pacedFps(config), 0);
 	}
 }
