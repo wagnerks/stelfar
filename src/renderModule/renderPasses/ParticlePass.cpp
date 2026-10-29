@@ -13,6 +13,7 @@
 #include "renderModule/FrameBlackboard.h"
 #include "renderModule/GBuffer.h"
 #include "renderModule/Particles.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -85,22 +86,22 @@ void ParticlePass::init(SystemsModule::RenderData&) {
 	stepLayout.bindings.emplace_back(8, DescriptorType::StorageBuffer, ShaderStage::Compute);
 	stepLayout.bindings.emplace_back(9, DescriptorType::CombinedImageSampler, ShaderStage::Compute);
 	stepLayout.bindings.emplace_back(10, DescriptorType::CombinedImageSampler, ShaderStage::Compute);
-	mStepLayout = rhi->createDescriptorSetLayout(stepLayout);
+	mStepLayout = own(rhi->createDescriptorSetLayout(stepLayout));
 
 	DescriptorSetLayoutDesc chipLayout;
 	chipLayout.bindings.emplace_back(1, DescriptorType::StorageBuffer, ShaderStage::Vertex);
 	chipLayout.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex);
-	mChipLayout = rhi->createDescriptorSetLayout(chipLayout);
+	mChipLayout = own(rhi->createDescriptorSetLayout(chipLayout));
 
 	for (uint32_t i = 0; i < slots; ++i) {
-		mStepSets.push_back(rhi->allocateDescriptorSet(mStepLayout));
-		mChipSets.push_back(rhi->allocateDescriptorSet(mChipLayout));
+		mStepSets.push_back(own(rhi->allocateDescriptorSet(mStepLayout)));
+		mChipSets.push_back(own(rhi->allocateDescriptorSet(mChipLayout)));
 		BufferDesc caught;
 		caught.size = kCaughtSize;
 		caught.usage = BufferUsage::Storage;
 		caught.cpuAccess = CpuAccess::Read;
 		caught.debugName = "particles caught";
-		mCaught.push_back(rhi->createBuffer(caught));
+		mCaught.push_back(own(rhi->createBuffer(caught)));
 		mCaughtRead.push_back(0);
 	}
 	BufferDesc shapes;
@@ -108,25 +109,25 @@ void ParticlePass::init(SystemsModule::RenderData&) {
 	shapes.usage = BufferUsage::Storage;
 	shapes.cpuAccess = CpuAccess::None;
 	shapes.debugName = "particle catchers' shapes";
-	mShapes = rhi->createBuffer(shapes);
+	mShapes = own(rhi->createBuffer(shapes));
 
 	ComputePipelineDesc step;
-	step.compute = rhi->loadShader(ShaderStage::Compute, "shaders/particles.cs");
+	step.compute = keep(mShaders, rhi->loadShader(ShaderStage::Compute, "shaders/particles.cs"));
 	step.descriptorSetLayouts = { mStepLayout };
 	step.pushConstantSize = sizeof(StepPush);
-	mStep = rhi->createComputePipeline(step);
+	mStep = own(rhi->createComputePipeline(step));
 
-	mQuad = makeQuad();
-	mGBufferPass = rhi->createRenderPass(gBufferPassDesc(true));
+	mQuad = own(makeQuad());
+	mGBufferPass = own(rhi->createRenderPass(gBufferPassDesc(true)));
 	auto chips = quadPipeline();
 	chips.depthStencilState.depthWrite = true;
 	chips.depthStencilState.depthCompareOp = CompareOp::Less;
 	chips.blend.enabled = false;
 	chips.renderPass = mGBufferPass;
 	chips.descriptorSetLayouts = { mChipLayout };
-	chips.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/particle_chip.vs");
-	chips.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/particle_chip.fs");
-	mChips = rhi->createGraphicsPipeline(chips);
+	chips.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/particle_chip.vs"));
+	chips.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/particle_chip.fs"));
+	mChips = own(rhi->createGraphicsPipeline(chips));
 }
 
 void ParticlePass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -142,11 +143,13 @@ void ParticlePass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	auto* rhi = Engine::instance()->rhi();
 	if (SFE::Clocks::restarting()) {
 		mHead = 0;
-		if (const auto particles = Particles::buffer()) {
+		if (mParticles) {
 			static const std::vector<GpuParticle> none(kCapacity);
-			rhi->updateBuffer(particles, 0, sizeof(GpuParticle) * kCapacity, none.data());
+			rhi->updateBuffer(mParticles, 0, sizeof(GpuParticle) * kCapacity, none.data());
 		}
 	}
+	// What the drops and the motes are drawn from, each frame: none until the first frame one lives.
+	renderDataHandle.frame.set(FrameId::ParticleBuffer, { .buffer = mParticles });
 	const auto slot = rhi->frameInFlight() % mStepSets.size();
 	// What this slot's last step caught, done with now that the slot comes round again: told on.
 	if (const auto* head = static_cast<const uint32_t*>(rhi->mapBuffer(mCaught[slot], MapMode::Read))) {
@@ -174,16 +177,17 @@ void ParticlePass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	if (!mStep || !mChips || !Particles::alive(now) || !depth || !normal || !albedo || !material || !gBuffer) {
 		return;
 	}
-	auto& particles = Particles::buffer();
-	if (!particles) {
+	if (!mParticles) {
 		const std::vector<GpuParticle> none(kCapacity);
 		BufferDesc desc;
 		desc.size = sizeof(GpuParticle) * kCapacity;
 		desc.usage = BufferUsage::Storage;
 		desc.cpuAccess = CpuAccess::None;
 		desc.debugName = "particles";
-		particles = rhi->createBuffer(desc, none.data());
+		mParticles = own(rhi->createBuffer(desc, none.data()));
+		frame.set(FrameId::ParticleBuffer, { .buffer = mParticles });
 	}
+	const BufferHandle particles = mParticles;
 	const auto block = rhi->allocTransient(sizeof(GpuParticle) * kMaxSpawn);
 	if (!block) {
 		return;
@@ -210,8 +214,8 @@ void ParticlePass::render(SystemsModule::RenderData& renderDataHandle, Render::C
 	const StepPush push{ dt, mHead, count, kWindSpeed, catching };
 	mHead = (mHead + count) % kCapacity;
 
-	const auto stepSet = mStepSets[slot];
-	const auto chipSet = mChipSets[slot];
+	const DescriptorSetHandle stepSet = mStepSets[slot];
+	const DescriptorSetHandle chipSet = mChipSets[slot];
 	rhi->updateDescriptorSets({
 		{ .set = stepSet, .binding = 1, .buffers{ { particles } } },
 		{ .set = stepSet, .binding = 2, .buffers{ { block.buffer, 0, sizeof(GpuParticle) * kMaxSpawn } } },
@@ -263,7 +267,7 @@ namespace {
 
 void ParticleSpritePass::init(SystemsModule::RenderData&) {
 	auto* rhi = Engine::instance()->rhi();
-	mRenderPass = createFinalDepthRenderPass();
+	mRenderPass = own(createFinalDepthRenderPass());
 
 	DescriptorSetLayoutDesc layout;
 	layout.bindings.emplace_back(1, DescriptorType::StorageBuffer, ShaderStage::Vertex);
@@ -272,13 +276,13 @@ void ParticleSpritePass::init(SystemsModule::RenderData&) {
 	layout.bindings.emplace_back(11, DescriptorType::UniformBufferDynamic, ShaderStage::Vertex);
 	layout.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Vertex);
 	layout.bindings.emplace_back(4, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layout);
+	mLayout = own(rhi->createDescriptorSetLayout(layout));
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
-		set = rhi->allocateDescriptorSet(mLayout);
+		set = own(rhi->allocateDescriptorSet(mLayout));
 	}
 
-	mQuad = makeQuad();
+	mQuad = own(makeQuad());
 	auto desc = quadPipeline();
 	desc.depthStencilState.depthWrite = false;
 	desc.depthStencilState.depthCompareOp = CompareOp::LessEqual;
@@ -288,19 +292,19 @@ void ParticleSpritePass::init(SystemsModule::RenderData&) {
 	desc.blend.dstColor = BlendFactor::OneMinusSrcAlpha;
 	desc.renderPass = mRenderPass;
 	desc.descriptorSetLayouts = { mLayout };
-	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/particle_sprite.vs");
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/particle_sprite.fs");
-	mPipeline = rhi->createGraphicsPipeline(desc);
+	desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/particle_sprite.vs"));
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/particle_sprite.fs"));
+	mPipeline = own(rhi->createGraphicsPipeline(desc));
 }
 
 void ParticleSpritePass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
-	const auto particles = Particles::buffer();
+	auto& frame = renderDataHandle.frame;
+	const auto particles = frame.buffer(FrameId::ParticleBuffer);
 	SpriteParams params;
 	if (!mPipeline || !particles || !Particles::alive(Engine::instance()->animationClock()) || !Atmosphere::skyParams(renderDataHandle, params.sky)) {
 		return;
 	}
-	auto& frame = renderDataHandle.frame;
 	const auto* csm = frame.data<CsmFrame>(FrameId::Csm);
 	const auto shadow = frame.texture(FrameId::ShadowCsm);
 	const auto sceneDepth = frame.texture(FrameId::SceneDepth);
@@ -317,7 +321,7 @@ void ParticleSpritePass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	auto* rhi = Engine::instance()->rhi();
 	const auto matrices = Utils::allocMatrices(csm->lightSpaceMatrices, CsmFrame::kMaxCascades);
 	const auto block = rhi->allocTransient(params);
-	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle set = mSets[rhi->frameInFlight() % mSets.size()];
 	rhi->updateDescriptorSets({
 		{ .set = set, .binding = 1, .buffers{ { particles } } },
 		{ .set = set, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },
@@ -350,12 +354,6 @@ namespace {
 		// from it is, z what of the sky's light reaches into a shadow.
 		float shade[4]{};
 	};
-	// The drops' liquid's field as ParticleLiquidPass laid it this frame, for ParticleClearLiquidPass: none where it laid
-	// none.
-	constexpr const char* kLiquidHow = "particles.liquid.how";
-	constexpr const char* kLiquidWhere = "particles.liquid.where";
-	constexpr const char* kLiquidFacing = "particles.liquid.facing";
-
 	SFE::Render::SamplerHandle linearSampler() {
 		SFE::Render::SamplerDesc linear;
 		linear.minFilter = SFE::Render::FilterMode::Linear;
@@ -366,9 +364,9 @@ namespace {
 	}
 
 	// A pass over the whole picture into `renderPass`, `fragment` drawing it: its quad's corners and where in the picture
-	// each is.
+	// each is. Its modules kept in `shaders`.
 	SFE::Render::GraphicsPipelineDesc screenPipeline(SFE::Render::RenderPassHandle renderPass, SFE::Render::DescriptorSetLayoutHandle layout,
-		const char* fragment) {
+		const char* fragment, std::vector<SFE::Render::Held<SFE::Render::ShaderModuleHandle>>& shaders) {
 		using namespace SFE::Render;
 		auto* rhi = SFE::Engine::instance()->rhi();
 		GraphicsPipelineDesc desc;
@@ -381,8 +379,8 @@ namespace {
 		desc.depthStencilState.depthWrite = false;
 		desc.renderPass = renderPass;
 		desc.descriptorSetLayouts = { layout };
-		desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
-		desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, fragment);
+		desc.shaders.vertex = keep(shaders, rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs"));
+		desc.shaders.fragment = keep(shaders, rhi->loadShader(ShaderStage::Fragment, fragment));
 		return desc;
 	}
 }
@@ -395,28 +393,28 @@ void ParticleLiquidPass::init(SystemsModule::RenderData& renderDataHandle) {
 	field.colorAttachments[1] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, { 0.f, 0.f, 0.f, 0.f }, TextureFormat::RG32F };
 	field.colorAttachments[2] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, { 0.f, 0.f, 0.f, 0.f }, TextureFormat::RGBA16F };
 	field.colorAttachments[3] = { AttachmentLoadOp::Clear, AttachmentStoreOp::Store, { 0.f, 0.f, 0.f, 0.f }, TextureFormat::RG16F };
-	mFieldPass = rhi->createRenderPass(field);
-	mGBufferPass = rhi->createRenderPass(gBufferPassDesc(true));
-	mLinear = linearSampler();
+	mFieldPass = own(rhi->createRenderPass(field));
+	mGBufferPass = own(rhi->createRenderPass(gBufferPassDesc(true)));
+	mLinear = own(linearSampler());
 	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc fieldLayout;
 	fieldLayout.bindings.emplace_back(1, DescriptorType::StorageBuffer, ShaderStage::Vertex);
 	fieldLayout.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
 	fieldLayout.bindings.emplace_back(4, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mFieldLayout = rhi->createDescriptorSetLayout(fieldLayout);
+	mFieldLayout = own(rhi->createDescriptorSetLayout(fieldLayout));
 	DescriptorSetLayoutDesc opaqueLayout;
 	for (const uint32_t binding : { 0u, 1u, 2u, 3u }) {
 		opaqueLayout.bindings.emplace_back(binding, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	}
 	opaqueLayout.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Fragment);
-	mOpaqueLayout = rhi->createDescriptorSetLayout(opaqueLayout);
+	mOpaqueLayout = own(rhi->createDescriptorSetLayout(opaqueLayout));
 	for (uint32_t i = 0; i < (std::max)(1u, rhi->framesInFlight()); ++i) {
-		mFieldSets.push_back(rhi->allocateDescriptorSet(mFieldLayout));
-		mOpaqueSets.push_back(rhi->allocateDescriptorSet(mOpaqueLayout));
+		mFieldSets.push_back(own(rhi->allocateDescriptorSet(mFieldLayout)));
+		mOpaqueSets.push_back(own(rhi->allocateDescriptorSet(mOpaqueLayout)));
 	}
 
-	mQuad = makeQuad();
+	mQuad = own(makeQuad());
 	// Every ball adds its liquid to the field, whatever is in front of it there.
 	auto balls = quadPipeline();
 	balls.depthStencilState.depthTest = false;
@@ -426,56 +424,42 @@ void ParticleLiquidPass::init(SystemsModule::RenderData& renderDataHandle) {
 	balls.blend.dstColor = BlendFactor::One;
 	balls.renderPass = mFieldPass;
 	balls.descriptorSetLayouts = { mFieldLayout };
-	balls.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/particle_liquid.vs");
-	balls.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/particle_liquid.fs");
-	mField = rhi->createGraphicsPipeline(balls);
+	balls.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/particle_liquid.vs"));
+	balls.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/particle_liquid.fs"));
+	mField = own(rhi->createGraphicsPipeline(balls));
 
 	// Its surface into the G-buffer, hiding what is further there.
-	auto opaque = screenPipeline(mGBufferPass, mOpaqueLayout, "shaders/particle_liquid_gbuffer.fs");
+	auto opaque = screenPipeline(mGBufferPass, mOpaqueLayout, "shaders/particle_liquid_gbuffer.fs", mShaders);
 	opaque.depthStencilState.depthTest = true;
 	opaque.depthStencilState.depthWrite = true;
 	opaque.depthStencilState.depthCompareOp = CompareOp::Less;
-	mOpaque = rhi->createGraphicsPipeline(opaque);
+	mOpaque = own(rhi->createGraphicsPipeline(opaque));
 }
 
-void ParticleLiquidPass::resize(SystemsModule::RenderData&) {
-	auto* rhi = Engine::instance()->rhi();
-	if (mFieldFbo) {
-		rhi->destroyFramebuffer(mFieldFbo);
-	}
-	for (auto* texture : { &mHow, &mWhere, &mFacing, &mMoving }) {
-		if (*texture) {
-			rhi->destroyTexture(*texture);
-		}
-	}
+void ParticleLiquidPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	auto& resources = *renderDataHandle.resources;
+	mFieldFbo.reset();
+	mHow = resources.target(name() + ".how", { TextureFormat::RGBA16F });
+	mWhere = resources.target(name() + ".where", { TextureFormat::RG32F });
+	mFacing = resources.target(name() + ".facing", { TextureFormat::RGBA16F });
+	mMoving = resources.target(name() + ".moving", { TextureFormat::RG16F });
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
-	TextureDesc desc;
-	desc.width = static_cast<uint32_t>((std::max)(1, screen.renderW));
-	desc.height = static_cast<uint32_t>((std::max)(1, screen.renderH));
-	desc.usage = TextureUsage::ColorAttachment | TextureUsage::Sampled;
-	desc.format = TextureFormat::RGBA16F;
-	mHow = rhi->createTexture(desc);
-	desc.format = TextureFormat::RG32F;
-	mWhere = rhi->createTexture(desc);
-	desc.format = TextureFormat::RGBA16F;
-	mFacing = rhi->createTexture(desc);
-	desc.format = TextureFormat::RG16F;
-	mMoving = rhi->createTexture(desc);
 	FramebufferDesc fb;
-	fb.width = desc.width;
-	fb.height = desc.height;
+	fb.width = static_cast<uint32_t>((std::max)(1, screen.renderW));
+	fb.height = static_cast<uint32_t>((std::max)(1, screen.renderH));
 	fb.renderPass = mFieldPass;
-	fb.colorAttachments = { { mHow }, { mWhere }, { mFacing }, { mMoving } };
-	mFieldFbo = rhi->createFramebuffer(fb);
+	fb.colorAttachments = { { mHow.get() }, { mWhere.get() }, { mFacing.get() }, { mMoving.get() } };
+	mFieldFbo = own(Engine::instance()->rhi()->createFramebuffer(fb));
 }
 
 void ParticleLiquidPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
 	auto& frame = renderDataHandle.frame;
-	for (const auto* id : { kLiquidHow, kLiquidWhere, kLiquidFacing }) {
+	// None where it lays none this frame: what the clear liquid reads is never the field of a frame before.
+	for (const auto* id : { FrameId::LiquidHow, FrameId::LiquidWhere, FrameId::LiquidFacing }) {
 		frame.set(id, {});
 	}
-	const auto particles = Particles::buffer();
+	const auto particles = frame.buffer(FrameId::ParticleBuffer);
 	const auto depth = frame.texture(FrameId::GBufferDepth);
 	const auto gBuffer = frame.framebuffer(FrameId::GBufferFbo);
 	if (!mField || !mOpaque || !particles || !depth || !gBuffer || !Particles::liquid(Engine::instance()->animationClock())) {
@@ -483,8 +467,8 @@ void ParticleLiquidPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	}
 	auto* rhi = Engine::instance()->rhi();
 	const auto slot = rhi->frameInFlight() % mFieldSets.size();
-	const auto fieldSet = mFieldSets[slot];
-	const auto opaqueSet = mOpaqueSets[slot];
+	const DescriptorSetHandle fieldSet = mFieldSets[slot];
+	const DescriptorSetHandle opaqueSet = mOpaqueSets[slot];
 	rhi->updateDescriptorSets({
 		{ .set = fieldSet, .binding = 1, .buffers{ { particles } } },
 		{ .set = fieldSet, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },
@@ -520,15 +504,15 @@ void ParticleLiquidPass::render(SystemsModule::RenderData& renderDataHandle, Ren
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 
-	frame.set(kLiquidHow, { .texture = mHow });
-	frame.set(kLiquidWhere, { .texture = mWhere });
-	frame.set(kLiquidFacing, { .texture = mFacing });
+	frame.set(FrameId::LiquidHow, { .texture = mHow });
+	frame.set(FrameId::LiquidWhere, { .texture = mWhere });
+	frame.set(FrameId::LiquidFacing, { .texture = mFacing });
 }
 
 void ParticleClearLiquidPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	mSurfacePass = createFinalDepthRenderPass();
-	mLinear = linearSampler();
+	mSurfacePass = own(createFinalDepthRenderPass());
+	mLinear = own(linearSampler());
 	resize(renderDataHandle);
 	DescriptorSetLayoutDesc surfaceLayout;
 	for (const uint32_t binding : { 0u, 1u, 2u, 3u, 4u, 6u, 7u, 8u, 9u, 10u }) {
@@ -537,23 +521,23 @@ void ParticleClearLiquidPass::init(SystemsModule::RenderData& renderDataHandle) 
 	surfaceLayout.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Fragment);
 	surfaceLayout.bindings.emplace_back(11, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	surfaceLayout.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
-	mSurfaceLayout = rhi->createDescriptorSetLayout(surfaceLayout);
+	mSurfaceLayout = own(rhi->createDescriptorSetLayout(surfaceLayout));
 	for (uint32_t i = 0; i < (std::max)(1u, rhi->framesInFlight()); ++i) {
-		mSurfaceSets.push_back(rhi->allocateDescriptorSet(mSurfaceLayout));
+		mSurfaceSets.push_back(own(rhi->allocateDescriptorSet(mSurfaceLayout)));
 	}
-	mSurface = rhi->createGraphicsPipeline(screenPipeline(mSurfacePass, mSurfaceLayout, "shaders/particle_liquid_surface.fs"));
+	mSurface = own(rhi->createGraphicsPipeline(screenPipeline(mSurfacePass, mSurfaceLayout, "shaders/particle_liquid_surface.fs", mShaders)));
 }
 
-void ParticleClearLiquidPass::resize(SystemsModule::RenderData&) {
-	Utils::screenTarget(mCopy, mCopyFbo, {});
+void ParticleClearLiquidPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, kSceneCopy, mCopy, mCopyFbo, {});
 }
 
 void ParticleClearLiquidPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
 	auto& frame = renderDataHandle.frame;
-	const auto how = frame.texture(kLiquidHow);
-	const auto where = frame.texture(kLiquidWhere);
-	const auto facing = frame.texture(kLiquidFacing);
+	const auto how = frame.texture(FrameId::LiquidHow);
+	const auto where = frame.texture(FrameId::LiquidWhere);
+	const auto facing = frame.texture(FrameId::LiquidFacing);
 	LiquidParams params;
 	if (!mSurface || !how || !where || !facing || !Atmosphere::skyParams(renderDataHandle, params.sky)) {
 		return;
@@ -579,7 +563,7 @@ void ParticleClearLiquidPass::render(SystemsModule::RenderData& renderDataHandle
 	auto* rhi = Engine::instance()->rhi();
 	const auto matrices = Utils::allocMatrices(csm->lightSpaceMatrices, CsmFrame::kMaxCascades);
 	const auto block = rhi->allocTransient(params);
-	const auto surfaceSet = mSurfaceSets[rhi->frameInFlight() % mSurfaceSets.size()];
+	const DescriptorSetHandle surfaceSet = mSurfaceSets[rhi->frameInFlight() % mSurfaceSets.size()];
 	const auto sceneSampler = frame.sampler(FrameId::SceneDepth);
 	// The scene's AO, as the lighting takes it (LightingPass): none without it.
 	auto ao = frame.texture(FrameId::SsaoBlur);

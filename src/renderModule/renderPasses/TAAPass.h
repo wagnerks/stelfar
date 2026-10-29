@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include "mathModule/Forward.h"
+#include "renderModule/Held.h"
 #include "renderModule/renderPasses/RenderPass.h"
 
 namespace SFE::Render::RenderPasses {
@@ -21,15 +22,17 @@ namespace SFE::Render::RenderPasses {
 		};
 
 		Params mParams;
-		TextureHandle mHistory[2]{};
-		FramebufferHandle mFbo[2]{};
+		Held<TextureHandle> mHistory[2];
+		Held<FramebufferHandle> mFbo[2];
 		int mWrite = 0;
+		// None in a TAA made again (its setting turned on): what it held before went with it.
 		bool mHasHistory = false;
-		SamplerHandle mLinear{};
-		SamplerHandle mNearest{};
-		PipelineHandle mPipeline{};
-		RenderPassHandle mRenderPass{};
-		DescriptorSetLayoutHandle mLayout{};
-		std::vector<DescriptorSetHandle> mSets; // one per frame slot
+		Held<SamplerHandle> mLinear;
+		Held<SamplerHandle> mNearest;
+		Held<PipelineHandle> mPipeline;
+		Held<RenderPassHandle> mRenderPass;
+		Held<DescriptorSetLayoutHandle> mLayout;
+		std::vector<Held<DescriptorSetHandle>> mSets; // one per frame slot
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 	};
 }

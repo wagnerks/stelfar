@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "rhi/RenderHardwareInterface.h"
@@ -11,27 +13,33 @@ namespace SFE::Render {
 	// The backend for running without a window or a GPU: game logic and tests that need no picture. Every
 	// call succeeds and does nothing. Resources get unique ids, never reused, because callers key caches on
 	// them; a mapped buffer is plain memory of the buffer's size. Nothing is drawn, so readbackTexture keeps
-	// the base class's false.
+	// the base class's false. What is made and not yet destroyed is counted by kind (live), for a test of who
+	// frees what.
 	class NullRHI final : public RenderHardwareInterface {
 	public:
+		// The kinds of object the RHI destroys, each counted apart.
+		enum class Kind : uint8_t { Texture, Buffer, Sampler, Pipeline, RenderPass, Framebuffer, SetLayout, Set, ShaderModule, Count };
+		// How many of `kind` are made and not destroyed. Any thread.
+		size_t live(Kind kind) const;
+
 		void init() override {}
 		void cleanup() override {}
 		GraphicsBackend backend() const override { return GraphicsBackend::None; }
 
-		PipelineHandle createGraphicsPipeline(const GraphicsPipelineDesc&) override { return { nextId() }; }
-		PipelineHandle createComputePipeline(const ComputePipelineDesc&) override { return { nextId() }; }
-		void destroyGraphicsPipeline(PipelineHandle) override {}
-		TextureHandle createTexture(const TextureDesc&, const void* = nullptr) override { return { nextId() }; }
-		void destroyTexture(TextureHandle) override {}
+		PipelineHandle createGraphicsPipeline(const GraphicsPipelineDesc&) override { return { made(Kind::Pipeline) }; }
+		PipelineHandle createComputePipeline(const ComputePipelineDesc&) override { return { made(Kind::Pipeline) }; }
+		void destroyGraphicsPipeline(PipelineHandle pipeline) override { gone(Kind::Pipeline, pipeline.id); }
+		TextureHandle createTexture(const TextureDesc&, const void* = nullptr) override { return { made(Kind::Texture) }; }
+		void destroyTexture(TextureHandle texture) override { gone(Kind::Texture, texture.id); }
 
-		SamplerHandle createSampler(const SamplerDesc&) override { return { nextId() }; }
-		void destroySampler(SamplerHandle) override {}
+		SamplerHandle createSampler(const SamplerDesc&) override { return { made(Kind::Sampler) }; }
+		void destroySampler(SamplerHandle sampler) override { gone(Kind::Sampler, sampler.id); }
 
-		ShaderModuleHandle createShaderModule(const ShaderModuleDesc&) override { return { nextId() }; }
-		void destroyShaderModule(ShaderModuleHandle) override {}
+		ShaderModuleHandle createShaderModule(const ShaderModuleDesc&) override { return { made(Kind::ShaderModule) }; }
+		void destroyShaderModule(ShaderModuleHandle handle) override { gone(Kind::ShaderModule, handle.id); }
 
-		FramebufferHandle createFramebuffer(const FramebufferDesc&) override { return { nextId() }; }
-		void destroyFramebuffer(FramebufferHandle) override {}
+		FramebufferHandle createFramebuffer(const FramebufferDesc&) override { return { made(Kind::Framebuffer) }; }
+		void destroyFramebuffer(FramebufferHandle framebuffer) override { gone(Kind::Framebuffer, framebuffer.id); }
 		FramebufferHandle getBackbufferFramebuffer() override { return mBackbuffer; }
 
 		BufferHandle createBuffer(const BufferDesc& desc, const void* initialData = nullptr) override;
@@ -42,14 +50,14 @@ namespace SFE::Render {
 		TransientAllocation allocTransient(size_t size) override;
 		void beginFrame() override;
 
-		RenderPassHandle createRenderPass(const RenderPassDesc&) override { return { nextId() }; }
-		void destroyRenderPass(RenderPassHandle) override {}
+		RenderPassHandle createRenderPass(const RenderPassDesc&) override { return { made(Kind::RenderPass) }; }
+		void destroyRenderPass(RenderPassHandle renderPass) override { gone(Kind::RenderPass, renderPass.id); }
 
-		DescriptorSetLayoutHandle createDescriptorSetLayout(const DescriptorSetLayoutDesc&) override { return { nextId() }; }
-		void destroyDescriptorSetLayout(DescriptorSetLayoutHandle) override {}
+		DescriptorSetLayoutHandle createDescriptorSetLayout(const DescriptorSetLayoutDesc&) override { return { made(Kind::SetLayout) }; }
+		void destroyDescriptorSetLayout(DescriptorSetLayoutHandle layout) override { gone(Kind::SetLayout, layout.id); }
 
-		DescriptorSetHandle allocateDescriptorSet(DescriptorSetLayoutHandle) override { return { nextId() }; }
-		void freeDescriptorSet(DescriptorSetHandle) override {}
+		DescriptorSetHandle allocateDescriptorSet(DescriptorSetLayoutHandle) override { return { made(Kind::Set) }; }
+		void freeDescriptorSet(DescriptorSetHandle set) override { gone(Kind::Set, set.id); }
 		void updateDescriptorSets(const std::vector<WriteDescriptor>&) override {}
 
 		CommandListHandle beginCommandList(CommandListType) override { return { nextId() }; }
@@ -85,6 +93,9 @@ namespace SFE::Render {
 
 	private:
 		uint32_t nextId() { return mNextId.fetch_add(1, std::memory_order_relaxed); }
+		// A new id, live as `kind` until gone() is told of it; a destroy of an id that is not live changes nothing.
+		uint32_t made(Kind kind);
+		void gone(Kind kind, uint32_t id);
 
 		std::atomic<uint32_t> mNextId{ 0 };
 		// Memory for allocTransient, dropped at the next frame: nothing reads it.
@@ -95,5 +106,8 @@ namespace SFE::Render {
 		std::mutex mBuffersMutex;
 		std::unordered_map<uint32_t, size_t> mBufferSizes;
 		std::unordered_map<uint32_t, std::vector<uint8_t>> mMapped;
+
+		mutable std::mutex mLiveMutex;
+		std::array<std::unordered_set<uint32_t>, static_cast<size_t>(Kind::Count)> mLive;
 	};
 }

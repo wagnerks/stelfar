@@ -20,20 +20,22 @@ namespace SFE::Render
 	using GLint = int;
 	using GLbitfield = unsigned int;
 
-	struct GLTexture { unsigned id = 0; TextureDesc desc{}; bool live = false; };
-	struct GLSampler { unsigned id = 0; SamplerDesc desc{}; bool live = false; };
-	struct GLFramebuffer { unsigned id = 0; FramebufferDesc desc{}; bool live = false; };
-	struct GLBuffer { unsigned id = 0; GLenum target = 0; BufferDesc desc{}; bool live = false; };
+	struct GLTexture { unsigned id = 0; TextureDesc desc{}; uint32_t generation = 0; bool live = false; };
+	struct GLSampler { unsigned id = 0; SamplerDesc desc{}; uint32_t generation = 0; bool live = false; };
+	struct GLFramebuffer { unsigned id = 0; FramebufferDesc desc{}; uint32_t generation = 0; bool live = false; };
+	struct GLBuffer { unsigned id = 0; GLenum target = 0; BufferDesc desc{}; uint32_t generation = 0; bool live = false; };
 	struct GLVertexArray { GLuint id = 0; VertexLayoutDesc desc; };
-	struct GLShaderModule { GLuint id = 0; ShaderModuleDesc desc{}; bool live = false; };
+	struct GLShaderModule { GLuint id = 0; ShaderModuleDesc desc{}; uint32_t generation = 0; bool live = false; };
 	struct GLRenderPass
 	{
 		RenderPassDesc desc{};
+		uint32_t generation = 0;
 		bool live = false;
 	};
 	struct GLDescriptorSetLayout
 	{
 		DescriptorSetLayoutDesc desc{};
+		uint32_t generation = 0;
 		bool live = false;
 	};
 
@@ -65,6 +67,7 @@ namespace SFE::Render
 		ShaderModuleHandle computeShader{}; // what a compute pipeline was linked from, to link it again
 
 		std::unordered_map<std::string, GLint> uniformLocations;
+		uint32_t generation = 0;
 		bool live = false;
 	};
 
@@ -84,6 +87,7 @@ namespace SFE::Render
 		// Shared with the binds recorded from it: a bind keeps the contents it saw, and a later write copies
 		// them first instead of every bind copying them.
 		std::shared_ptr<GLDescriptorBindings> bindings = std::make_shared<GLDescriptorBindings>();
+		uint32_t generation = 0;
 		bool live = false;
 	};
 
@@ -148,6 +152,7 @@ namespace SFE::Render
 	{
 		CommandListType type{};
 		bool recording = false;
+		uint32_t generation = 0;
 		bool live = false;
 		std::vector<GLCommand> commands;
 		std::vector<uint8_t> pushData;
@@ -190,13 +195,19 @@ namespace SFE::Render
 		GLuint linkProgram(const std::vector<ShaderModuleHandle>& modules, bool compute);
 		void destroyGraphicsPipeline(PipelineHandle pipeline) override;
 	private:
+		// Ids carry the slot's generation, as Vulkan's do (see handleSlot): a cache keyed by id -- a framebuffer over a
+		// texture, a descriptor written with it -- must not take the object that reuses a destroyed one's slot for it.
 		template<typename T>
 		static uint32_t storeResource(std::vector<T>& pool, std::vector<uint32_t>& freeList, T value) {
 			if (!freeList.empty()) {
-				const uint32_t id = freeList.back();
+				const uint32_t slot = freeList.back();
 				freeList.pop_back();
-				pool[id] = std::move(value);
-				return id;
+				value.generation = pool[slot].generation;
+				pool[slot] = std::move(value);
+				return slot | (pool[slot].generation << kHandleSlotBits);
+			}
+			if (pool.size() >= kHandleSlotMask) {
+				return UINT32_MAX;
 			}
 			pool.push_back(std::move(value));
 			return static_cast<uint32_t>(pool.size() - 1);
@@ -204,27 +215,35 @@ namespace SFE::Render
 
 		template<typename T>
 		static T* getLive(std::vector<T>& pool, uint32_t id) {
-			if (id >= pool.size() || !pool[id].live) {
+			const uint32_t slot = handleSlot(id);
+			if (slot >= pool.size() || !pool[slot].live || pool[slot].generation != handleGeneration(id)) {
 				return nullptr;
 			}
-			return &pool[id];
+			return &pool[slot];
 		}
 
 		template<typename T>
 		static const T* getLive(const std::vector<T>& pool, uint32_t id) {
-			if (id >= pool.size() || !pool[id].live) {
+			const uint32_t slot = handleSlot(id);
+			if (slot >= pool.size() || !pool[slot].live || pool[slot].generation != handleGeneration(id)) {
 				return nullptr;
 			}
-			return &pool[id];
+			return &pool[slot];
 		}
 
 		template<typename T>
 		static bool recycleResource(std::vector<T>& pool, std::vector<uint32_t>& freeList, uint32_t id) {
-			if (id >= pool.size() || !pool[id].live) {
+			if (!getLive(pool, id)) {
 				return false;
 			}
-			pool[id] = T{};
-			freeList.push_back(id);
+			const uint32_t slot = handleSlot(id);
+			const uint32_t generation = pool[slot].generation;
+			pool[slot] = T{};
+			pool[slot].generation = generation + 1;
+			// A slot whose generation has run out is never handed out again, so no id ever repeats.
+			if (generation + 1 < kHandleGenerationMask) {
+				freeList.push_back(slot);
+			}
 			return true;
 		}
 

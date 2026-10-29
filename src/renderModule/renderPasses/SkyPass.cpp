@@ -13,16 +13,16 @@ using namespace SFE::Render::RenderPasses;
 
 void SkyPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	mRenderPass = createFinalDepthRenderPass();
+	mRenderPass = own(createFinalDepthRenderPass());
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(21, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
-		set = rhi->allocateDescriptorSet(mLayout);
+		set = own(rhi->allocateDescriptorSet(mLayout));
 	}
 
 	GraphicsPipelineDesc desc;
@@ -36,9 +36,9 @@ void SkyPass::init(SystemsModule::RenderData& renderDataHandle) {
 	desc.depthStencilState.depthCompareOp = CompareOp::LessEqual;
 	desc.renderPass = mRenderPass;
 	desc.descriptorSetLayouts = { mLayout };
-	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/atmosphere.vs");
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/atmosphere.fs");
-	mPipeline = rhi->createGraphicsPipeline(desc);
+	desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/atmosphere.vs"));
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/atmosphere.fs"));
+	mPipeline = own(rhi->createGraphicsPipeline(desc));
 }
 
 void SkyPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -54,7 +54,7 @@ void SkyPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comman
 
 	auto* rhi = Engine::instance()->rhi();
 	const auto block = rhi->allocTransient(params);
-	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle set = mSets[rhi->frameInFlight() % mSets.size()];
 	const auto skyLut = Atmosphere::skyTexture();
 	const auto clouds = Atmosphere::cloudTexture();
 	rhi->updateDescriptorSets({

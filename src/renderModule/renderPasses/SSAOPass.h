@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "renderModule/Held.h"
 #include "rhi/RenderHardwareInterface.h"
 #include "renderModule/renderPasses/RenderPass.h"
 
@@ -12,12 +13,12 @@ namespace SFE::Render::RenderPasses {
 			std::vector<Math::Vec3> mSsaoKernel;
 
 			TextureHandle mNoiseTexture;
-			FramebufferHandle mSsaoFbo;
-			FramebufferHandle mSsaoBlurFbo;
-			TextureHandle mSsaoColorBuffer;
-			TextureHandle mSsaoColorBufferBlur;
+			Held<FramebufferHandle> mSsaoFbo;
+			Held<FramebufferHandle> mSsaoBlurFbo;
+			Held<TextureHandle> mSsaoColorBuffer;
+			Held<TextureHandle> mSsaoColorBufferBlur;
 
-			SamplerHandle sampler;
+			Held<SamplerHandle> sampler;
 
 			int mKernelSize = 16;
 			float mRadius = 0.5f;
@@ -31,7 +32,7 @@ namespace SFE::Render::RenderPasses {
 			float sigmaS = 1.0f;
 			float sigmaL = 1.2f;
 		};
-		
+
 		void init(SystemsModule::RenderData& renderDataHandle) override;
 		void render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) override;
 		void resize(SystemsModule::RenderData& renderDataHandle) override;
@@ -68,8 +69,8 @@ namespace SFE::Render::RenderPasses {
 		// One set per frame slot: the G-buffer it samples alternates with the slot, and writing a set the previous
 		// frame still binds costs a copy of it. Each keeps what it was last written with.
 		struct Slot {
-			Render::DescriptorSetHandle mainSet;
-			Render::DescriptorSetHandle blurSet;
+			Held<Render::DescriptorSetHandle> mainSet;
+			Held<Render::DescriptorSetHandle> blurSet;
 			uint32_t mainParamsBufferId = UINT32_MAX;
 			uint32_t blurParamsBufferId = UINT32_MAX;
 			Render::TextureHandle position;
@@ -82,15 +83,16 @@ namespace SFE::Render::RenderPasses {
 		bool ssaoDebugWindow = false;
 		Data mData{};
 
-		PipelineHandle mainPipeline;
-		PipelineHandle blurPipeline;
+		Held<PipelineHandle> mainPipeline;
+		Held<PipelineHandle> blurPipeline;
 
-		RenderPassHandle main;
-		RenderPassHandle blur;
+		Held<RenderPassHandle> main;
+		Held<RenderPassHandle> blur;
 
-		Render::DescriptorSetLayoutHandle mainTexSetLayout;
+		Held<Render::DescriptorSetLayoutHandle> mainTexSetLayout;
 
-		Render::DescriptorSetLayoutHandle blurTexSetLayout;
+		Held<Render::DescriptorSetLayoutHandle> blurTexSetLayout;
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 
 		int mSsaoW = 0;
 		int mSsaoH = 0;

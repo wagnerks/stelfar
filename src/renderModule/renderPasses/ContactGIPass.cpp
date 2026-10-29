@@ -7,6 +7,7 @@
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/FrameBlackboard.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -18,18 +19,18 @@ void ContactGIPass::init(SystemsModule::RenderData& renderDataHandle) {
 	SamplerDesc lin;
 	lin.minFilter = FilterMode::Linear;
 	lin.magFilter = FilterMode::Linear;
-	mLinear = rhi->createSampler(lin);
+	mLinear = own(rhi->createSampler(lin));
 	SamplerDesc nearS;
 	nearS.minFilter = FilterMode::Nearest;
 	nearS.magFilter = FilterMode::Nearest;
-	mNearest = rhi->createSampler(nearS);
+	mNearest = own(rhi->createSampler(nearS));
 
 	RenderPassDesc rpDesc;
 	rpDesc.colorAttachmentCount = 1;
 	rpDesc.colorAttachments[0].loadOp = AttachmentLoadOp::Clear;
 	rpDesc.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = TextureFormat::RGBA16F;
-	mRenderPass = rhi->createRenderPass(rpDesc);
+	mRenderPass = own(rhi->createRenderPass(rpDesc));
 	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc layoutDesc;
@@ -39,11 +40,11 @@ void ContactGIPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(3, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	// One set per frame slot: what it binds alternates with the slot, and writing a set the previous
 	// frame still binds costs a copy of it.
 	for (uint32_t i = 0; i < (std::max)(1u, rhi->framesInFlight()); ++i) {
-		mSets.push_back(rhi->allocateDescriptorSet(mLayout));
+		mSets.push_back(own(rhi->allocateDescriptorSet(mLayout)));
 	}
 
 	GraphicsPipelineDesc pipelineDesc;
@@ -56,28 +57,25 @@ void ContactGIPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.depthStencilState.depthWrite = false;
 	pipelineDesc.renderPass = mRenderPass;
 	pipelineDesc.descriptorSetLayouts = { mLayout };
-	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
-	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/contact_gi.fs");
-	mPipeline = rhi->createGraphicsPipeline(pipelineDesc);
+	pipelineDesc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs"));
+	pipelineDesc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/contact_gi.fs"));
+	mPipeline = own(rhi->createGraphicsPipeline(pipelineDesc));
 }
 
-void ContactGIPass::resize(SystemsModule::RenderData&) {
-	Utils::screenTarget(mColor, mFbo, mRenderPass);
+void ContactGIPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, name() + ".color", mColor, mFbo, mRenderPass);
 }
 
 void ContactGIPass::render(SystemsModule::RenderData& renderDataHandle, CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
 
 	auto* rhi = Engine::instance()->rhi();
-	const auto mSet = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle mSet = mSets[rhi->frameInFlight() % mSets.size()];
 	auto& frame = renderDataHandle.frame;
 	const auto src = frame.texture(FrameId::Final);
 	const auto pos = frame.texture(FrameId::SceneDepth);
 	const auto nrm = frame.texture(FrameId::GBufferNormal);
 	const auto alb = frame.texture(FrameId::GBufferAlbedo);
-	if (!renderDataHandle.graphics.contactGi) {
-		return;
-	}
 	if (!src || !pos || !nrm || !alb || !mPipeline) {
 		return;
 	}

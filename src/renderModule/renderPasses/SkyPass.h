@@ -1,5 +1,8 @@
 #pragma once
 
+#include <vector>
+
+#include "renderModule/Held.h"
 #include "renderModule/renderPasses/FinalDepthTargets.h"
 #include "renderModule/renderPasses/RenderPass.h"
 
@@ -13,9 +16,10 @@ namespace SFE::Render::RenderPasses {
 
 	private:
 		FinalDepthTargets mTargets;
-		RenderPassHandle mRenderPass{};
-		PipelineHandle mPipeline{};
-		DescriptorSetLayoutHandle mLayout{};
-		std::vector<DescriptorSetHandle> mSets; // one per frame slot
+		Held<RenderPassHandle> mRenderPass;
+		Held<PipelineHandle> mPipeline;
+		Held<DescriptorSetLayoutHandle> mLayout;
+		std::vector<Held<DescriptorSetHandle>> mSets; // one per frame slot
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 	};
 }

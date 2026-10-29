@@ -10,10 +10,10 @@ namespace SFE::Render::Particles {
 		std::mutex gMutex;
 		std::vector<GpuParticle> gPending;
 		std::mt19937 gRandom{ 0x5eedu };
-		BufferHandle gBuffer;
 		double gAliveUntil = -1.0;
 		double gLiquidUntil = -1.0;
 		uint64_t gEmitted = 0;
+		std::array<uint64_t, static_cast<size_t>(Look::Count)> gEmittedOf{}; // by Look
 		// The catchers: each one's shape and its version, where it is, whether it was ever placed; what they caught.
 		struct Held {
 			Shape shape;
@@ -82,6 +82,9 @@ namespace SFE::Render::Particles {
 		std::lock_guard lock(gMutex);
 		spawn(burst, gRandom, gPending);
 		gEmitted += burst.count;
+		if (static_cast<size_t>(burst.look) < gEmittedOf.size()) {
+			gEmittedOf[static_cast<size_t>(burst.look)] += burst.count;
+		}
 		// Nothing takes them without a picture drawn (a game without a backend): the oldest go.
 		if (gPending.size() > 4 * kMaxSpawn) {
 			gPending.erase(gPending.begin(), gPending.end() - 4 * kMaxSpawn);
@@ -112,6 +115,11 @@ namespace SFE::Render::Particles {
 		return gEmitted;
 	}
 
+	uint64_t emitted(const Look look) {
+		std::lock_guard lock(gMutex);
+		return static_cast<size_t>(look) < gEmittedOf.size() ? gEmittedOf[static_cast<size_t>(look)] : 0;
+	}
+
 	bool alive(double now) {
 		std::lock_guard lock(gMutex);
 		return now <= gAliveUntil;
@@ -120,10 +128,6 @@ namespace SFE::Render::Particles {
 	bool liquid(double now) {
 		std::lock_guard lock(gMutex);
 		return now <= gLiquidUntil;
-	}
-
-	BufferHandle& buffer() {
-		return gBuffer;
 	}
 
 	void shape(const uint32_t id, Shape shape) {

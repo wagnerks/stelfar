@@ -7,6 +7,7 @@
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -17,8 +18,10 @@ namespace {
 	// pixel by depth (volumetric_apply.fs), so the edges of what stands in front of it stay clean.
 	constexpr int kMarchDivisor = 4;
 
+	// Its modules kept in `shaders`.
 	SFE::Render::PipelineHandle makeFs(SFE::Render::RenderHardwareInterface* rhi, SFE::Render::RenderPassHandle renderPass,
-		SFE::Render::DescriptorSetLayoutHandle layout, const char* vsPath, const char* fsPath) {
+		SFE::Render::DescriptorSetLayoutHandle layout, const char* vsPath, const char* fsPath,
+		std::vector<SFE::Render::Held<SFE::Render::ShaderModuleHandle>>& shaders) {
 		SFE::Render::GraphicsPipelineDesc pipelineDesc;
 		pipelineDesc.layout.bindings.emplace_back(0, static_cast<uint32_t>(sizeof(SFE::Vertex2D)), SFE::Render::VertexInputRate::PerVertex);
 		pipelineDesc.layout.attributes.emplace_back(0, 0, SFE::Render::VertexFormat::Float2, static_cast<std::uint32_t>(offsetof(SFE::Vertex2D, position)), false);
@@ -29,8 +32,8 @@ namespace {
 		pipelineDesc.depthStencilState.depthWrite = false;
 		pipelineDesc.renderPass = renderPass;
 		pipelineDesc.descriptorSetLayouts = { layout };
-		pipelineDesc.shaders.vertex = rhi->loadShader(SFE::Render::ShaderStage::Vertex, vsPath);
-		pipelineDesc.shaders.fragment = rhi->loadShader(SFE::Render::ShaderStage::Fragment, fsPath);
+		pipelineDesc.shaders.vertex = SFE::Render::keep(shaders, rhi->loadShader(SFE::Render::ShaderStage::Vertex, vsPath));
+		pipelineDesc.shaders.fragment = SFE::Render::keep(shaders, rhi->loadShader(SFE::Render::ShaderStage::Fragment, fsPath));
 		return rhi->createGraphicsPipeline(pipelineDesc);
 	}
 }
@@ -41,18 +44,18 @@ void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 	SFE::Render::SamplerDesc lin;
 	lin.minFilter = SFE::Render::FilterMode::Linear;
 	lin.magFilter = SFE::Render::FilterMode::Linear;
-	mLinear = rhi->createSampler(lin);
+	mLinear = own(rhi->createSampler(lin));
 	SFE::Render::SamplerDesc nearS;
 	nearS.minFilter = SFE::Render::FilterMode::Nearest;
 	nearS.magFilter = SFE::Render::FilterMode::Nearest;
-	mNearest = rhi->createSampler(nearS);
+	mNearest = own(rhi->createSampler(nearS));
 
 	SFE::Render::RenderPassDesc rpDesc;
 	rpDesc.colorAttachmentCount = 1;
 	rpDesc.colorAttachments[0].loadOp = SFE::Render::AttachmentLoadOp::Clear;
 	rpDesc.colorAttachments[0].storeOp = SFE::Render::AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = SFE::Render::TextureFormat::RGBA16F;
-	mRenderPass = rhi->createRenderPass(rpDesc);
+	mRenderPass = own(rhi->createRenderPass(rpDesc));
 	resize(renderDataHandle);
 
 	SFE::Render::DescriptorSetLayoutDesc marchLayout;
@@ -62,8 +65,8 @@ void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 	marchLayout.bindings.emplace_back(5, SFE::Render::DescriptorType::UniformBuffer, SFE::Render::ShaderStage::Fragment);
 	marchLayout.bindings.emplace_back(11, SFE::Render::DescriptorType::UniformBufferDynamic, SFE::Render::ShaderStage::Fragment);
 	marchLayout.bindings.emplace_back(15, SFE::Render::DescriptorType::UniformBufferDynamic, SFE::Render::ShaderStage::Fragment);
-	mMarchLayout = rhi->createDescriptorSetLayout(marchLayout);
-	mMarchSet = rhi->allocateDescriptorSet(mMarchLayout);
+	mMarchLayout = own(rhi->createDescriptorSetLayout(marchLayout));
+	mMarchSet = own(rhi->allocateDescriptorSet(mMarchLayout));
 
 	SFE::Render::DescriptorSetLayoutDesc applyLayout;
 	applyLayout.bindings.emplace_back(0, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
@@ -71,16 +74,17 @@ void VolumetricPass::init(SystemsModule::RenderData& renderDataHandle) {
 	applyLayout.bindings.emplace_back(2, SFE::Render::DescriptorType::CombinedImageSampler, SFE::Render::ShaderStage::Fragment);
 	applyLayout.bindings.emplace_back(5, SFE::Render::DescriptorType::UniformBuffer, SFE::Render::ShaderStage::Fragment);
 	applyLayout.bindings.emplace_back(15, SFE::Render::DescriptorType::UniformBufferDynamic, SFE::Render::ShaderStage::Fragment);
-	mApplyLayout = rhi->createDescriptorSetLayout(applyLayout);
-	mApplySet = rhi->allocateDescriptorSet(mApplyLayout);
+	mApplyLayout = own(rhi->createDescriptorSetLayout(applyLayout));
+	mApplySet = own(rhi->allocateDescriptorSet(mApplyLayout));
 
-	mMarchPipeline = makeFs(rhi, mRenderPass, mMarchLayout, "shaders/deferred_shading.vs", "shaders/volumetric.fs");
-	mApplyPipeline = makeFs(rhi, mRenderPass, mApplyLayout, "shaders/deferred_shading.vs", "shaders/volumetric_apply.fs");
+	mMarchPipeline = own(makeFs(rhi, mRenderPass, mMarchLayout, "shaders/deferred_shading.vs", "shaders/volumetric.fs", mShaders));
+	mApplyPipeline = own(makeFs(rhi, mRenderPass, mApplyLayout, "shaders/deferred_shading.vs", "shaders/volumetric_apply.fs", mShaders));
 }
 
-void VolumetricPass::resize(SystemsModule::RenderData&) {
-	SFE::Render::Utils::screenTarget(mMarchTex, mMarchFbo, mRenderPass, SFE::Render::TextureFormat::RGBA16F, kMarchDivisor);
-	SFE::Render::Utils::screenTarget(mColor, mFbo, mRenderPass);
+void VolumetricPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	auto& resources = *renderDataHandle.resources;
+	SFE::Render::screenTarget(resources, name() + ".march", mMarchTex, mMarchFbo, mRenderPass, SFE::Render::TextureFormat::RGBA16F, kMarchDivisor);
+	SFE::Render::screenTarget(resources, name() + ".color", mColor, mFbo, mRenderPass);
 }
 
 void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Render::CommandListHandle cmd) {
@@ -91,9 +95,6 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 	const auto src = frame.texture(SFE::Render::FrameId::Final);
 	const auto pos = frame.texture(SFE::Render::FrameId::SceneDepth);
 	const auto shadow = frame.texture(SFE::Render::FrameId::ShadowCsm);
-	if (!renderDataHandle.graphics.volumetric) {
-		return;
-	}
 	if (!src || !pos || !mMarchPipeline || !mApplyPipeline) {
 		return;
 	}
@@ -183,7 +184,8 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 		rhi->cmdBeginRenderPass(cmd, beginInfo);
 		rhi->cmdBindPipeline(cmd, mMarchPipeline);
 		const uint32_t offsets[] = { matrices.offset, params.offset }; // bindings 11, 15
-		rhi->cmdBindDescriptorSets(cmd, mMarchPipeline, 0, &mMarchSet, 1, offsets, 2);
+		const SFE::Render::DescriptorSetHandle marchSet = mMarchSet;
+		rhi->cmdBindDescriptorSets(cmd, mMarchPipeline, 0, &marchSet, 1, offsets, 2);
 		SFE::Render::Utils::renderQuad(cmd);
 		rhi->cmdEndRenderPass(cmd);
 	}
@@ -235,7 +237,8 @@ void VolumetricPass::render(SystemsModule::RenderData& renderDataHandle, SFE::Re
 		beginInfo.height = screen.renderH;
 		rhi->cmdBeginRenderPass(cmd, beginInfo);
 		rhi->cmdBindPipeline(cmd, mApplyPipeline);
-		rhi->cmdBindDescriptorSets(cmd, mApplyPipeline, 0, &mApplySet, 1, &params.offset, 1); // binding 15
+		const SFE::Render::DescriptorSetHandle applySet = mApplySet;
+		rhi->cmdBindDescriptorSets(cmd, mApplyPipeline, 0, &applySet, 1, &params.offset, 1); // binding 15
 		SFE::Render::Utils::renderQuad(cmd);
 		rhi->cmdEndRenderPass(cmd);
 	}

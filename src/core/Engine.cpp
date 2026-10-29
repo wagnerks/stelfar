@@ -9,6 +9,7 @@
 #include <thread>
 
 #include <GLFW/glfw3.h>
+#include <json/writer.h>
 
 #include "Clocks.h"
 #include "Core.h"
@@ -41,6 +42,7 @@
 #include "renderModule/TextRenderer.h"
 #include "renderModule/FrameCapture.h"
 #include "renderModule/DebugView.h"
+#include "renderModule/RenderResources.h"
 #include "debugModule/LongFrameSampler.h"
 #include "debugModule/Profiler.h"
 
@@ -232,6 +234,55 @@ namespace SFE {
 			[](const Json::Value& args) {
 				const auto path = args.isObject() ? args.get("path", "screenshot.png").asString() : std::string("screenshot.png");
 				return Render::captureFrameToPng(path) ? "written to " + path : "not written: " + path;
+			});
+		// What the renderer holds, for a check that turning its passes on and off gives back what it took: the numbers of
+		// the overlay's memory line and of the passes' own targets, read by a script.
+		bridge->addCommand("passes",
+			"The renderer's passes as JSON: \"passes\", each entry of its list in draw order and whether its pass exists now "
+			"(\"made\"; PassEntry::on); \"memory\", what the RHI holds on the device by kind, MiB (targets, depth, textures, "
+			"meshes, buffers); \"held\", the screen targets the passes hold by name (Render::Resources), with how many hold "
+			"each and its MiB, and \"heldMiB\" their sum.",
+			[this](const Json::Value&) -> std::string {
+				auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
+				if (!renderSystem) {
+					return "no renderer";
+				}
+				constexpr double kMiB = 1024.0 * 1024.0;
+				Json::Value out;
+				auto& passes = out["passes"];
+				passes = Json::arrayValue;
+				for (const auto& name : renderSystem->renderPassNames()) {
+					Json::Value pass;
+					pass["name"] = name;
+					pass["made"] = renderSystem->passOn(name);
+					passes.append(pass);
+				}
+				if (mRHI) {
+					const auto memory = mRHI->gpuMemory();
+					auto& kinds = out["memory"];
+					kinds["targets"] = static_cast<double>(memory.targets) / kMiB;
+					kinds["depth"] = static_cast<double>(memory.depth) / kMiB;
+					kinds["textures"] = static_cast<double>(memory.textures) / kMiB;
+					kinds["meshes"] = static_cast<double>(memory.meshes) / kMiB;
+					kinds["buffers"] = static_cast<double>(memory.buffers) / kMiB;
+				}
+				auto& held = out["held"];
+				held = Json::arrayValue;
+				uint64_t heldBytes = 0;
+				for (const auto& target : renderSystem->resources().held()) {
+					Json::Value one;
+					one["name"] = target.name;
+					one["holders"] = static_cast<Json::Int64>(target.holders);
+					one["mib"] = static_cast<double>(target.bytes) / kMiB;
+					held.append(one);
+					heldBytes += target.bytes;
+				}
+				out["heldMiB"] = static_cast<double>(heldBytes) / kMiB;
+				Json::StreamWriterBuilder writer;
+				writer["indentation"] = "";
+				writer["precision"] = 3;
+				writer["precisionType"] = "decimal";
+				return Json::writeString(writer, out);
 			});
 		bridge->addCommand("reloadShaders",
 			"Every shader read again from its file, and what changed compiled again. One that does not compile keeps the "

@@ -1849,7 +1849,8 @@ namespace SFE::Render
 			glDeleteShader(shader.id);
 			shader.id = fresh;
 			shader.desc.source = std::move(source);
-			remade.push_back(id);
+			// Its handle's id, generation and all, as the pipelines hold it.
+			remade.push_back(id | (shader.generation << kHandleSlotBits));
 		}
 		if (remade.empty()) {
 			return 0;

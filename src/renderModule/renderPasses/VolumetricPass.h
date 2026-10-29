@@ -1,4 +1,6 @@
 #pragma once
+#include <vector>
+#include "renderModule/Held.h"
 #include "renderModule/renderPasses/RenderPass.h"
 
 namespace SFE::Render::RenderPasses {
@@ -23,18 +25,19 @@ namespace SFE::Render::RenderPasses {
 		};
 
 		Params mParams;
-		TextureHandle mMarchTex{};
-		FramebufferHandle mMarchFbo{};
-		TextureHandle mColor{};
-		FramebufferHandle mFbo{};
-		SamplerHandle mLinear{};
-		SamplerHandle mNearest{};
-		PipelineHandle mMarchPipeline{};
-		PipelineHandle mApplyPipeline{};
-		RenderPassHandle mRenderPass{};
-		DescriptorSetLayoutHandle mMarchLayout{};
-		DescriptorSetHandle mMarchSet{};
-		DescriptorSetLayoutHandle mApplyLayout{};
-		DescriptorSetHandle mApplySet{};
+		Held<TextureHandle> mMarchTex;
+		Held<FramebufferHandle> mMarchFbo;
+		Held<TextureHandle> mColor;
+		Held<FramebufferHandle> mFbo;
+		Held<SamplerHandle> mLinear;
+		Held<SamplerHandle> mNearest;
+		Held<PipelineHandle> mMarchPipeline;
+		Held<PipelineHandle> mApplyPipeline;
+		Held<RenderPassHandle> mRenderPass;
+		Held<DescriptorSetLayoutHandle> mMarchLayout;
+		Held<DescriptorSetHandle> mMarchSet;
+		Held<DescriptorSetLayoutHandle> mApplyLayout;
+		Held<DescriptorSetHandle> mApplySet;
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 	};
 }

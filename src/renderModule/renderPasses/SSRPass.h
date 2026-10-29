@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include "renderModule/Held.h"
 #include "renderModule/renderPasses/RenderPass.h"
 
 namespace SFE::Render::RenderPasses {
@@ -22,12 +23,13 @@ namespace SFE::Render::RenderPasses {
 		};
 
 		Params mParams;
-		TextureHandle mColor{};
-		SamplerHandle mSampler{};
-		FramebufferHandle mFbo{};
-		PipelineHandle mPipeline{};
-		RenderPassHandle mRenderPass{};
-		DescriptorSetLayoutHandle mLayout{};
-		std::vector<DescriptorSetHandle> mSets; // one per frame slot
+		Held<TextureHandle> mColor;
+		Held<SamplerHandle> mSampler;
+		Held<FramebufferHandle> mFbo;
+		Held<PipelineHandle> mPipeline;
+		Held<RenderPassHandle> mRenderPass;
+		Held<DescriptorSetLayoutHandle> mLayout;
+		std::vector<Held<DescriptorSetHandle>> mSets; // one per frame slot
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 	};
 }

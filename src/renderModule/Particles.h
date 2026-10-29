@@ -27,7 +27,7 @@ namespace SFE::Render::Particles {
 	//   far round as it gathers (`reach`), mirroring as a liquid's face does or dull (`rough`); in flight drawn out along
 	//   its way as far as it holds together; come to rest, spreading out over what it lies on as thin as it goes
 	//   (`settle`), those lying by each other a puddle.
-	enum class Look : uint32_t { Chip = 0, Mote = 1, Spark = 2, Drop = 3 };
+	enum class Look : uint32_t { Chip = 0, Mote = 1, Spark = 2, Drop = 3, Count }; // Count: how many looks there are
 
 	// A handful of particles let go at once (emit).
 	struct Burst {
@@ -62,8 +62,10 @@ namespace SFE::Render::Particles {
 
 	// Any thread: `burst` let go at the next frame. More than a frame takes (kMaxSpawn) wait for the next ones.
 	void emit(const Burst& burst);
-	// How many were let go since the start, for checks.
+	// How many were let go since the start, for checks; and how many of one look, which the renderer makes the passes
+	// drawing that look by (the drops' liquid from the first drop let go).
 	uint64_t emitted();
+	uint64_t emitted(Look look);
 
 	// A thing's shape, in its own frame, to catch drops that stick: `cells` (x, y, z) of `cell` metres from `low`, the
 	// ones it fills set in `filled`, a bit each, 32 to a word, x fastest, then z, then y (a layer of x and z for each
@@ -120,8 +122,6 @@ namespace SFE::Render::Particles {
 	bool alive(double now);
 	// Whether any drop let go may still be in flight at `now`.
 	bool liquid(double now);
-	// The particles, ParticlePass's: what ParticleSpritePass draws too. Empty before it made them.
-	BufferHandle& buffer();
 
 	// One catcher on the GPU. Mirrors SfeCatcher in particles.cs, std140: the world into its frame (column-major), its
 	// low corner (xyz) and its cells' metres (w), its cells across (xyz) and where its shape's words start (w).

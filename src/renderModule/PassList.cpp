@@ -146,6 +146,32 @@ namespace SFE::Render {
 		return at == mEntries.size() ? nullptr : &mEntries[at];
 	}
 
+	std::vector<std::string> PassList::errors() const {
+		auto errors = mErrors;
+		std::vector<std::pair<std::string, const PassEntry*>> given; // each key given so far, and by which entry
+		const auto giver = [&](const std::string& key) {
+			return std::find_if(given.begin(), given.end(), [&](const auto& g) { return g.first == key; });
+		};
+		for (const auto& entry : mEntries) {
+			if (!entry.enabled) {
+				continue;
+			}
+			for (const auto& key : entry.needs) {
+				if (giver(key) == given.end()) {
+					errors.push_back(refused("needs", entry.name, "\"" + key + "\" is given by no pass before it"));
+				}
+			}
+			for (const auto& key : entry.gives) {
+				if (const auto by = giver(key); by != given.end()) {
+					errors.push_back(refused("gives", entry.name, "\"" + key + "\" is given by \"" + by->second->name + "\" too"));
+					continue;
+				}
+				given.emplace_back(key, &entry);
+			}
+		}
+		return errors;
+	}
+
 	std::vector<std::string> PassList::names() const {
 		std::vector<std::string> enabled;
 		for (const auto& entry : mEntries) {

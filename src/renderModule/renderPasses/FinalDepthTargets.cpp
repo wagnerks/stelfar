@@ -1,39 +1,17 @@
 #include "FinalDepthTargets.h"
 
 #include "core/Engine.h"
+#include "renderModule/RenderResources.h"
 #include "systemsModule/systems/RenderSystem.h"
 
 namespace SFE::Render::RenderPasses {
 	FramebufferHandle FinalDepthTargets::get(const SystemsModule::RenderData& renderData, const RenderPassHandle renderPass) {
 		const auto color = renderData.frame.texture(FrameId::Final);
 		const auto depth = renderData.frame.texture(FrameId::GBufferDepth);
-		if (!color || !depth) {
+		if (!color || !depth || !renderData.resources) {
 			return {};
 		}
-		const auto& screen = Engine::instance()->getWindow()->getScreenData();
-		if (screen.renderW != mWidth || screen.renderH != mHeight) {
-			for (const auto& entry : mEntries) {
-				Engine::instance()->rhi()->destroyFramebuffer(entry.fbo);
-			}
-			mEntries.clear();
-			mWidth = screen.renderW;
-			mHeight = screen.renderH;
-		}
-		for (const auto& entry : mEntries) {
-			if (entry.color.id == color.id && entry.depth.id == depth.id) {
-				return entry.fbo;
-			}
-		}
-
-		FramebufferDesc desc;
-		desc.width = screen.renderW;
-		desc.height = screen.renderH;
-		desc.renderPass = renderPass;
-		desc.colorAttachments = { { color } };
-		desc.depthStencilAttachment = { .texture = depth };
-		const auto fbo = Engine::instance()->rhi()->createFramebuffer(desc);
-		mEntries.push_back({ color, depth, fbo });
-		return fbo;
+		return renderData.resources->framebuffer(color, depth, renderPass);
 	}
 
 	RenderPassHandle createFinalDepthRenderPass() {

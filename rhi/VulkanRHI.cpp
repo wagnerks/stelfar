@@ -303,7 +303,12 @@ namespace SFE::Render {
 		}
 		m_buffers.clear();
 		m_freeBuffers.clear();
-		// The device is idle: nothing binds them any more.
+		// The device is idle: nothing binds them any more. The other kinds first, before the pools their sets came from
+		// go and the images under their framebuffers.
+		for (auto& retired : m_retiredObjects) {
+			retired.destroy();
+		}
+		m_retiredObjects.clear();
 		for (const auto& retired : m_retiredBuffers) {
 			vmaDestroyBuffer(m_allocator, retired.buffer, retired.allocation);
 		}

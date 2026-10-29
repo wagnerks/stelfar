@@ -4,6 +4,7 @@
 
 #include "assetsModule/shaderModule/ShaderBase.h"
 #include "core/Engine.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/Utils.h"
 #include "debugModule/Benchmark.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -19,7 +20,7 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	mainRPD.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	mainRPD.colorAttachments[0].clearColor = {1.f, 1.f, 1.f, 1.f};
 	mainRPD.colorAttachments[0].format = TextureFormat::R8;
-	main = rhi->createRenderPass(mainRPD);
+	main = own(rhi->createRenderPass(mainRPD));
 
 	RenderPassDesc blurRPD;
 	blurRPD.colorAttachmentCount = 1;
@@ -27,12 +28,12 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	blurRPD.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	blurRPD.colorAttachments[0].clearColor = {1.f, 1.f, 1.f, 1.f};
 	blurRPD.colorAttachments[0].format = TextureFormat::R8;
-	blur = rhi->createRenderPass(blurRPD);
+	blur = own(rhi->createRenderPass(blurRPD));
 
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
 	samplerDesc.magFilter = FilterMode::Linear;
-	mData.sampler = rhi->createSampler(samplerDesc);
+	mData.sampler = own(rhi->createSampler(samplerDesc));
 
 	Render::DescriptorSetLayoutDesc texLayoutDesc;
 	texLayoutDesc.bindings.emplace_back(0, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
@@ -40,7 +41,7 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	texLayoutDesc.bindings.emplace_back(2, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(3, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Fragment);
 	texLayoutDesc.bindings.emplace_back(5, Render::DescriptorType::UniformBuffer, Render::ShaderStage::Fragment);
-	mainTexSetLayout = rhi->createDescriptorSetLayout(texLayoutDesc);
+	mainTexSetLayout = own(rhi->createDescriptorSetLayout(texLayoutDesc));
 
 	Render::DescriptorSetLayoutDesc texLayoutBlurDesc;
 	texLayoutBlurDesc.bindings.emplace_back(0, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
@@ -48,11 +49,11 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	texLayoutBlurDesc.bindings.emplace_back(2, Render::DescriptorType::UniformBufferDynamic, Render::ShaderStage::Fragment);
 	texLayoutBlurDesc.bindings.emplace_back(3, Render::DescriptorType::UniformBuffer, Render::ShaderStage::Fragment);
 	texLayoutBlurDesc.bindings.emplace_back(4, Render::DescriptorType::CombinedImageSampler, Render::ShaderStage::Fragment);
-	blurTexSetLayout = rhi->createDescriptorSetLayout(texLayoutBlurDesc);
+	blurTexSetLayout = own(rhi->createDescriptorSetLayout(texLayoutBlurDesc));
 	mSlots.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& slot : mSlots) {
-		slot.mainSet = rhi->allocateDescriptorSet(mainTexSetLayout);
-		slot.blurSet = rhi->allocateDescriptorSet(blurTexSetLayout);
+		slot.mainSet = own(rhi->allocateDescriptorSet(mainTexSetLayout));
+		slot.blurSet = own(rhi->allocateDescriptorSet(blurTexSetLayout));
 	}
 
 	GraphicsPipelineDesc mainPipelineDesc;
@@ -64,9 +65,9 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	mainPipelineDesc.cullMode = CullMode::None;
 	mainPipelineDesc.renderPass = main;
 	mainPipelineDesc.descriptorSetLayouts = { mainTexSetLayout };
-	mainPipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs");
-	mainPipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/ssao.fs");
-	mainPipeline = rhi->createGraphicsPipeline(mainPipelineDesc);
+	mainPipelineDesc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs"));
+	mainPipelineDesc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/ssao.fs"));
+	mainPipeline = own(rhi->createGraphicsPipeline(mainPipelineDesc));
 
 	GraphicsPipelineDesc blurPipelineDesc;
 	blurPipelineDesc.layout.bindings.emplace_back(0, static_cast<uint32_t>(sizeof(Vertex2D)), Render::VertexInputRate::PerVertex);
@@ -76,9 +77,9 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 	blurPipelineDesc.cullMode = CullMode::None;
 	blurPipelineDesc.renderPass = blur;
 	blurPipelineDesc.descriptorSetLayouts = { blurTexSetLayout };
-	blurPipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs");
-	blurPipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/ssao_blur.fs");
-	blurPipeline = rhi->createGraphicsPipeline(blurPipelineDesc);
+	blurPipelineDesc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs"));
+	blurPipelineDesc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/ssao_blur.fs"));
+	blurPipeline = own(rhi->createGraphicsPipeline(blurPipelineDesc));
 
 	blurParams.sigmaS = mData.sigmaS;
 	blurParams.sigmaL = mData.sigmaL;
@@ -89,8 +90,9 @@ void SSAOPass::init(SystemsModule::RenderData& renderDataHandle) {
 }
 
 void SSAOPass::resize(SystemsModule::RenderData& renderDataHandle) {
-	Utils::screenTarget(mData.mSsaoColorBuffer, mData.mSsaoFbo, main, TextureFormat::R8, 2);
-	Utils::screenTarget(mData.mSsaoColorBufferBlur, mData.mSsaoBlurFbo, blur, TextureFormat::R8, 2);
+	auto& resources = *renderDataHandle.resources;
+	screenTarget(resources, name() + ".color", mData.mSsaoColorBuffer, mData.mSsaoFbo, main, TextureFormat::R8, 2);
+	screenTarget(resources, name() + ".blur", mData.mSsaoColorBufferBlur, mData.mSsaoBlurFbo, blur, TextureFormat::R8, 2);
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 	mSsaoW = (std::max)(1, screen.renderW / 2);
 	mSsaoH = (std::max)(1, screen.renderH / 2);
@@ -104,9 +106,6 @@ void SSAOPass::resize(SystemsModule::RenderData& renderDataHandle) {
 }
 
 void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
-	if (!renderDataHandle.graphics.ssao) {
-		return;
-	}
 	FUNCTION_BENCHMARK
 
 	auto* rhi = Engine::instance()->rhi();
@@ -168,7 +167,8 @@ void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	beginInfo.renderPass = main;
 	rhi->cmdBeginRenderPass(cmd, beginInfo);
 	rhi->cmdBindPipeline(cmd, mainPipeline);
-	rhi->cmdBindDescriptorSets(cmd, mainPipeline, 0, &slot.mainSet, 1, &ssaoParams.offset, 1);
+	const DescriptorSetHandle mainSet = slot.mainSet;
+	rhi->cmdBindDescriptorSets(cmd, mainPipeline, 0, &mainSet, 1, &ssaoParams.offset, 1);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 
@@ -176,7 +176,8 @@ void SSAOPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 	beginInfo.renderPass = blur;
 	rhi->cmdBeginRenderPass(cmd, beginInfo);
 	rhi->cmdBindPipeline(cmd, blurPipeline);
-	rhi->cmdBindDescriptorSets(cmd, blurPipeline, 0, &slot.blurSet, 1, &ssaoBlurParams.offset, 1);
+	const DescriptorSetHandle blurSet = slot.blurSet;
+	rhi->cmdBindDescriptorSets(cmd, blurPipeline, 0, &blurSet, 1, &ssaoBlurParams.offset, 1);
 	Utils::renderQuad(cmd);
 	rhi->cmdEndRenderPass(cmd);
 }

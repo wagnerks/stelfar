@@ -861,7 +861,7 @@ void main() {
 			m_shaderByName.erase(it);
 		}
 		if (shader->module != VK_NULL_HANDLE) {
-			vkDestroyShaderModule(m_device, shader->module, nullptr);
+			retire([device = m_device, module = shader->module] { vkDestroyShaderModule(device, module, nullptr); });
 		}
 		recycleResource(m_shaders, m_freeShaders, handle.id);
 	}
@@ -967,7 +967,7 @@ void main() {
 	void VulkanRHI::destroyRenderPass(const RenderPassHandle renderPass) {
 		if (auto* pass = getLive(m_renderPasses, renderPass.id)) {
 			if (pass->renderPass != VK_NULL_HANDLE) {
-				vkDestroyRenderPass(m_device, pass->renderPass, nullptr);
+				retire([device = m_device, vkPass = pass->renderPass] { vkDestroyRenderPass(device, vkPass, nullptr); });
 			}
 			recycleResource(m_renderPasses, m_freeRenderPasses, renderPass.id);
 		}
@@ -992,12 +992,14 @@ void main() {
 
 	void VulkanRHI::destroyFramebuffer(const FramebufferHandle framebuffer) {
 		if (auto* fb = getLive(m_framebuffers, framebuffer.id)) {
-			if (fb->framebuffer != VK_NULL_HANDLE) {
-				vkDestroyFramebuffer(m_device, fb->framebuffer, nullptr);
-			}
-			for (VkImageView view : fb->ownedViews) {
-				vkDestroyImageView(m_device, view, nullptr);
-			}
+			retire([device = m_device, vkFramebuffer = fb->framebuffer, views = std::move(fb->ownedViews)] {
+				if (vkFramebuffer != VK_NULL_HANDLE) {
+					vkDestroyFramebuffer(device, vkFramebuffer, nullptr);
+				}
+				for (VkImageView view : views) {
+					vkDestroyImageView(device, view, nullptr);
+				}
+			});
 			fb->ownedViews.clear();
 			if (fb->ownedRenderPass) {
 				destroyRenderPass(fb->ownedRenderPass);
@@ -1365,7 +1367,8 @@ void main() {
 		for (const auto& [id, module] : fresh) {
 			vkDestroyShaderModule(m_device, m_shaders[id].module, nullptr);
 			m_shaders[id].module = module;
-			remade.push_back(id);
+			// Its handle's id, generation and all, as the pipelines hold it.
+			remade.push_back(id | (m_shaders[id].generation << kHandleSlotBits));
 		}
 		const auto uses = [&](const ShaderModuleHandle handle) {
 			return handle.id != UINT32_MAX && std::find(remade.begin(), remade.end(), handle.id) != remade.end();
@@ -1403,12 +1406,14 @@ void main() {
 
 	void VulkanRHI::destroyGraphicsPipeline(const PipelineHandle pipeline) {
 		if (auto* gp = getLive(m_pipelines, pipeline.id)) {
-			if (gp->pipeline != VK_NULL_HANDLE) {
-				vkDestroyPipeline(m_device, gp->pipeline, nullptr);
-			}
-			if (gp->layout != VK_NULL_HANDLE) {
-				vkDestroyPipelineLayout(m_device, gp->layout, nullptr);
-			}
+			retire([device = m_device, vkPipeline = gp->pipeline, vkLayout = gp->layout] {
+				if (vkPipeline != VK_NULL_HANDLE) {
+					vkDestroyPipeline(device, vkPipeline, nullptr);
+				}
+				if (vkLayout != VK_NULL_HANDLE) {
+					vkDestroyPipelineLayout(device, vkLayout, nullptr);
+				}
+			});
 			if (gp->ownedRenderPass) {
 				destroyRenderPass(gp->ownedRenderPass);
 			}

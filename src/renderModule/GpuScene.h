@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "assetsModule/RenderMeshData.h"
@@ -48,8 +49,8 @@ namespace SFE::Render {
 			uint32_t batchCount = 0;
 		};
 
-		// The output of culling one list for one view, drawn from the same frame's command list.
-		struct View {
+		// What a View holds, apart from it so that a View moves all of it at once.
+		struct ViewState {
 			// Levels of detail coarser than the size on screen picks, for a view whose image is seen blurred or small.
 			uint32_t lodBias = 0;
 			BufferHandle visible;   // SfeInstance records, bound at 3 by the draw
@@ -86,6 +87,19 @@ namespace SFE::Render {
 			std::vector<BufferHandle> packParams;
 			std::vector<DescriptorSetHandle> packSets;
 			std::vector<std::array<uint32_t, 3>> packBoundIds;
+		};
+		// The output of culling one list for one view, drawn from the same frame's command list. Its buffers and sets,
+		// which the culls make as they need them, go with it: a pass's views go with the pass. Moved, not copied.
+		struct View : ViewState {
+			View() = default;
+			~View();
+			View(View&& other) noexcept : ViewState(std::exchange(static_cast<ViewState&>(other), {})) {}
+			View& operator=(View&& other) noexcept;
+			View(const View&) = delete;
+			View& operator=(const View&) = delete;
+
+		private:
+			void release();
 		};
 
 		void init();
@@ -137,6 +151,8 @@ namespace SFE::Render {
 		void drawSorted(CommandListHandle cmd, const View& view, uint32_t group) const;
 
 		const std::vector<DrawGroup>& groups(List list) const { return mLists[static_cast<size_t>(list)].groups; }
+		// The instances the list holds now. Its groups outlast their last instance until the list is built again.
+		uint32_t instances(List list) const { return mLists[static_cast<size_t>(list)].liveInstances; }
 		// The largest entity id any instance has referred to: the culls read its transform.
 		ecss::EntityId maxEntity() const { return mMaxEntity; }
 		// The entities the last update gave instances, sorted: their transforms have to be on the GPU before this

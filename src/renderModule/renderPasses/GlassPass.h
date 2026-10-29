@@ -1,7 +1,10 @@
 ﻿#pragma once
 #include <string>
 #include <unordered_map>
+#include <vector>
 
+#include "renderModule/Held.h"
+#include "renderModule/renderPasses/FinalDepthTargets.h"
 #include "renderModule/renderPasses/RenderPass.h"
 #include "renderModule/GpuScene.h"
 #include "rhi/RenderHardwareInterface.h"
@@ -34,31 +37,27 @@ namespace SFE::Render::RenderPasses {
 		};
 		static_assert(sizeof(Params) == 64, "sfe_glass.glsl's PushConstants, member for member");
 
-		void ensureTargets(SystemsModule::RenderData& renderDataHandle);
 		// The pipeline drawing with `vertexShader` and `fragmentShader`, made the first time it is asked for.
 		// `depthOnly`: a solid group's (MaterialComponent::solidGlass) depth, laid before its colour, the colour kept.
 		PipelineHandle pipelineFor(const std::string& vertexShader, const std::string& fragmentShader, bool depthOnly = false);
 
 		Params mParams;
-		TextureHandle mSceneCopy{};
-		SamplerHandle mSampler{};
-		FramebufferHandle mSceneCopyFbo{};
-		// Final and depth both alternate between frames, so there is one framebuffer per pair they come in.
-		struct GlassTarget {
-			TextureHandle finalTex;
-			TextureHandle depthTex;
-			FramebufferHandle fbo;
-		};
-		std::vector<GlassTarget> mGlassTargets;
-		FramebufferHandle mGlassFbo{};
+		// The picture's copy (Render::kSceneCopy), shared with every pass that copies the picture before it reads it.
+		Held<TextureHandle> mSceneCopy;
+		Held<SamplerHandle> mSampler;
+		Held<FramebufferHandle> mSceneCopyFbo;
+		// Over the picture and the scene's depth, which the glass is tested against and drawn into.
+		FinalDepthTargets mTargets;
 		GraphicsPipelineDesc mPipelineDesc; // all but the fragment shader
-		std::unordered_map<std::string, PipelineHandle> mPipelines;
-		RenderPassHandle mRenderPass{};
-		DescriptorSetLayoutHandle mLayout{};
+		std::unordered_map<std::string, Held<PipelineHandle>> mPipelines;
+		Held<RenderPassHandle> mRenderPass;
+		Held<DescriptorSetLayoutHandle> mLayout;
+		// The modules of every pipeline made, the lazy ones among them.
+		std::vector<Held<ShaderModuleHandle>> mShaders;
 		// One a glass group (a fragment shader), sorted and drawn apart from the others.
 		struct Group {
 			GpuScene::View view;
-			std::vector<DescriptorSetHandle> sets; // one per frame slot
+			std::vector<Held<DescriptorSetHandle>> sets; // one per frame slot
 		};
 		std::vector<Group> mGroups;
 	};

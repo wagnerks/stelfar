@@ -131,8 +131,20 @@ is described in its header.
   and `ground_albedo`.
 - **Passes** (`renderModule/PassList.h`): the renderer draws the list it is given, `Render::defaultPasses()` with the
   application's own put in by name (`insertBefore`, `insertAfter`, `replace`, `disable`, `remove`; a name not in the
-  list is an error), each with a predicate of when it runs. A pass that casts shadows implements `ShadowCasterPass`
-  (`renderModule/renderPasses/RenderPass.h`), and the shadow pass finds it among the passes.
+  list is an error). An entry has two facts: `on`, whether its pass exists, and `runs`, whether it draws this frame.
+  The core has no `on` and always exists (the shadows and the sun, the point lights, the G-buffer and its depth, the
+  lighting, Final, the GUI, Debug and ImGui); a feature exists while its setting is on (SSAO, SSS, ContactGI, SSR,
+  Volumetric, TAA, DoF) or while the scene has what it draws (a water under a sky, a sky, glass, particles or a drop
+  ever let go), and also only while every frame key it `needs` has a giver before it that exists. Asked every frame
+  before it is recorded, a feature come on is made and drawn that frame, one gone off is destroyed with all it held and
+  the keys it `gives` emptied. The contract of a pass given an `on`: its `on` follows the settings or the scene's
+  content, never the frame (a per-frame fact goes in `runs`, or it is made and destroyed at every flip); it holds every
+  GPU object it makes through `Render::Held` (`renderModule/Held.h`, a counted handle the last holder of which destroys
+  it) and its screen targets from `Render::Resources` by name (`renderModule/RenderResources.h`, one target for every
+  pass that asks for the name, freed with its last holder), its own named after its entry (`RenderPass::name()`), so an
+  entry's are its own however many entries its class has; it binds no `Params` to its own fields. A pass that casts
+  shadows implements `ShadowCasterPass` (`renderModule/renderPasses/RenderPass.h`), and the shadow pass finds it among
+  the passes. The bridge command `passes` says which exist and what they hold.
 - **Systems** (`core/DefaultSystems.h`, `SFE::Modules`): the engine's systems as bricks the application calls in its
   own order, and the frame's order: `Modules::schedule()` roots the engine's, and the application puts its own before
   them (`addRootSystemsBefore<PhysicsDrawSystem, ...>`) or ticks them at a rate (`addTickSystems<...>(rate)`).

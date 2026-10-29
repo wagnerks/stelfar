@@ -25,6 +25,7 @@ namespace SFE {
 	namespace Render {
 		class Renderer;
 		class PassList;
+		class Resources;
 		struct PassEntry;
 	}
 }
@@ -208,6 +209,14 @@ namespace SFE::SystemsModule {
 		int taaFrame = 0;
 		float taaJitterX = 0.f;
 		float taaJitterY = 0.f;
+
+		// The screen targets the passes hold, by name (Render::Resources): RenderSystem's.
+		Render::Resources* resources = nullptr;
+		// Counts up whenever the set of the frame's targets may have changed -- the picture drawn at a new size, a pass
+		// made or let go -- so what a pass builds over them and keeps by their ids is built again rather than taken for a
+		// texture that has gone. The framebuffers over the lit picture (FinalDepthTargets) the renderer lets go of itself,
+		// at the same moment (Resources::targetsChanged).
+		uint64_t targetsVersion = 0;
 	};
 
 		class RenderDebugInfo : public Singleton<RenderDebugInfo>
@@ -304,18 +313,25 @@ namespace SFE::SystemsModule {
 		// ARMATURE_UPDATED, or were destroyed), duplicates possible. Main thread.
 		std::vector<ecss::EntityId> takeDirtyAnimations();
 
-		// A pass made from `entry` while the renderer runs: initialised at once, run from the next frame in list order
-		// right after the pass named `after`. Refused (false, logged) for an anchor no pass has, a name already in the
-		// list, an entry that is disabled or cannot be made. Main thread, between frames.
+		// `entry` put in the list while the renderer runs, right after the entry named `after` (made or not): a pass that
+		// is to exist (PassEntry::on, needs) made and initialised at once, and drawn from the next frame in list order;
+		// one that is not, made the first frame it is. Refused (false, logged) for an anchor no entry has, a name already
+		// in the list, an entry that is disabled or cannot be made. Main thread, between frames.
 		bool addRenderPass(Render::PassEntry entry, std::string_view after);
-		// Removes and destroys the named pass; false when there is none. Main thread, between frames.
+		// Takes the named entry out of the list, its pass let go of first (settlePasses' way: its keys emptied); false
+		// when there is none. Main thread, between frames.
 		bool removeRenderPass(std::string_view name);
-		// The picture drawn at a new size (ViewportData::renderW, renderH): once the device is idle, every pass makes its
-		// targets of the screen's size again (RenderPass::resize). Main thread, between frames.
+		// The picture drawn at a new size (ViewportData::renderW, renderH): once the device is idle, every pass made makes
+		// its targets of the screen's size again (RenderPass::resize). Main thread, between frames.
 		void resize();
+		// Every entry of the list, made or not, in draw order.
 		std::vector<std::string> renderPassNames() const { return mPassNames; }
-		// Every pass in draw order, for whoever needs to ask them all something.
+		// Whether the named pass exists now (PassEntry::on): made, and not let go of since.
+		bool passOn(std::string_view name) const;
+		// Every entry's pass in draw order, null where it does not exist now, for whoever needs to ask them all something.
 		const std::vector<std::unique_ptr<Render::RenderPass>>& renderPasses() const { return mRenderPasses; }
+		// The screen targets the passes hold, by name.
+		const Render::Resources& resources() const;
 
 		// Readers (AABBSystem, OcTreeSystem) skip a frame while the world is changed off the main thread (a scene reload
 		// destroying entities). Mutate sets the flag first, then waits for in-flight readers, so a waiting mutate never
@@ -407,8 +423,23 @@ namespace SFE::SystemsModule {
 
 		void renderFrame();
 		bool shouldRunPass(size_t passIndex) const;
-		// `pass`, made of `entry`, initialised and put at `index` among the passes with the entry's name and predicate.
-		void placePass(const Render::PassEntry& entry, std::unique_ptr<Render::RenderPass> pass, size_t index);
+		// `entry` put at `index` in the list, its pass not made yet.
+		void placeEntry(Render::PassEntry entry, size_t index);
+		// The rule of PassEntry::on and needs, entry by entry in list order: a pass that is to exist and does not is made
+		// and initialised, one that exists and is not to is let go of (letGoOf), a reader seeing its giver as this same
+		// walk left it; targetsVersion counts up when anything changed. In the constructor, and every frame before it is
+		// recorded, after the frame's jitter (from the same graphics.taa) and the scene's update. `tell`: each pass made
+		// or let go said in the log, with the frame (not at construction, whose passes the first frame lists).
+		void settlePasses(bool tell = true);
+		// Whether the entry at `index` is to exist, the keys given before it being `given`.
+		bool wanted(size_t index, const std::vector<std::string>& given) const;
+		// The pass at `index` -- `pass`, or one its entry makes -- named and initialised; false when it cannot be made (said
+		// once: it is not asked again).
+		bool makePass(size_t index, std::unique_ptr<Render::RenderPass> pass = {});
+		// The pass at `index` destroyed, told of no scene, the keys it gave emptied.
+		void letGoOf(size_t index);
+		// The set of the frame's targets has changed: targetsVersion counts up, and what the registry built over them goes.
+		void targetsChanged();
 		void ensureGpuCapacity(ecss::EntityId id);
 		void bindGpuFrame();
 		// The ground drawn dense (TerrainPatch) as published in prepare: its lanes into this frame's camera block, its
@@ -428,10 +459,13 @@ namespace SFE::SystemsModule {
 
 		RenderData mRenderData;
 		int mRenderedFrames = 0; // drives the one-shot per-pass dump
+		// It keeps no target alive: they go with the passes holding them, whichever goes first.
+		std::unique_ptr<Render::Resources> mResources;
+		// The list's enabled entries in its order, and each one's pass while it exists (null while it does not).
+		std::vector<Render::PassEntry> mPassEntries;
 		std::vector<std::unique_ptr<Render::RenderPass>> mRenderPasses;
-		std::vector<std::string> mPassNames; // one per pass, same order
+		std::vector<std::string> mPassNames; // one per entry, same order
 		std::vector<const char*> mPassZones; // the same names kept for good, the profiler's (Debug::Profiler::intern)
-		std::vector<std::function<bool(const RenderData&)>> mPassRuns; // each pass's PassEntry::runs, same order
 
 		Render::BufferHandle cameraMatricesUBO;
 

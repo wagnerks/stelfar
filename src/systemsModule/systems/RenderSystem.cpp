@@ -16,6 +16,7 @@
 #include "renderModule/Atmosphere.h"
 #include "renderModule/EntityUser.h"
 #include "renderModule/FrameCapture.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/TerrainPatch.h"
 #include "renderModule/UserFrameSet.h"
 
@@ -265,26 +266,39 @@ namespace SFE::SystemsModule {
 				"the clouds and the trees, gathered over the bloom pass.", .min = 0.f, .max = 3.f });
 		}
 
-		// The passes in draw order, for one start to be put beside another's: to the log, and to load_times.log beside the
-		// executable, after the systems' order (SystemManager.cpp).
-		void writePassOrder(const std::vector<std::string>& names) {
-			std::string line = "passes, in order: ";
+		// `names` after `heading`, comma separated: "none" for none.
+		std::string listed(const char* heading, const std::vector<std::string>& names) {
+			std::string line = heading;
 			for (size_t i = 0; i < names.size(); ++i) {
 				line += (i == 0 ? "" : ", ") + names[i];
 			}
 			if (names.empty()) {
 				line += "none";
 			}
-			LogsModule::Logger::LOG_INFO("%s", line.c_str());
+			return line;
+		}
+
+		// The passes in draw order, then those of them that do not exist on the first frame (PassEntry::on), for one start
+		// to be put beside another's: to the log, and to load_times.log beside the executable, after the systems' order
+		// (SystemManager.cpp).
+		void writePassOrder(const std::vector<std::string>& names, const std::vector<std::string>& off) {
+			const auto order = listed("passes, in order: ", names);
+			const auto absent = listed("passes off: ", off);
+			LogsModule::Logger::LOG_INFO("%s", order.c_str());
+			LogsModule::Logger::LOG_INFO("%s", absent.c_str());
 			if (FILE* file = std::fopen((FileSystem::executableDir() / "load_times.log").string().c_str(), "a")) {
-				std::fputs(line.c_str(), file);
+				std::fputs(order.c_str(), file);
+				std::fputs("\n", file);
+				std::fputs(absent.c_str(), file);
 				std::fputs("\n\n", file);
 				std::fclose(file);
 			}
 		}
 	}
 
-	RenderSystem::RenderSystem(Render::PassList passes) : System({ SFE::SystemsModule::TaskType::TRAHSFORM_RELOADED , SFE::SystemsModule::TaskType::ARMATURE_UPDATED, ANIMATION_UPDATED, MATERIAL_UPDATED, MESH_UPDATED, ENTITY_DESTROYED }) {
+	RenderSystem::RenderSystem(Render::PassList passes) : System({ SFE::SystemsModule::TaskType::TRAHSFORM_RELOADED , SFE::SystemsModule::TaskType::ARMATURE_UPDATED, ANIMATION_UPDATED, MATERIAL_UPDATED, MESH_UPDATED, ENTITY_DESTROYED }),
+		mResources(std::make_unique<Render::Resources>()) {
+		mRenderData.resources = mResources.get();
 		// Before anything reads them: some passes read theirs as they are made, below.
 		registerGraphics(mRenderData.graphics);
 		auto* rhi = Engine::instance()->rhi();
@@ -328,22 +342,18 @@ namespace SFE::SystemsModule {
 		bindGpuFrame();
 
 		// What the application asked of its list and could not be had is said first, and loud: a pass left out or put
-		// elsewhere draws another picture. Then the passes, made and initialised one by one in the list's order.
+		// elsewhere draws another picture. Then the entries kept in the list's order, and the passes that are to exist
+		// now made and initialised one by one in that order; the rest are made the first frame they are to (settlePasses),
+		// the scene being loaded after this.
 		for (const auto& error : passes.errors()) {
 			LogsModule::Logger::LOG_FATAL(false, "RenderSystem: the pass list was not built as asked: %s", error.c_str());
 		}
-		mRenderPasses.reserve(passes.entries().size());
 		for (const auto& entry : passes.entries()) {
-			if (!entry.enabled) {
-				continue;
+			if (entry.enabled) {
+				placeEntry(entry, mPassEntries.size());
 			}
-			auto pass = entry.make ? entry.make() : std::unique_ptr<Render::RenderPass>();
-			if (!pass) {
-				LogsModule::Logger::LOG_FATAL(false, "RenderSystem: the pass %s cannot be made", entry.name.c_str());
-				continue;
-			}
-			placePass(entry, std::move(pass), mRenderPasses.size());
 		}
+		settlePasses(false);
 
 		// What is in the world already -- a scene loaded before this ctor -- never reached us through ARMATURE_UPDATED
 		// or ANIMATION_UPDATED, so its bones and clips are taken up here. Transforms are refreshed on the first frame,
@@ -506,6 +516,13 @@ namespace SFE::SystemsModule {
 			mMaterials.upload();
 		}
 
+		// Which passes exist this frame, from what the frame then is -- its settings, this frame's jitter among what they
+		// decide, and the scene as it was just taken -- before any of it is recorded. Every frame, the lock taken or not:
+		// the passes read the world in render all the same.
+		{
+			SFE_PROFILE_ZONE("Settle passes");
+			settlePasses();
+		}
 		renderFrame();
 	}
 
@@ -951,13 +968,94 @@ namespace SFE::SystemsModule {
 		return dirty;
 	}
 
-	void RenderSystem::placePass(const Render::PassEntry& entry, std::unique_ptr<Render::RenderPass> pass, const size_t index) {
-		pass->init(mRenderData);
+	void RenderSystem::placeEntry(Render::PassEntry entry, const size_t index) {
 		const auto at = static_cast<std::ptrdiff_t>(index);
-		mRenderPasses.insert(mRenderPasses.begin() + at, std::move(pass));
+		mRenderPasses.insert(mRenderPasses.begin() + at, nullptr);
 		mPassZones.insert(mPassZones.begin() + at, Debug::Profiler::intern(entry.name));
 		mPassNames.insert(mPassNames.begin() + at, entry.name);
-		mPassRuns.insert(mPassRuns.begin() + at, entry.runs);
+		mPassEntries.insert(mPassEntries.begin() + at, std::move(entry));
+	}
+
+	bool RenderSystem::wanted(const size_t index, const std::vector<std::string>& given) const {
+		const auto& entry = mPassEntries[index];
+		if (!entry.make || (entry.on && !entry.on(mRenderData))) {
+			return false;
+		}
+		return std::all_of(entry.needs.begin(), entry.needs.end(),
+			[&](const std::string& key) { return std::find(given.begin(), given.end(), key) != given.end(); });
+	}
+
+	bool RenderSystem::makePass(const size_t index, std::unique_ptr<Render::RenderPass> pass) {
+		auto& entry = mPassEntries[index];
+		if (!pass) {
+			pass = entry.make();
+		}
+		if (!pass) {
+			LogsModule::Logger::LOG_FATAL(false, "RenderSystem: the pass %s cannot be made", entry.name.c_str());
+			entry.make = {};
+			return false;
+		}
+		// Named before its init, which asks for its targets by its name.
+		pass->mName = entry.name;
+		pass->init(mRenderData);
+		mRenderPasses[index] = std::move(pass);
+		return true;
+	}
+
+	void RenderSystem::targetsChanged() {
+		++mRenderData.targetsVersion;
+		mResources->targetsChanged();
+	}
+
+	void RenderSystem::letGoOf(const size_t index) {
+		// Told of no scene once it is gone (SceneEvents.h), and what it gave others gone with it: a reader finds the key
+		// empty, never the pass's destroyed objects.
+		PropertiesModule::forgetSceneListenersOf(mRenderPasses[index].get());
+		for (const auto& key : mPassEntries[index].gives) {
+			mRenderData.frame.set(key.c_str(), {});
+			mRenderData.frame.setData<void>(key.c_str(), nullptr);
+		}
+		mRenderPasses[index].reset();
+	}
+
+	void RenderSystem::settlePasses(const bool tell) {
+		std::vector<std::string> given; // what the passes walked so far that exist give
+		bool changed = false;
+		const int frame = mRenderedFrames + 1;
+		for (size_t i = 0; i < mPassEntries.size(); ++i) {
+			const bool want = wanted(i, given);
+			if (want && !mRenderPasses[i]) {
+				if (makePass(i)) {
+					changed = true;
+					if (tell) {
+						LogsModule::Logger::LOG_INFO("pass on: %s, frame %d", mPassNames[i].c_str(), frame);
+					}
+				}
+			}
+			else if (!want && mRenderPasses[i]) {
+				letGoOf(i);
+				changed = true;
+				if (tell) {
+					LogsModule::Logger::LOG_INFO("pass off: %s, frame %d", mPassNames[i].c_str(), frame);
+				}
+			}
+			if (mRenderPasses[i]) {
+				const auto& gives = mPassEntries[i].gives;
+				given.insert(given.end(), gives.begin(), gives.end());
+			}
+		}
+		if (changed) {
+			targetsChanged();
+		}
+	}
+
+	bool RenderSystem::passOn(const std::string_view name) const {
+		const auto it = std::find(mPassNames.begin(), mPassNames.end(), name);
+		return it != mPassNames.end() && mRenderPasses[static_cast<size_t>(it - mPassNames.begin())];
+	}
+
+	const Render::Resources& RenderSystem::resources() const {
+		return *mResources;
 	}
 
 	bool RenderSystem::addRenderPass(Render::PassEntry entry, const std::string_view after) {
@@ -968,6 +1066,7 @@ namespace SFE::SystemsModule {
 			: std::find(mPassNames.begin(), mPassNames.end(), entry.name) != mPassNames.end() ? "a name already in the list"
 			: !entry.enabled ? "a disabled entry"
 			: !entry.make ? "no way to make it" : nullptr;
+		// Made now, whether it is to exist yet or not, so one that cannot be is refused here rather than at a frame.
 		auto pass = refused ? std::unique_ptr<Render::RenderPass>() : entry.make();
 		if (!refused && !pass) {
 			refused = "it cannot be made";
@@ -977,7 +1076,19 @@ namespace SFE::SystemsModule {
 				std::string(after).c_str(), refused);
 			return false;
 		}
-		placePass(entry, std::move(pass), static_cast<size_t>(anchor - mPassNames.begin()) + 1);
+		const auto index = static_cast<size_t>(anchor - mPassNames.begin()) + 1;
+		placeEntry(std::move(entry), index);
+		// Initialised now if it is to exist, as the walk of the next frame would find, the keys given before it as they
+		// stand; otherwise let go of uninitialised, and made again the first frame it is to exist.
+		std::vector<std::string> given;
+		for (size_t i = 0; i < index; ++i) {
+			if (mRenderPasses[i]) {
+				given.insert(given.end(), mPassEntries[i].gives.begin(), mPassEntries[i].gives.end());
+			}
+		}
+		if (wanted(index, given) && makePass(index, std::move(pass))) {
+			targetsChanged();
+		}
 		return true;
 	}
 
@@ -987,11 +1098,13 @@ namespace SFE::SystemsModule {
 			return false;
 		}
 		const auto index = it - mPassNames.begin();
-		// Told of no scene once it is gone (SceneEvents.h).
-		PropertiesModule::forgetSceneListenersOf(mRenderPasses[static_cast<size_t>(index)].get());
+		if (mRenderPasses[static_cast<size_t>(index)]) {
+			letGoOf(static_cast<size_t>(index));
+			targetsChanged();
+		}
 		mRenderPasses.erase(mRenderPasses.begin() + index);
 		mPassZones.erase(mPassZones.begin() + index);
-		mPassRuns.erase(mPassRuns.begin() + index);
+		mPassEntries.erase(mPassEntries.begin() + index);
 		mPassNames.erase(it);
 		return true;
 	}
@@ -999,14 +1112,21 @@ namespace SFE::SystemsModule {
 	void RenderSystem::resize() {
 		Engine::instance()->rhi()->waitIdle();
 		for (auto& pass : mRenderPasses) {
-			pass->resize(mRenderData);
+			if (pass) {
+				pass->resize(mRenderData);
+			}
 		}
+		targetsChanged();
 	}
 
 	bool RenderSystem::shouldRunPass(size_t passIndex) const
 	{
-		// The pass's own predicate (PassEntry::runs); one with none runs every frame.
-		return passIndex >= mPassRuns.size() || !mPassRuns[passIndex] || mPassRuns[passIndex](mRenderData);
+		// A pass that exists, by its own predicate (PassEntry::runs); one with none runs every frame.
+		if (passIndex >= mRenderPasses.size() || !mRenderPasses[passIndex]) {
+			return false;
+		}
+		const auto& runs = mPassEntries[passIndex].runs;
+		return !runs || runs(mRenderData);
 	}
 
 	void RenderSystem::renderFrame()
@@ -1038,7 +1158,13 @@ namespace SFE::SystemsModule {
 		++mRenderedFrames;
 		// Said once, as the first frame finds them, after the systems' order the system manager has just written.
 		if (mRenderedFrames == 1) {
-			writePassOrder(mPassNames);
+			std::vector<std::string> off;
+			for (size_t i = 0; i < mPassNames.size(); ++i) {
+				if (!mRenderPasses[i]) {
+					off.push_back(mPassNames[i]);
+				}
+			}
+			writePassOrder(mPassNames, off);
 		}
 		const auto& capture = Engine::instance()->config().capture;
 		const bool dumpPasses = capture.enabled
@@ -1209,9 +1335,12 @@ namespace SFE::SystemsModule {
 		Render::destroyTerrainPatch();
 		// The settings go with this system; the registry keeps their values until another binds them.
 		Params::unbind(&mRenderData.graphics, &mRenderData.graphics + 1);
-		// A pass is told of no scene once it is going (SceneEvents.h); the passes themselves go with the members.
+		// A pass is told of no scene once it is going (SceneEvents.h); the passes themselves go with the members, and with
+		// them all they hold (Render::Held), the RHI still there.
 		for (const auto& pass : mRenderPasses) {
-			PropertiesModule::forgetSceneListenersOf(pass.get());
+			if (pass) {
+				PropertiesModule::forgetSceneListenersOf(pass.get());
+			}
 		}
 	}
 }

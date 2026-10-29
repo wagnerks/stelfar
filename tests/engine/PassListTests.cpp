@@ -8,6 +8,7 @@
 
 #include "EngineTestFixture.h"
 #include "renderModule/PassList.h"
+#include "renderModule/renderPasses/ParticlePass.h"
 #include "runtimeBridge/RuntimeBridge.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -189,11 +190,16 @@ namespace SFE::EngineTests {
 		}
 	}
 
-	// Each setting runs its own pass and no other; ImGui runs on a frame shown on the screen, Debug on all but a frame
-	// that goes to an editor alone; the rest have no predicate and run every frame.
-	TEST(DefaultPasses, RunByTheirSettings) {
+	// Each setting makes its own pass and no other (PassEntry::on); ImGui runs on a frame shown on the screen, Debug on
+	// all but a frame that goes to an editor alone, both always made; the core always exists, the scene's features by
+	// what it holds, and nothing but ImGui and Debug is run by a predicate of the frame.
+	TEST(DefaultPasses, MadeByTheirSettings) {
 		using SystemsModule::GraphicsSettings;
 		const auto passes = Render::defaultPasses();
+		const auto onOf = [&](const char* name) {
+			const auto* found = passes.find(name);
+			return found ? found->on : PassEntry::On{};
+		};
 		const auto runsOf = [&](const char* name) {
 			const auto* found = passes.find(name);
 			return found ? found->runs : PassEntry::Runs{};
@@ -211,9 +217,9 @@ namespace SFE::EngineTests {
 				}
 				data.graphics.*setting = on;
 				for (const auto& other : settings) {
-					const auto runs = runsOf(other.first);
-					ASSERT_TRUE(runs) << other.first << " is run by no setting";
-					EXPECT_EQ(runs(data), other.first == std::string(pass) ? on : !on)
+					const auto made = onOf(other.first);
+					ASSERT_TRUE(made) << other.first << " is made by no setting";
+					EXPECT_EQ(made(data), other.first == std::string(pass) ? on : !on)
 						<< other.first << " with " << pass << (on ? " on" : " off");
 				}
 			}
@@ -241,13 +247,48 @@ namespace SFE::EngineTests {
 			}
 		}
 
+		const Names core = { "AnimationCompute", "CascadedShadow", "PointLight", "Geometry", "SceneDepth", "SunShadow",
+			"Lighting", "Final", "GUI", "Debug", "TextOverlay", "ImGui" };
 		for (const auto& entry : passes.entries()) {
-			const bool ruled = entry.name == "ImGui" || entry.name == "Debug"
-				|| std::any_of(std::begin(settings), std::end(settings), [&](const auto& s) { return entry.name == s.first; });
-			if (!ruled) {
-				EXPECT_FALSE(entry.runs) << entry.name << " has a predicate";
+			if (entry.name != "ImGui" && entry.name != "Debug") {
+				EXPECT_FALSE(entry.runs) << entry.name << " is run by a predicate of the frame";
 			}
+			const bool isCore = std::find(core.begin(), core.end(), entry.name) != core.end();
+			EXPECT_EQ(static_cast<bool>(entry.on), !isCore) << entry.name << (isCore ? " is a feature" : " is core");
 		}
+		// What the particle passes give one another, each reader after its giver.
+		const auto* sprites = passes.find("ParticleSprites");
+		const auto* clear = passes.find("ParticleClearLiquid");
+		ASSERT_TRUE(sprites && clear);
+		EXPECT_EQ(sprites->needs, (Names{ Render::FrameId::ParticleBuffer }));
+		EXPECT_EQ(clear->needs, (Names{ Render::FrameId::LiquidHow, Render::FrameId::LiquidWhere, Render::FrameId::LiquidFacing }));
+		EXPECT_EQ(passes.find("ParticleLiquid")->gives, clear->needs);
+	}
+
+	// A key a pass needs is given by an enabled pass before it, and by one alone: a reader before its writer, one whose
+	// writer is disabled and a key two give are each said in errors(), after what was refused; nothing is refused for it.
+	TEST(PassList, AKeyNeededHasOneGiverBeforeIt) {
+		PassList list;
+		ASSERT_TRUE(list.append(PassEntry::feature<NothingPass>("Reader", {}, {}, { "test.key" })));
+		ASSERT_TRUE(list.append(PassEntry::feature<NothingPass>("Writer", {}, { "test.key" })));
+		ASSERT_EQ(list.errors().size(), 1u);
+		EXPECT_EQ(list.errors().front(), "needs \"Reader\": \"test.key\" is given by no pass before it");
+
+		ASSERT_TRUE(list.append(PassEntry::feature<NothingPass>("Second", {}, {}, { "test.key" })));
+		EXPECT_EQ(list.errors().size(), 1u) << "a reader after its writer was refused";
+		ASSERT_TRUE(list.append(PassEntry::feature<NothingPass>("Again", {}, { "test.key" })));
+		ASSERT_EQ(list.errors().size(), 2u);
+		EXPECT_EQ(list.errors().back(), "gives \"Again\": \"test.key\" is given by \"Writer\" too");
+
+		EXPECT_TRUE(list.remove("Reader"));
+		EXPECT_TRUE(list.remove("Again"));
+		EXPECT_TRUE(list.errors().empty());
+		EXPECT_TRUE(list.disable("Writer"));
+		ASSERT_EQ(list.errors().size(), 1u) << "a disabled writer gave its key";
+		EXPECT_EQ(list.errors().front(), "needs \"Second\": \"test.key\" is given by no pass before it");
+		EXPECT_FALSE(list.append(entry("Writer")));
+		ASSERT_EQ(list.errors().size(), 2u);
+		EXPECT_EQ(list.errors().front(), "append \"Writer\": already in the list") << "what was refused is said first";
 	}
 
 	// The engine the tests run is drawn by the engine's own list, as it was built.
@@ -318,5 +359,112 @@ namespace SFE::EngineTests {
 		step(2);
 		EXPECT_EQ(renders, 3) << "a removed pass kept running";
 		EXPECT_EQ(renderSystem->renderPassNames(), Render::defaultPasses().names()) << "a pass was left behind";
+	}
+
+	// A pass exists while its `on` holds: not made while it does not, made, initialised and drawn the first frame it does,
+	// destroyed the frame it no longer does -- the key it gave emptied, and a pass that needs that key gone in the same
+	// frame -- and made afresh when it holds again. An entry not made is an anchor all the same.
+	TEST(EngineTest, APassExistsWhileItIsOn) {
+		struct Counts {
+			int inits = 0;
+			int renders = 0;
+			int deaths = 0;
+		};
+		// Its deaths counted once it was initialised: addRenderPass makes one at once only to know it can be.
+		struct CountingPass : Render::RenderPass {
+			Counts* counts = nullptr;
+			const char* gives = nullptr;
+			bool inited = false;
+			~CountingPass() override {
+				if (inited) {
+					++counts->deaths;
+				}
+			}
+			void init(SystemsModule::RenderData&) override {
+				inited = true;
+				++counts->inits;
+			}
+			void render(SystemsModule::RenderData& data, Render::CommandListHandle) override {
+				++counts->renders;
+				if (gives) {
+					data.frame.set(gives, { .texture = { 7 } });
+				}
+			}
+		};
+		const auto counting = [](std::string name, Counts* counts, const char* gives = nullptr) {
+			return PassEntry{ std::move(name), [counts, gives] {
+				auto pass = std::make_unique<CountingPass>();
+				pass->counts = counts;
+				pass->gives = gives;
+				return std::unique_ptr<Render::RenderPass>(std::move(pass));
+			} };
+		};
+		auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
+		ASSERT_NE(renderSystem, nullptr);
+		auto& frame = renderSystem->getRenderData().frame;
+		const auto& version = renderSystem->getRenderData().targetsVersion;
+		// What the passes write through, before what takes them out: they outlive the test's last line.
+		bool on = false;
+		Counts switched;
+		Counts reader;
+		Counts afterOff;
+		const Finally remove([&] {
+			renderSystem->removeRenderPass("TestReader");
+			renderSystem->removeRenderPass("TestSwitched");
+			renderSystem->removeRenderPass("TestAfterOff");
+		});
+
+		auto entry = counting("TestSwitched", &switched, "test.switched");
+		entry.on = [&on](const SystemsModule::RenderData&) { return on; };
+		entry.gives = { "test.switched" };
+		ASSERT_TRUE(renderSystem->addRenderPass(std::move(entry), "Geometry"));
+		auto readerEntry = counting("TestReader", &reader);
+		readerEntry.needs = { "test.switched" };
+		ASSERT_TRUE(renderSystem->addRenderPass(std::move(readerEntry), "TestSwitched"));
+		EXPECT_TRUE(renderSystem->addRenderPass(counting("TestAfterOff", &afterOff), "TestSwitched"))
+			<< "an entry that is off is no anchor";
+		EXPECT_EQ(afterOff.inits, 1) << "a pass with no `on` was not made at once";
+		EXPECT_EQ(switched.inits, 0) << "a pass was made while its `on` did not hold";
+		EXPECT_EQ(reader.inits, 0) << "a pass was made with no giver of the key it needs";
+		EXPECT_FALSE(renderSystem->passOn("TestSwitched"));
+		const auto names = renderSystem->renderPassNames();
+		EXPECT_NE(std::find(names.begin(), names.end(), "TestSwitched"), names.end()) << "an entry not made is not in the list";
+
+		step(2);
+		EXPECT_EQ(switched.inits, 0);
+		EXPECT_EQ(switched.renders, 0);
+
+		// The frame's targets change with every pass made or let go (RenderData::targetsVersion), and only then.
+		const auto before = version;
+		step(1);
+		EXPECT_EQ(version, before) << "the targets were said to change with no pass made or let go";
+		on = true;
+		step(1);
+		EXPECT_GT(version, before) << "a pass was made with the targets said to be as they were";
+		const auto made = version;
+		EXPECT_EQ(switched.inits, 1);
+		EXPECT_EQ(switched.renders, 1) << "a pass made was not drawn the frame it was made";
+		EXPECT_EQ(reader.inits, 1) << "a reader was not made with its giver";
+		EXPECT_EQ(reader.renders, 1);
+		EXPECT_TRUE(renderSystem->passOn("TestSwitched"));
+		EXPECT_TRUE(frame.texture("test.switched"));
+
+		on = false;
+		step(1);
+		EXPECT_GT(version, made) << "a pass was let go of with the targets said to be as they were";
+		EXPECT_EQ(switched.deaths, 1) << "a pass whose `on` no longer holds was not destroyed";
+		EXPECT_EQ(reader.deaths, 1) << "a reader outlived the giver of the key it needs";
+		EXPECT_EQ(switched.renders, 1);
+		EXPECT_EQ(reader.renders, 1);
+		EXPECT_FALSE(renderSystem->passOn("TestSwitched"));
+		EXPECT_FALSE(renderSystem->passOn("TestReader"));
+		EXPECT_FALSE(frame.texture("test.switched")) << "the key of a pass let go of was left as it gave it";
+
+		on = true;
+		step(1);
+		EXPECT_EQ(switched.inits, 2) << "a pass on again was not made afresh";
+		EXPECT_EQ(switched.renders, 2);
+		EXPECT_EQ(reader.inits, 2);
+		EXPECT_EQ(afterOff.deaths, 0) << "a pass with no `on` was let go of";
 	}
 }

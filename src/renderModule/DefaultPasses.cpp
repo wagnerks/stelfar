@@ -1,6 +1,10 @@
 #include "renderModule/PassList.h"
 
+#include "core/ECSHandler.h"
 #include "core/Engine.h"
+#include "renderModule/Atmosphere.h"
+#include "renderModule/GpuScene.h"
+#include "renderModule/Particles.h"
 #include "runtimeBridge/RuntimeBridge.h"
 #include "systemsModule/systems/RenderSystem.h"
 
@@ -34,38 +38,61 @@ namespace SFE::Render {
 		using SystemsModule::GraphicsSettings;
 		using SystemsModule::RenderData;
 
-		// Run while its setting is on (the Graphics panel's "Passes"), off the frames it is off.
-		PassEntry::Runs whileOn(bool GraphicsSettings::* setting) {
+		// Made while its setting is on (the Graphics panel's "Passes"), let go of while it is off.
+		PassEntry::On whileOn(bool GraphicsSettings::* setting) {
 			return [setting](const RenderData& data) { return data.graphics.*setting; };
+		}
+
+		// While the scene has a sky (a SkyComponent), as the sky's passes ask it in render (Atmosphere::skyParams).
+		bool underSky(const RenderData&) {
+			return Atmosphere::sceneSky(false).has_value();
+		}
+
+		// While the scene's glass list has an instance: glass goes with the last of it, not with its group, which stays
+		// until the list is built again.
+		bool glassInScene(const RenderData&) {
+			auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
+			return renderSystem && renderSystem->scene().instances(GpuScene::List::Glass) > 0;
+		}
+
+		// From the first particle let go, for good: what is let go comes and goes with play (a step in the water, a wheel
+		// in the mud), and a pass made and destroyed with each burst would be a hitch with each.
+		bool particlesLetGo(const RenderData&) {
+			return Particles::emitted() > 0;
+		}
+
+		bool dropsLetGo(const RenderData&) {
+			return Particles::emitted(Particles::Look::Drop) > 0;
 		}
 	}
 
 	PassList defaultPasses() {
 		using namespace RenderPasses;
+		const std::vector<std::string> liquid{ FrameId::LiquidHow, FrameId::LiquidWhere, FrameId::LiquidFacing };
 		PassList list;
 		list.append(PassEntry::of<AnimationComputePass>("AnimationCompute"));
 		list.append(PassEntry::of<CascadedShadowPass>("CascadedShadow"));
 		list.append(PassEntry::of<PointLightPass>("PointLight"));
 		list.append(PassEntry::of<GeometryPass>("Geometry"));
-		list.append(PassEntry::of<ParticlePass>("Particles"));
-		list.append(PassEntry::of<ParticleLiquidPass>("ParticleLiquid"));
+		list.append(PassEntry::feature<ParticlePass>("Particles", particlesLetGo, { FrameId::ParticleBuffer }));
+		list.append(PassEntry::feature<ParticleLiquidPass>("ParticleLiquid", dropsLetGo, liquid, { FrameId::ParticleBuffer }));
 		list.append(PassEntry::of<SceneDepthPass>("SceneDepth"));
-		list.append(PassEntry::of<SSAOPass>("SSAO", whileOn(&GraphicsSettings::ssao)));
+		list.append(PassEntry::feature<SSAOPass>("SSAO", whileOn(&GraphicsSettings::ssao), { FrameId::SsaoColor, FrameId::SsaoBlur }));
 		list.append(PassEntry::of<SunShadowPass>("SunShadow"));
 		list.append(PassEntry::of<LightingPass>("Lighting"));
-		list.append(PassEntry::of<SkyPass>("Sky"));
-		list.append(PassEntry::of<SSSPass>("SSS", whileOn(&GraphicsSettings::sss)));
-		list.append(PassEntry::of<ContactGIPass>("ContactGI", whileOn(&GraphicsSettings::contactGi)));
-		list.append(PassEntry::of<SSRPass>("SSR", whileOn(&GraphicsSettings::ssr)));
-		list.append(PassEntry::of<WaterPass>("Water"));
-		list.append(PassEntry::of<MistPass>("Mist"));
-		list.append(PassEntry::of<GlassPass>("Glass"));
-		list.append(PassEntry::of<VolumetricPass>("Volumetric", whileOn(&GraphicsSettings::volumetric)));
-		list.append(PassEntry::of<UnderwaterPass>("Underwater"));
-		list.append(PassEntry::of<TAAPass>("TAA", whileOn(&GraphicsSettings::taa)));
-		list.append(PassEntry::of<ParticleClearLiquidPass>("ParticleClearLiquid"));
-		list.append(PassEntry::of<ParticleSpritePass>("ParticleSprites"));
-		list.append(PassEntry::of<DoFPass>("DoF", whileOn(&GraphicsSettings::dof)));
+		list.append(PassEntry::feature<SkyPass>("Sky", underSky));
+		list.append(PassEntry::feature<SSSPass>("SSS", whileOn(&GraphicsSettings::sss)));
+		list.append(PassEntry::feature<ContactGIPass>("ContactGI", whileOn(&GraphicsSettings::contactGi)));
+		list.append(PassEntry::feature<SSRPass>("SSR", whileOn(&GraphicsSettings::ssr)));
+		list.append(PassEntry::feature<WaterPass>("Water", waterUnderSky));
+		list.append(PassEntry::feature<MistPass>("Mist", underSky));
+		list.append(PassEntry::feature<GlassPass>("Glass", glassInScene));
+		list.append(PassEntry::feature<VolumetricPass>("Volumetric", whileOn(&GraphicsSettings::volumetric)));
+		list.append(PassEntry::feature<UnderwaterPass>("Underwater", waterUnderSky));
+		list.append(PassEntry::feature<TAAPass>("TAA", whileOn(&GraphicsSettings::taa)));
+		list.append(PassEntry::feature<ParticleClearLiquidPass>("ParticleClearLiquid", underSky, {}, liquid));
+		list.append(PassEntry::feature<ParticleSpritePass>("ParticleSprites", underSky, {}, { FrameId::ParticleBuffer }));
+		list.append(PassEntry::feature<DoFPass>("DoF", whileOn(&GraphicsSettings::dof)));
 		list.append(PassEntry::of<FinalPass>("Final"));
 		list.append(PassEntry::of<GUIPass>("GUI"));
 		// Not on a frame that goes to an editor alone (published to it, nothing shown on the screen). The flag is the

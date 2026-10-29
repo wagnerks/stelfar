@@ -1,11 +1,14 @@
 #pragma once
 
+#include <string>
+
 #include "mathModule/Forward.h"
 #include "rhi/RenderHardwareInterface.h"
 
 namespace SFE {
 	namespace SystemsModule {
 		struct RenderData;
+		class RenderSystem;
 	}
 	namespace FrustumModule {
 		struct Frustum;
@@ -25,6 +28,13 @@ namespace SFE::Render {
 		// idle (RenderSystem::resize): a pass with targets of that size makes them again at the new one and lets the
 		// old ones go. A pass's init makes them the first time through it too.
 		virtual void resize(SystemsModule::RenderData& renderDataHandle) {}
+		// The name of the entry it was made for (PassEntry::name), given before its init: what its own screen targets are
+		// named by in Render::Resources, `<name>.<what>`, so two entries of one class hold two sets of them.
+		const std::string& name() const { return mName; }
+
+	private:
+		friend class SystemsModule::RenderSystem;
+		std::string mName;
 	};
 
 	/// @brief One cascade being filled, as a pass that draws its own casters sees it.

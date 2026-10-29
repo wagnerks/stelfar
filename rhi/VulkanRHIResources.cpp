@@ -118,6 +118,14 @@ namespace SFE::Render {
 			vmaDestroyBuffer(m_allocator, retired.buffer, retired.allocation);
 			return true;
 		});
+		// The framebuffers among these before the images under them.
+		std::erase_if(m_retiredObjects, [](RetiredObject& retired) {
+			if (--retired.waitsLeft > 0) {
+				return false;
+			}
+			retired.destroy();
+			return true;
+		});
 		std::erase_if(m_retiredTextures, [this](RetiredTexture& retired) {
 			if (--retired.waitsLeft > 0) {
 				return false;
@@ -1279,10 +1287,19 @@ namespace SFE::Render {
 		return handle;
 	}
 
+	void VulkanRHI::retire(std::function<void()> destroy) {
+		if (m_inited) {
+			m_retiredObjects.push_back({ std::move(destroy), kMaxFramesInFlight });
+		}
+		else {
+			destroy();
+		}
+	}
+
 	void VulkanRHI::destroySampler(const SamplerHandle sampler) {
 		if (auto* samp = getLive(m_samplers, sampler.id)) {
 			if (samp->sampler != VK_NULL_HANDLE) {
-				vkDestroySampler(m_device, samp->sampler, nullptr);
+				retire([device = m_device, vkSampler = samp->sampler] { vkDestroySampler(device, vkSampler, nullptr); });
 			}
 			recycleResource(m_samplers, m_freeSamplers, sampler.id);
 		}
@@ -1333,7 +1350,7 @@ namespace SFE::Render {
 	void VulkanRHI::destroyDescriptorSetLayout(const DescriptorSetLayoutHandle layout) {
 		if (auto* layoutObj = getLive(m_descriptorSetLayouts, layout.id)) {
 			if (layoutObj->layout != VK_NULL_HANDLE) {
-				vkDestroyDescriptorSetLayout(m_device, layoutObj->layout, nullptr);
+				retire([device = m_device, vkLayout = layoutObj->layout] { vkDestroyDescriptorSetLayout(device, vkLayout, nullptr); });
 			}
 			recycleResource(m_descriptorSetLayouts, m_freeDescriptorSetLayouts, layout.id);
 		}
@@ -1360,7 +1377,7 @@ namespace SFE::Render {
 	void VulkanRHI::freeDescriptorSet(const DescriptorSetHandle set) {
 		if (auto* setObj = getLive(m_descriptorSets, set.id)) {
 			if (setObj->set != VK_NULL_HANDLE) {
-				vkFreeDescriptorSets(m_device, setObj->pool, 1, &setObj->set);
+				retire([device = m_device, pool = setObj->pool, vkSet = setObj->set] { vkFreeDescriptorSets(device, pool, 1, &vkSet); });
 			}
 			recycleResource(m_descriptorSets, m_freeDescriptorSets, set.id);
 		}

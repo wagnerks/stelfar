@@ -14,6 +14,7 @@
 #include "core/Engine.h"
 #include "debugModule/Benchmark.h"
 #include "renderModule/Atmosphere.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -30,15 +31,28 @@ namespace {
 		                           // sky's share left in the sun's shade (GraphicsSettings::shadowAmbient)
 	};
 
-	// The scene's first water surface under its sky, as the shaders take it: false with no sky or no water.
+	// The water the water's passes draw, given to `use`: the scene's first water surface with a place, in a scene with a
+	// sky. False with no sky or no water. What makes the passes (waterUnderSky) and what they draw (waterParams).
+	template <typename Use>
+	bool sceneWater(Use&& use) {
+		if (!SFE::Render::Atmosphere::sceneSky(false)) {
+			return false;
+		}
+		for (const auto& [id, water, transform] : ECSHandler::registry().view<const SFE::ComponentsModule::WaterComponent, const SFE::ComponentsModule::TransformComponent>()) {
+			if (water && transform) {
+				use(water, transform);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The scene's water under its sky, as the shaders take it: false with no sky or no water.
 	bool waterParams(const SFE::SystemsModule::RenderData& renderData, WaterParams& params) {
 		if (!SFE::Render::Atmosphere::skyParams(renderData, params.sky)) {
 			return false;
 		}
-		for (const auto& [id, water, transform] : ECSHandler::registry().view<const SFE::ComponentsModule::WaterComponent, const SFE::ComponentsModule::TransformComponent>()) {
-			if (!water || !transform) {
-				continue;
-			}
+		return sceneWater([&](const auto& water, const auto& transform) {
 			const auto pos = transform->getPos(true);
 			params.surface[0] = pos.x;
 			params.surface[1] = pos.y;
@@ -56,12 +70,10 @@ namespace {
 				params.current = { current.x, current.y, 0.f, 0.f };
 			}
 			params.current.z = renderData.graphics.shadowAmbient;
-			return true;
-		}
-		return false;
+		});
 	}
 
-	void makeSamplers(SFE::Render::SamplerHandle& nearest, SFE::Render::SamplerHandle& linear) {
+	void makeSamplers(SFE::Render::Held<SFE::Render::SamplerHandle>& nearest, SFE::Render::Held<SFE::Render::SamplerHandle>& linear) {
 		using namespace SFE::Render;
 		auto* rhi = SFE::Engine::instance()->rhi();
 		SamplerDesc desc;
@@ -69,16 +81,19 @@ namespace {
 		desc.magFilter = FilterMode::Nearest;
 		desc.addressU = AddressMode::ClampToEdge;
 		desc.addressV = AddressMode::ClampToEdge;
-		nearest = rhi->createSampler(desc);
+		nearest = own(rhi->createSampler(desc));
 		desc.minFilter = FilterMode::Linear;
 		desc.magFilter = FilterMode::Linear;
-		linear = rhi->createSampler(desc);
+		linear = own(rhi->createSampler(desc));
 	}
+}
+
+bool SFE::Render::RenderPasses::waterUnderSky(const SystemsModule::RenderData&) {
+	return sceneWater([](const auto&, const auto&) {});
 }
 
 void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
-	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 
 	makeSamplers(mNearest, mLinear);
 	SamplerDesc ripple;
@@ -87,11 +102,11 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	ripple.addressU = AddressMode::Repeat;
 	ripple.addressV = AddressMode::Repeat;
 	ripple.maxAnisotropy = 1.f;
-	mRipple = rhi->createSampler(ripple);
+	mRipple = own(rhi->createSampler(ripple));
 
 	resize(renderDataHandle);
 
-	mSurfacePass = createFinalDepthRenderPass();
+	mSurfacePass = own(createFinalDepthRenderPass());
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
@@ -104,10 +119,10 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(21, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(22, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mSurfaceLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mSurfaceLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	mSurfaceSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSurfaceSets) {
-		set = rhi->allocateDescriptorSet(mSurfaceLayout);
+		set = own(rhi->allocateDescriptorSet(mSurfaceLayout));
 	}
 
 	GraphicsPipelineDesc desc;
@@ -121,15 +136,15 @@ void WaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	desc.depthStencilState.depthCompareOp = CompareOp::LessEqual;
 	desc.renderPass = mSurfacePass;
 	desc.descriptorSetLayouts = { mSurfaceLayout };
-	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/water.vs");
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water.fs");
+	desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/water.vs"));
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/water.fs"));
 	// What the application's water hook (sfe_user_water.glsl) reads of its own is in the user frame set, set 3.
 	UserFrameSet::instance().extend(desc);
-	mSurfacePipeline = rhi->createGraphicsPipeline(desc);
+	mSurfacePipeline = own(rhi->createGraphicsPipeline(desc));
 }
 
-void WaterPass::resize(SystemsModule::RenderData&) {
-	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
+void WaterPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, kSceneCopy, mSceneCopy, mSceneCopyFbo, {});
 }
 
 void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -148,7 +163,7 @@ void WaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	const auto& screen = Engine::instance()->getWindow()->getScreenData();
 
 	auto* rhi = Engine::instance()->rhi();
-	const auto set = mSurfaceSets[rhi->frameInFlight() % mSurfaceSets.size()];
+	const DescriptorSetHandle set = mSurfaceSets[rhi->frameInFlight() % mSurfaceSets.size()];
 	const auto block = rhi->allocTransient(params);
 	const auto skyLut = Render::Atmosphere::skyTexture();
 	const auto clouds = Render::Atmosphere::cloudTexture();
@@ -204,7 +219,7 @@ void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	auto* rhi = Engine::instance()->rhi();
 	makeSamplers(mNearest, mLinear);
 	resize(renderDataHandle);
-	mPass = createFinalDepthRenderPass();
+	mPass = own(createFinalDepthRenderPass());
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Vertex | ShaderStage::Fragment);
@@ -212,10 +227,10 @@ void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(7, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Vertex | ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
-		set = rhi->allocateDescriptorSet(mLayout);
+		set = own(rhi->allocateDescriptorSet(mLayout));
 	}
 
 	GraphicsPipelineDesc desc;
@@ -228,15 +243,15 @@ void UnderwaterPass::init(SystemsModule::RenderData& renderDataHandle) {
 	desc.depthStencilState.depthWrite = false;
 	desc.renderPass = mPass;
 	desc.descriptorSetLayouts = { mLayout };
-	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs");
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/water_under.fs");
+	desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/ssao.vs"));
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/water_under.fs"));
 	// The water hook again (sfe_user_water.glsl): the application's frame data in set 3.
 	UserFrameSet::instance().extend(desc);
-	mPipeline = rhi->createGraphicsPipeline(desc);
+	mPipeline = own(rhi->createGraphicsPipeline(desc));
 }
 
-void UnderwaterPass::resize(SystemsModule::RenderData&) {
-	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
+void UnderwaterPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, kSceneCopy, mSceneCopy, mSceneCopyFbo, {});
 }
 
 void UnderwaterPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -257,7 +272,7 @@ void UnderwaterPass::render(SystemsModule::RenderData& renderDataHandle, Render:
 		return;
 	}
 	auto* rhi = Engine::instance()->rhi();
-	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle set = mSets[rhi->frameInFlight() % mSets.size()];
 	const auto block = rhi->allocTransient(params);
 	const auto skyLut = Render::Atmosphere::skyTexture();
 	rhi->updateDescriptorSets({

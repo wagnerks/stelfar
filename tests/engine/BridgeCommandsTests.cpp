@@ -2,10 +2,12 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <json/reader.h>
 #include <json/value.h>
 
 #include "EngineTestFixture.h"
@@ -14,6 +16,7 @@
 #include "core/Params.h"
 #include "renderModule/DebugView.h"
 #include "runtimeBridge/RuntimeBridge.h"
+#include "systemsModule/systems/RenderSystem.h"
 
 // The engine's own commands as a script sends them, through the bridge's runCommand: every answer carries the command's
 // name in front ("tweak: ..."), and scripts parse what comes after it.
@@ -282,5 +285,43 @@ namespace SFE::EngineTests {
 		EXPECT_TRUE(bridge->addCommand(name, "the second", [](const Json::Value&) { return std::string("second"); }));
 		EXPECT_EQ(run(name), name + ": second");
 		EXPECT_EQ(bridge->commands().at(name).help, "the second");
+	}
+
+	// passes answers every entry of the renderer's list in its order, whether its pass exists as the renderer has it, what
+	// the RHI holds by kind and the targets the passes hold by name, as JSON a script reads.
+	TEST(BridgeCommands, PassesAnswersEveryEntryAndWhatIsHeld) {
+		const auto said = run("passes");
+		const std::string head = "passes: ";
+		ASSERT_EQ(said.rfind(head, 0), 0u) << said;
+		Json::Value answer;
+		Json::CharReaderBuilder builder;
+		std::string errors;
+		std::istringstream stream(said.substr(head.size()));
+		ASSERT_TRUE(Json::parseFromStream(builder, stream, &answer, &errors)) << errors;
+
+		auto* renderSystem = ECSHandler::getSystem<SystemsModule::RenderSystem>();
+		ASSERT_NE(renderSystem, nullptr);
+		const auto names = renderSystem->renderPassNames();
+		const auto& passes = answer["passes"];
+		ASSERT_TRUE(passes.isArray());
+		ASSERT_EQ(passes.size(), names.size());
+		for (Json::ArrayIndex i = 0; i < passes.size(); ++i) {
+			EXPECT_EQ(passes[i]["name"].asString(), names[i]);
+			ASSERT_TRUE(passes[i]["made"].isBool()) << names[i];
+			EXPECT_EQ(passes[i]["made"].asBool(), renderSystem->passOn(names[i])) << names[i];
+		}
+		for (const char* kind : { "targets", "depth", "textures", "meshes", "buffers" }) {
+			EXPECT_TRUE(answer["memory"][kind].isNumeric()) << kind;
+		}
+		ASSERT_TRUE(answer["held"].isArray());
+		double held = 0.0;
+		bool aoHeld = false;
+		for (const auto& target : answer["held"]) {
+			EXPECT_GE(target["holders"].asInt(), 1) << target["name"].asString();
+			held += target["mib"].asDouble();
+			aoHeld |= target["name"].asString() == "SSAO.blur";
+		}
+		EXPECT_NEAR(answer["heldMiB"].asDouble(), held, 0.05);
+		EXPECT_EQ(aoHeld, renderSystem->passOn("SSAO")) << "the AO's target, named after its entry, is held as its pass is";
 	}
 }

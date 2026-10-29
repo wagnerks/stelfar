@@ -468,6 +468,16 @@ namespace SFE::Render
 			int waitsLeft = 0;
 		};
 		std::vector<RetiredTexture> m_retiredTextures;
+		// Every other kind destroyed -- pipelines, render passes, framebuffers, samplers, set layouts, sets and shader
+		// modules -- the same way: what the destroy does to the device, done once every frame recorded before it has
+		// finished. The handle's slot is handed out again at once, under a new generation. Before init, or with nothing
+		// in flight (cleanup), at once.
+		struct RetiredObject {
+			std::function<void()> destroy;
+			int waitsLeft = 0;
+		};
+		std::vector<RetiredObject> m_retiredObjects;
+		void retire(std::function<void()> destroy);
 		// updateDescriptorSets' working storage. Where each accepted write's infos begin: the pointers are filled
 		// in only after every push_back, since an array descriptor pushes several infos and the vectors can grow.
 		struct DescriptorWriteScratch {

@@ -2,6 +2,7 @@
 
 #include "assetsModule/shaderModule/ShaderBase.h"
 #include "core/Engine.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/Utils.h"
 #include "debugModule/Benchmark.h"
 #include "systemsModule/systems/RenderSystem.h"
@@ -14,14 +15,14 @@ void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	SamplerDesc samplerDesc;
 	samplerDesc.minFilter = FilterMode::Linear;
 	samplerDesc.magFilter = FilterMode::Linear;
-	mSampler = rhi->createSampler(samplerDesc);
+	mSampler = own(rhi->createSampler(samplerDesc));
 
 	RenderPassDesc rpDesc;
 	rpDesc.colorAttachmentCount = 1;
 	rpDesc.colorAttachments[0].loadOp = AttachmentLoadOp::Clear;
 	rpDesc.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
 	rpDesc.colorAttachments[0].format = TextureFormat::RGBA16F;
-	mRenderPass = rhi->createRenderPass(rpDesc);
+	mRenderPass = own(rhi->createRenderPass(rpDesc));
 	resize(renderDataHandle);
 
 	DescriptorSetLayoutDesc layoutDesc;
@@ -32,11 +33,11 @@ void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(3, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(6, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	// One set per frame slot: what it binds alternates with the slot, and writing a set the previous
 	// frame still binds costs a copy of it.
 	for (uint32_t i = 0; i < (std::max)(1u, rhi->framesInFlight()); ++i) {
-		mSets.push_back(rhi->allocateDescriptorSet(mLayout));
+		mSets.push_back(own(rhi->allocateDescriptorSet(mLayout)));
 	}
 
 	GraphicsPipelineDesc pipelineDesc;
@@ -49,27 +50,24 @@ void SSRPass::init(SystemsModule::RenderData& renderDataHandle) {
 	pipelineDesc.depthStencilState.depthWrite = false;
 	pipelineDesc.renderPass = mRenderPass;
 	pipelineDesc.descriptorSetLayouts = { mLayout };
-	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs");
-	pipelineDesc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/ssr.fs");
-	mPipeline = rhi->createGraphicsPipeline(pipelineDesc);
+	pipelineDesc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/deferred_shading.vs"));
+	pipelineDesc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/ssr.fs"));
+	mPipeline = own(rhi->createGraphicsPipeline(pipelineDesc));
 }
 
-void SSRPass::resize(SystemsModule::RenderData&) {
-	Utils::screenTarget(mColor, mFbo, mRenderPass);
+void SSRPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, name() + ".color", mColor, mFbo, mRenderPass);
 }
 
 void SSRPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
 
 	auto* rhi = Engine::instance()->rhi();
-	const auto mSet = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle mSet = mSets[rhi->frameInFlight() % mSets.size()];
 	auto& frame = renderDataHandle.frame;
 	auto src = frame.texture(FrameId::Final);
 	if (!src) {
 		src = frame.texture(FrameId::Lit);
-	}
-	if (!renderDataHandle.graphics.ssr) {
-		return;
 	}
 	if (!src || !mPipeline || !mFbo) {
 		return;

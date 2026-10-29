@@ -22,6 +22,7 @@
 #include "mathModule/MatrixOperators.h"
 #include "multithreading/ThreadPool.h"
 #include "renderModule/EntityUser.h"
+#include "renderModule/RenderResources.h"
 #include "renderModule/UserFrameSet.h"
 #include "renderModule/Utils.h"
 #include "systemsModule/systems/OcTreeSystem.h"
@@ -41,19 +42,11 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	samplerDesc.addressU = AddressMode::MirrorRepeat;
 	samplerDesc.addressV = AddressMode::MirrorRepeat;
 	samplerDesc.addressW = AddressMode::MirrorRepeat;
-	mSampler = rhi->createSampler(samplerDesc);
+	mSampler = own(rhi->createSampler(samplerDesc));
 	resize(renderDataHandle);
 
-	RenderPassDesc rpDesc;
-	rpDesc.colorAttachmentCount = 1;
-	rpDesc.colorAttachments[0].loadOp = AttachmentLoadOp::Load;
-	rpDesc.colorAttachments[0].storeOp = AttachmentStoreOp::Store;
-	rpDesc.colorAttachments[0].format = TextureFormat::RGBA16F;
-	rpDesc.hasDepthStencil = true;
-	rpDesc.depthAttachment.loadOp = AttachmentLoadOp::Load;
-	rpDesc.depthAttachment.storeOp = AttachmentStoreOp::Store;
-	rpDesc.depthAttachment.format = TextureFormat::DEPTH_COMPONENT24;
-	mRenderPass = rhi->createRenderPass(rpDesc);
+	// Into the picture, tested against the scene's depth (FinalDepthTargets).
+	mRenderPass = own(createFinalDepthRenderPass());
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(6, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
@@ -70,7 +63,7 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	// g_buffer.vs reads each entity's words (EntityUser).
 	layoutDesc.bindings.emplace_back(37, DescriptorType::StorageBuffer, ShaderStage::Vertex);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 
 	auto& pipelineDesc = mPipelineDesc;
 	Render::VertexLayoutDesc& layout = pipelineDesc.layout;
@@ -97,31 +90,25 @@ void GlassPass::init(SystemsModule::RenderData& renderDataHandle) {
 	// Set 3, the application's frame data (UserFrameSet), for what its glass hook (sfe_user_glass.glsl) reads of its own;
 	// every pipeline pipelineFor makes is a copy of this desc.
 	UserFrameSet::instance().extend(pipelineDesc);
-	pipelineDesc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer.vs");
+	pipelineDesc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/g_buffer.vs"));
 }
 
-void GlassPass::resize(SystemsModule::RenderData&) {
-	auto* rhi = Engine::instance()->rhi();
-	for (const auto& target : mGlassTargets) {
-		rhi->destroyFramebuffer(target.fbo);
-	}
-	mGlassTargets.clear();
-	mGlassFbo = {};
-	Utils::screenTarget(mSceneCopy, mSceneCopyFbo, {});
+void GlassPass::resize(SystemsModule::RenderData& renderDataHandle) {
+	screenTarget(*renderDataHandle.resources, kSceneCopy, mSceneCopy, mSceneCopyFbo, {});
 }
 
 SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& vertexShader, const std::string& fragmentShader, bool depthOnly) {
 	const auto key = vertexShader + '|' + (depthOnly ? fragmentShader + "|depth" : fragmentShader);
 	if (const auto it = mPipelines.find(key); it != mPipelines.end()) {
-		return it->second;
+		return it->second.get();
 	}
 	auto* rhi = Engine::instance()->rhi();
 	auto desc = mPipelineDesc;
 	// Its own vertex shader where the material names one (a held thing drawn from the eyes, fp_held.vs), else g_buffer.vs.
 	if (vertexShader != ComponentsModule::DefaultGBufferVS) {
-		desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, vertexShader);
+		desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, vertexShader));
 	}
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, fragmentShader);
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, fragmentShader));
 	// Only where it is, through the shader's own discards: the colour under it is kept as it is.
 	if (depthOnly) {
 		desc.depthStencilState.depthWrite = true;
@@ -133,45 +120,17 @@ SFE::Render::PipelineHandle GlassPass::pipelineFor(const std::string& vertexShad
 	if (!pipeline) {
 		LogsModule::Logger::LOG_WARNING("Glass shader missing: %s or %s", vertexShader.c_str(), fragmentShader.c_str());
 	}
-	mPipelines.emplace(key, pipeline);
+	mPipelines.emplace(key, own(pipeline));
 	return pipeline;
-}
-
-void GlassPass::ensureTargets(SystemsModule::RenderData& renderDataHandle) {
-	auto& frame = renderDataHandle.frame;
-	const auto finalTex = frame.texture(FrameId::Final);
-	const auto depthTex = frame.texture(FrameId::GBufferDepth);
-	if (!finalTex || !depthTex) {
-		return;
-	}
-	for (const auto& target : mGlassTargets) {
-		if (target.finalTex.id == finalTex.id && target.depthTex.id == depthTex.id) {
-			mGlassFbo = target.fbo;
-			return;
-		}
-	}
-
-	auto* rhi = Engine::instance()->rhi();
-	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
-	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
-
-	FramebufferDesc glassFb;
-	glassFb.width = w;
-	glassFb.height = h;
-	glassFb.renderPass = mRenderPass;
-	glassFb.colorAttachments = { { finalTex } };
-	glassFb.depthStencilAttachment = { .texture = depthTex };
-	mGlassFbo = rhi->createFramebuffer(glassFb);
-	mGlassTargets.push_back({ finalTex, depthTex, mGlassFbo });
 }
 
 void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
 	FUNCTION_BENCHMARK;
 
 	auto* rhi = Engine::instance()->rhi();
-	ensureTargets(renderDataHandle);
+	const auto glassFbo = mTargets.get(renderDataHandle, mRenderPass);
 	const auto srcFbo = renderDataHandle.frame.framebuffer(FrameId::Final);
-	if (!mGlassFbo || !srcFbo) {
+	if (!glassFbo || !srcFbo) {
 		return;
 	}
 
@@ -307,7 +266,7 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 		auto& sets = mGroups[group].sets;
 		sets.resize((std::max)(1u, rhi->framesInFlight()));
 		if (!sets[slot]) {
-			sets[slot] = rhi->allocateDescriptorSet(mLayout);
+			sets[slot] = own(rhi->allocateDescriptorSet(mLayout));
 		}
 		for (auto write : writes) {
 			write.set = sets[slot];
@@ -320,7 +279,7 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 	const int w = Engine::instance()->getWindow()->getScreenData().renderW;
 	const int h = Engine::instance()->getWindow()->getScreenData().renderH;
 	RenderPassBeginInfo beginInfo;
-	beginInfo.framebuffer = mGlassFbo;
+	beginInfo.framebuffer = glassFbo;
 	beginInfo.renderPass = mRenderPass;
 	beginInfo.width = w;
 	beginInfo.height = h;
@@ -336,7 +295,8 @@ void GlassPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comm
 			rhi->cmdBindPipeline(cmd, one);
 			rhi->cmdBindVertexBuffer(cmd, 0, meshes->vertexBuffer(), 0);
 			rhi->cmdBindIndexBuffer(cmd, meshes->indexBuffer(), IndexType::Uint32, 0);
-			rhi->cmdBindDescriptorSets(cmd, one, 0, &mGroups[group].sets[slot], 1, &params.offset, 1);
+			const DescriptorSetHandle set = mGroups[group].sets[slot];
+			rhi->cmdBindDescriptorSets(cmd, one, 0, &set, 1, &params.offset, 1);
 			// The application's frame data, after the pass's own set (UserFrameSet::bind).
 			UserFrameSet::instance().bind(cmd, one);
 			scene.drawSorted(cmd, mGroups[group].view, group);

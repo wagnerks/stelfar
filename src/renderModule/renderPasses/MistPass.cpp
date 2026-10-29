@@ -26,22 +26,22 @@ namespace {
 
 void MistPass::init(SystemsModule::RenderData&) {
 	auto* rhi = Engine::instance()->rhi();
-	mRenderPass = createFinalDepthRenderPass();
+	mRenderPass = own(createFinalDepthRenderPass());
 
 	SamplerDesc nearest;
 	nearest.minFilter = FilterMode::Nearest;
 	nearest.magFilter = FilterMode::Nearest;
-	mNearest = rhi->createSampler(nearest);
+	mNearest = own(rhi->createSampler(nearest));
 
 	DescriptorSetLayoutDesc layoutDesc;
 	layoutDesc.bindings.emplace_back(5, DescriptorType::UniformBuffer, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(7, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(15, DescriptorType::UniformBufferDynamic, ShaderStage::Fragment);
 	layoutDesc.bindings.emplace_back(20, DescriptorType::CombinedImageSampler, ShaderStage::Fragment);
-	mLayout = rhi->createDescriptorSetLayout(layoutDesc);
+	mLayout = own(rhi->createDescriptorSetLayout(layoutDesc));
 	mSets.resize((std::max)(1u, rhi->framesInFlight()));
 	for (auto& set : mSets) {
-		set = rhi->allocateDescriptorSet(mLayout);
+		set = own(rhi->allocateDescriptorSet(mLayout));
 	}
 
 	GraphicsPipelineDesc desc;
@@ -58,11 +58,11 @@ void MistPass::init(SystemsModule::RenderData&) {
 	desc.blend.dstColor = BlendFactor::SrcAlpha;
 	desc.renderPass = mRenderPass;
 	desc.descriptorSetLayouts = { mLayout };
-	desc.shaders.vertex = rhi->loadShader(ShaderStage::Vertex, "shaders/atmosphere.vs");
-	desc.shaders.fragment = rhi->loadShader(ShaderStage::Fragment, "shaders/mist.fs");
+	desc.shaders.vertex = keep(mShaders, rhi->loadShader(ShaderStage::Vertex, "shaders/atmosphere.vs"));
+	desc.shaders.fragment = keep(mShaders, rhi->loadShader(ShaderStage::Fragment, "shaders/mist.fs"));
 	// What the application's mist hook (sfe_user_mist.glsl) reads of its own is in the user frame set, set 3.
 	UserFrameSet::instance().extend(desc);
-	mPipeline = rhi->createGraphicsPipeline(desc);
+	mPipeline = own(rhi->createGraphicsPipeline(desc));
 }
 
 void MistPass::render(SystemsModule::RenderData& renderDataHandle, Render::CommandListHandle cmd) {
@@ -91,7 +91,7 @@ void MistPass::render(SystemsModule::RenderData& renderDataHandle, Render::Comma
 
 	auto* rhi = Engine::instance()->rhi();
 	const auto block = rhi->allocTransient(params);
-	const auto set = mSets[rhi->frameInFlight() % mSets.size()];
+	const DescriptorSetHandle set = mSets[rhi->frameInFlight() % mSets.size()];
 	const auto skyLut = Render::Atmosphere::skyTexture();
 	rhi->updateDescriptorSets({
 		{ .set = set, .binding = 5, .buffers{ { renderDataHandle.cameraMatricesUBO } } },

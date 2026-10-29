@@ -97,6 +97,46 @@ namespace SFE::Render {
 		}
 	}
 
+	GpuScene::View::~View() {
+		release();
+	}
+
+	GpuScene::View& GpuScene::View::operator=(View&& other) noexcept {
+		if (this != &other) {
+			release();
+			static_cast<ViewState&>(*this) = std::exchange(static_cast<ViewState&>(other), {});
+		}
+		return *this;
+	}
+
+	void GpuScene::View::release() {
+		// None once the engine has gone: its RHI took them with it.
+		auto* rhi = Singleton<Engine>::isAlive() ? Engine::instance()->rhi() : nullptr;
+		if (!rhi) {
+			return;
+		}
+		for (const auto buffer : { visible, commands, keys, lastVisible, pyramid, counts }) {
+			if (buffer) {
+				rhi->destroyBuffer(buffer);
+			}
+		}
+		for (const auto* list : { &params, &packParams }) {
+			for (const auto buffer : *list) {
+				if (buffer) {
+					rhi->destroyBuffer(buffer);
+				}
+			}
+		}
+		for (const auto* list : { &sets, &pyramidSets, &packSets }) {
+			for (const auto set : *list) {
+				if (set) {
+					rhi->freeDescriptorSet(set);
+				}
+			}
+		}
+		static_cast<ViewState&>(*this) = {};
+	}
+
 	void GpuScene::init() {
 		auto* rhi = Engine::instance()->rhi();
 		DescriptorSetLayoutDesc layout;
