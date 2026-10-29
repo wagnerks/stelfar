@@ -1,7 +1,9 @@
 #include "RhiTestFixture.h"
 
+#include <algorithm>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 // Resource lifecycle: create, use, destroy, create again. No pipeline and no shaders, so this is
 // the part of the interface that can be pinned down before the drawing half has anything to stand
@@ -179,6 +181,30 @@ namespace SFE::Render::Tests {
 		rhi().unmapBuffer(buffer);
 
 		rhi().destroyBuffer(buffer);
+	}
+
+	// RenderHardwareInterface::createBuffer: made without data, a buffer reads as zeros, as a readback ring is read
+	// before the GPU's first pass over it. OpenGL's glBufferData(nullptr) leaves the store undefined (a driver handed the
+	// particles' caught ring a freed shader source), so a buffer of the size is filled and let go of first: a backend
+	// that hands that memory on shows it.
+	TEST_P(RhiBackendTest, BufferMadeWithoutDataReadsAsZeros) {
+		for (const auto access : { CpuAccess::Read, CpuAccess::ReadWrite }) {
+			BufferDesc desc;
+			desc.size = 32784;
+			desc.usage = BufferUsage::Storage;
+			desc.cpuAccess = access;
+			const std::vector<uint8_t> filled(desc.size, 0xAB);
+			rhi().destroyBuffer(rhi().createBuffer(desc, filled.data()));
+
+			const auto buffer = rhi().createBuffer(desc);
+			ASSERT_TRUE(buffer);
+			const auto* mapped = static_cast<const uint8_t*>(rhi().mapBuffer(buffer, MapMode::Read));
+			ASSERT_NE(mapped, nullptr);
+			const auto nonzero = std::count_if(mapped, mapped + desc.size, [](uint8_t b) { return b != 0; });
+			EXPECT_EQ(nonzero, 0) << "bytes not zero in a buffer made without data, CpuAccess " << static_cast<int>(access);
+			rhi().unmapBuffer(buffer);
+			rhi().destroyBuffer(buffer);
+		}
 	}
 
 	TEST_P(RhiBackendTest, SamplerCreateAndDestroy) {

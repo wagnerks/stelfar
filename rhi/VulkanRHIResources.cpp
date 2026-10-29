@@ -559,9 +559,10 @@ namespace SFE::Render {
 		BufferHandle handle{};
 		handle.id = storeResource(m_buffers, m_freeBuffers, std::move(resource));
 
-		// Without initial data the buffer is zeroed, as OpenGL drivers hand one back. A pass that read one
-		// before anything wrote it -- bones of a frame slot not yet computed -- drew uninitialised memory,
-		// different on every run.
+		// Without initial data the buffer is zeroed (RenderHardwareInterface::createBuffer): its memory, a block VMA
+		// hands on, holds what was there before, as OpenGL's glBufferData(nullptr) does (that backend clears it too). A
+		// pass that read one before anything wrote it -- bones of a frame slot not yet computed -- drew uninitialised
+		// memory, different on every run.
 		if (auto* stored = getLive(m_buffers, handle.id); stored && stored->mapped) {
 			if (initialData) {
 				std::memcpy(stored->mapped, initialData, desc.size);

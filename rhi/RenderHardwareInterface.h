@@ -683,6 +683,11 @@ namespace SFE::Render
 		
 		virtual FramebufferHandle getBackbufferFramebuffer() = 0;
 
+		// `initialData` is desc.size bytes. Made without it, a buffer reads as zeros until something writes it -- on every
+		// backend, never what its memory held before. So a buffer may be read before its first write: a readback ring
+		// before the GPU's first pass over it reads a count of none. (OpenGL's glBufferData(nullptr) leaves the store
+		// undefined, and a driver once handed the particles' caught ring a freed shader source, read as 1024 drops
+		// caught.) A map for writing is of the whole buffer and is all to be written: OpenGL discards what was there.
 		virtual BufferHandle createBuffer(const BufferDesc& desc, const void* initialData = nullptr) = 0;
 		virtual void destroyBuffer(BufferHandle handle) = 0;
 		virtual void updateBuffer(BufferHandle handle, size_t offset = 0, size_t size = 0, const void* data = nullptr) = 0;

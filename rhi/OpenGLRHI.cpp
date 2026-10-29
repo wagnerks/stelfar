@@ -1370,6 +1370,8 @@ namespace SFE::Render
 		if (!m_pushConstantUBO) {
 			glCreateBuffers(1, &m_pushConstantUBO);
 			glNamedBufferData(m_pushConstantUBO, 256, nullptr, GL_DYNAMIC_DRAW);
+			// Zeros past what a pipeline pushes, as createBuffer's buffers start.
+			glClearNamedBufferData(m_pushConstantUBO, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
 		}
 
 		glNamedBufferSubData(m_pushConstantUBO, 0, size, data);
@@ -2826,6 +2828,12 @@ namespace SFE::Render
 		glBindBuffer(glb.target, glb.id);
 		GLenum usage = toGLAccessFlags(desc.cpuAccess);
 		glBufferData(glb.target, static_cast<GLsizeiptr>(desc.size), initialData, usage);
+		// Without data, zeros (RenderHardwareInterface::createBuffer): glBufferData leaves the store undefined. Cleared by
+		// the GPU rather than uploaded from a block of zeros, as a mesh pool is hundreds of MB; one made on the worker
+		// context is cleared before the main one sees it (runOnWorkerThread finishes), and a map waits for the clear.
+		if (!initialData && desc.size > 0) {
+			glClearBufferData(glb.target, GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+		}
 		glBindBuffer(glb.target, 0);
 
 		glb.live = true;
